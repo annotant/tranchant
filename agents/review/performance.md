@@ -1,6 +1,7 @@
 ---
 name: performance
-description: Tranchant's performance lens: reviews a web front end's change
+description:
+  Tranchant's performance lens, which reviews a web front end's change
   for the costs the user feels, started by the plugin's hooks while
   /tranchant review runs. Its prompt gives REVIEW, SKILL, PROJECT, BASE and
   HEAD. Only the hooks start it, never otherwise.

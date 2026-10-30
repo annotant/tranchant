@@ -1,6 +1,7 @@
 ---
 name: security
-description: Tranchant's security lens: reviews a web front end's change for
+description:
+  Tranchant's security lens, which reviews a web front end's change for
   injection, unsafe URLs, exposed secrets and unsafe deserialisation,
   started by the plugin's hooks while /tranchant review runs. Its prompt
   gives REVIEW, SKILL, PROJECT, BASE and HEAD. Only the hooks start it,

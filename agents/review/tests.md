@@ -1,6 +1,7 @@
 ---
 name: tests
-description: Tranchant's tests lens: reviews a web front end's change for
+description:
+  Tranchant's tests lens, which reviews a web front end's change for
   what it should test and does not, assertions that cannot fail and flaky
   patterns, started by the plugin's hooks while /tranchant review runs.
   Its prompt gives REVIEW, SKILL, PROJECT, BASE and HEAD. Only the hooks

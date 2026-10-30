@@ -1,6 +1,7 @@
 ---
 name: accessibility
-description: Tranchant's accessibility lens: reviews a web front end's
+description:
+  Tranchant's accessibility lens, which reviews a web front end's
   change for the barriers it raises to keyboard, screen reader, zoom and
   reduced-motion users, started by the plugin's hooks while /tranchant
   review runs. Its prompt gives REVIEW, SKILL, PROJECT, BASE and HEAD. Only

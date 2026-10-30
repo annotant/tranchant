@@ -1,6 +1,7 @@
 ---
 name: types
-description: Tranchant's types lens: reviews a web front end's change for the
+description:
+  Tranchant's types lens, which reviews a web front end's change for the
   type holes that hide defects, started by the plugin's hooks while
   /tranchant review runs. Its prompt gives REVIEW, SKILL, PROJECT, BASE and
   HEAD. Only the hooks start it, never otherwise.

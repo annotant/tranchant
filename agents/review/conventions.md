@@ -1,6 +1,7 @@
 ---
 name: conventions
-description: Tranchant's conventions lens: reviews a web front end's change
+description:
+  Tranchant's conventions lens, which reviews a web front end's change
   against the project's own conventions, read from its instructions, its
   tooling and its code, never from an external rulebook, started by the
   plugin's hooks while /tranchant review runs. Its prompt gives REVIEW,

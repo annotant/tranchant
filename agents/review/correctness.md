@@ -1,6 +1,7 @@
 ---
 name: correctness
-description: Tranchant's correctness lens: reviews a web front end's change
+description:
+  Tranchant's correctness lens, which reviews a web front end's change
   for state, effect, lifecycle and async defects, started by the plugin's
   hooks while /tranchant review runs. Its prompt gives REVIEW, SKILL,
   PROJECT, BASE and HEAD. Only the hooks start it, never otherwise.

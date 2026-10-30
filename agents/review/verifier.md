@@ -1,6 +1,7 @@
 ---
 name: verifier
-description: Tranchant's verifier: re-reads one finding of a review in progress
+description:
+  Tranchant's verifier, which re-reads one finding of a review in progress
   against the code, confirms it, amends it or removes it, and merges the
   duplicates across lenses, started by the plugin's hooks while /tranchant
   review runs. Its prompt gives the finding id, REVIEW, SKILL, PROJECT, BASE

@@ -20,7 +20,7 @@ async function prompt(file) {
   assert.ok(match, `${file}: frontmatter`)
   const [, frontmatter, body] = match
   const name = /^name: (.+)$/m.exec(frontmatter)?.[1]
-  const description = /^description: ([\s\S]+)$/m.exec(frontmatter)?.[1]
+  const description = /^description:\s+([\s\S]+)$/m.exec(frontmatter)?.[1]
   return { name, description, body }
 }
 

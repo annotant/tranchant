@@ -1,6 +1,7 @@
 ---
 name: bugs
-description: Tranchant's generic bugs lens: reviews the files of a change no
+description:
+  Tranchant's generic bugs lens, which reviews the files of a change no
   front-end lens covers (scripts, configuration, build, server code, CI)
   for defects and risks, started by the plugin's hooks while /tranchant
   review runs. Its prompt gives REVIEW, SKILL, PROJECT, BASE and HEAD. Only
