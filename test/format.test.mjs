@@ -7,11 +7,17 @@ import {
   REVIEW_VERSION,
   STATES,
   canMove,
+  contentOf,
   currentRun,
+  envelopeOf,
+  identityOf,
   nextRunId,
   oneLine,
   parseDecisions,
   parseReview,
+  statusOf,
+  validateEnvelope,
+  validateFinding,
   validateReview,
 } from '../skills/tranchant/scripts/lib/format.mjs'
 import { fixture } from './helpers.mjs'
@@ -76,6 +82,72 @@ test('names each required field of a finding that is missing', async () => {
   // A comment is only required on someone else's change.
   const ours = await fixture('ours')
   assert.deepEqual(validateReview(ours), [])
+})
+
+test('a review may have no finding only while it is reviewing', async () => {
+  const review = await fixture('ours')
+  review.findings = []
+  assert.deepEqual(validateReview(review), ['findings: at least one is required'])
+  assert.equal(statusOf(review), 'complete')
+  review.status = 'reviewing'
+  assert.deepEqual(validateReview(review), [])
+  assert.equal(statusOf(review), 'reviewing')
+  review.status = 'done'
+  assert.deepEqual(validateReview(review), [
+    'status: reviewing or complete',
+    'findings: at least one is required',
+  ])
+  review.status = 'reviewing'
+  review.findings = 'none'
+  assert.deepEqual(validateReview(review), ['findings: an array is required'])
+  // The envelope alone says nothing about the findings.
+  delete review.findings
+  assert.deepEqual(validateEnvelope(review), [])
+  assert.deepEqual(validateEnvelope({ ...review, version: 2 }), [
+    `unknown review format (version 2): this Tranchant reads version ${REVIEW_VERSION}`,
+  ])
+})
+
+test('checks one finding as the review does; a comment is required on theirs', async () => {
+  const { findings } = await fixture('ours')
+  assert.deepEqual(validateFinding(findings[0]), [])
+  assert.deepEqual(validateFinding(findings[0], { theirs: true }), [
+    'finding.comment: required when ownership is theirs',
+  ])
+  assert.deepEqual(validateFinding({ ...findings[0], line: 1 }, { where: 'f' }), [
+    'f.line: 1 is outside the excerpt',
+  ])
+  assert.deepEqual(validateFinding(null), ['finding: an object is required'])
+  assert.deepEqual(validateFinding({ ...findings[0], addedAt: 3 }), [
+    'finding.addedAt: a date is required',
+  ])
+  assert.deepEqual(
+    validateFinding({ ...findings[0], addedAt: '2026-10-30T16:02:11Z' }),
+    [],
+  )
+})
+
+test('tells reviews apart by their envelope and findings by their content, however laid out', async () => {
+  const review = await fixture('ours')
+  const envelope = envelopeOf(review)
+  assert.equal('findings' in envelope, false)
+  assert.equal(envelope.title, review.title)
+  // Grown and completed, it is still the same review.
+  assert.equal(
+    identityOf({ ...review, status: 'complete', findings: [] }),
+    identityOf({ ...review, status: 'reviewing' }),
+  )
+  assert.equal(
+    identityOf(Object.fromEntries(Object.entries(review).toReversed())),
+    identityOf(review),
+  )
+  assert.notEqual(identityOf({ ...review, title: 'Other' }), identityOf(review))
+  const [finding] = review.findings
+  assert.equal(
+    contentOf({ ...finding, addedAt: 'now' }),
+    contentOf(Object.fromEntries(Object.entries(finding).toReversed())),
+  )
+  assert.notEqual(contentOf({ ...finding, line: 43 }), contentOf(finding))
 })
 
 test('refuses another version first, and says nothing else', async () => {

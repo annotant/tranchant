@@ -1,16 +1,31 @@
 #!/usr/bin/env node
 // open.mjs <review.json>
 // Validates a review file and imports it into the state folder,
-// <state>/<hash of its project>/reviews/<its id>/, with an empty decisions
-// file next to it; prints `REVIEW <dir>`. An id imported already with the
-// same content is reused, its decisions kept; with other content it is
-// refused: the producer mints a new id. Any refusal prints
+// <state>/<hash of its project>/reviews/<its id>/: review.json keeps the
+// envelope, findings/<id>.json each finding the producer wrote inline, and
+// an empty decisions file sits next to them; prints `REVIEW <dir>`. An id
+// imported already with the same envelope (status and findings aside: a
+// review grows) is reused, its decisions kept, and its inline findings not
+// there yet are added; with another envelope, or a finding of other content,
+// it is refused: the producer mints a new id. Any refusal prints
 // `REVIEW_REFUSED <reason>` and exits 2.
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './lib/errors.mjs'
-import { DECISIONS_VERSION, FormatError, oneLine, parseReview } from './lib/format.mjs'
+import {
+  DECISIONS_VERSION,
+  FormatError,
+  contentOf,
+  envelopeOf,
+  identityOf,
+  oneLine,
+  parseReview,
+} from './lib/format.mjs'
 import { reviewDir } from './lib/project.mjs'
+import { StoreRefusal, createStore, findingPath } from './lib/store.mjs'
+
+/** @typedef {import('./lib/format.mjs').Finding} Finding */
 
 /**
  * @param {string} reason
@@ -56,24 +71,55 @@ const review = parse(file, text)
 const { id, project } = review
 const dir = reviewDir(project, id)
 const target = path.join(dir, 'review.json')
+const store = createStore(dir)
 
-// The same review, however it was laid out: its content, not its bytes.
-const canonical = JSON.stringify(review)
-let existing
+/**
+ * Writes the findings a producer wrote inline, one file each, in the
+ * producer's order: stamped one millisecond apart.
+ * @param {Finding[]} findings
+ */
+async function split(findings) {
+  const base = Date.now()
+  for (const [i, finding] of findings.entries()) {
+    await store.writeFinding({
+      ...finding,
+      addedAt: finding.addedAt ?? new Date(base + i).toISOString(),
+    })
+  }
+}
+
+let imported = true
 try {
-  existing = await readFile(target, 'utf8')
+  await readFile(target, 'utf8')
 } catch (error) {
   if (errorCode(error) !== 'ENOENT') throw error
+  imported = false
 }
-if (existing !== undefined) {
-  let same = false
+if (imported) {
+  /** @type {import('./lib/format.mjs').Review} */
+  let known
   try {
-    same = JSON.stringify(JSON.parse(existing)) === canonical
-  } catch {}
-  if (!same) refuse(`id ${id} exists with other content`)
+    known = await store.readReview()
+  } catch (error) {
+    if (!(error instanceof StoreRefusal)) throw error
+    known = refuse(`${target}: ${error.message}`)
+  }
+  if (identityOf(known) !== identityOf(review))
+    refuse(`id ${id} exists with other content`)
+  const clash = review.findings.find((finding) => {
+    const there = known.findings.find((one) => one.id === finding.id)
+    return there && contentOf(there) !== contentOf(finding)
+  })
+  if (clash) refuse(`finding ${clash.id} exists with other content`)
+  // A folder imported before findings/ existed holds them inline: split too.
+  await split(
+    review.findings.filter((finding) => !existsSync(findingPath(dir, finding.id))),
+  )
 } else {
   await mkdir(path.join(dir, 'runs'), { recursive: true })
-  await writeFile(target, text)
+  await mkdir(path.join(dir, 'findings'), { recursive: true })
+  await split(review.findings)
+  await writeFile(target, `${JSON.stringify(envelopeOf(review), null, 2)}\n`)
 }
 const empty = `${JSON.stringify({ version: DECISIONS_VERSION, findings: {} }, null, 2)}\n`
 try {

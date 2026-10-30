@@ -10,6 +10,19 @@ export const REVIEW_VERSION = 1
 export const DECISIONS_VERSION = 1
 
 /**
+ * Where a review stands: `reviewing` while its producer still adds findings,
+ * `complete` once it is done. Absent from the envelope, it is `complete`.
+ * @typedef {'reviewing' | 'complete'} Status
+ */
+
+/** @type {ReadonlySet<string>} */
+const STATUSES = new Set(['reviewing', 'complete'])
+
+/** A review's status; absent means `complete`. @param {{ status?: unknown }} review */
+export const statusOf = (review) =>
+  review.status === 'reviewing' ? 'reviewing' : 'complete'
+
+/**
  * Where a finding stands. Absent from the decisions file, it is `open`.
  * @typedef {'open' | 'queued' | 'working' | 'asking' | 'fixed' | 'posted' | 'dropped' | 'skipped' | 'failed' | 'stopped'} State
  */
@@ -169,6 +182,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} [comment] The text to post, whole; required when `ownership` is `theirs`.
  * @property {Diagram} [diagram]
  * @property {Related[]} [related] Up to 4.
+ * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
  */
 
 /**
@@ -195,13 +209,14 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} base
  * @property {string} headSha What was reviewed.
  * @property {Ownership} ownership `ours`: fixes only; `theirs`: posting too.
+ * @property {Status} [status] `complete` when absent: every producer that wrote a whole review keeps working.
  * @property {string} title
  * @property {MergeRequest} [mr] Required to post.
  * @property {{ key: string, url: string }} [jira]
  * @property {string} summary Markdown, shown above the findings.
  * @property {string[]} strengths
  * @property {Record<string, number>} [sources]
- * @property {Finding[]} findings At least one.
+ * @property {Finding[]} findings At least one, unless `status` is `reviewing`.
  */
 
 /**
@@ -541,6 +556,23 @@ function checkFinding(finding, where, theirs, problems) {
       })
     }
   }
+  if (finding.addedAt !== undefined && !isText(finding.addedAt, 100)) {
+    problems.push(`${where}.addedAt: a date is required`)
+  }
+}
+
+/**
+ * What is wrong with one finding, as a producer wrote it: empty when it is
+ * sound. `theirs`: a comment is then required.
+ * @param {unknown} finding
+ * @param {{ theirs?: boolean, where?: string }} [options]
+ * @returns {string[]}
+ */
+export function validateFinding(finding, { theirs = false, where = 'finding' } = {}) {
+  /** @type {string[]} */
+  const problems = []
+  checkFinding(finding, where, theirs, problems)
+  return problems
 }
 
 /**
@@ -569,12 +601,13 @@ function checkMr(mr, problems) {
 }
 
 /**
- * What is wrong with a review, as its producer wrote it: empty when it is
- * sound. `version` is checked first: another version has nothing else to say.
+ * What is wrong with a review's envelope, its findings left aside: empty when
+ * it is sound. `version` is checked first: another version has nothing else
+ * to say.
  * @param {any} review
  * @returns {string[]}
  */
-export function validateReview(review) {
+export function validateEnvelope(review) {
   if (!isObject(review)) return ['a JSON object is required']
   if (review.version !== REVIEW_VERSION) {
     return [
@@ -594,6 +627,9 @@ export function validateReview(review) {
   }
   if (!SHA.test(String(review.headSha))) problems.push('headSha: a sha is required')
   if (!OWNERSHIPS.has(review.ownership)) problems.push('ownership: ours or theirs')
+  if (review.status !== undefined && !STATUSES.has(review.status)) {
+    problems.push('status: reviewing or complete')
+  }
   if (!isText(review.title, 300)) problems.push('title: a text is required')
   if (typeof review.summary !== 'string')
     problems.push('summary: a Markdown text is required')
@@ -613,13 +649,29 @@ export function validateReview(review) {
   if (review.sources !== undefined && !isObject(review.sources)) {
     problems.push('sources: an object is required')
   }
-  if (!Array.isArray(review.findings) || review.findings.length === 0) {
-    problems.push('findings: at least one is required')
+  return problems
+}
+
+/**
+ * What is wrong with a review, as its producer wrote it: empty when it is
+ * sound. The findings may be empty only while the review is `reviewing`.
+ * @param {any} review
+ * @returns {string[]}
+ */
+export function validateReview(review) {
+  const problems = validateEnvelope(review)
+  if (!isObject(review) || review.version !== REVIEW_VERSION) return problems
+  const { findings } = review
+  const reviewing = statusOf(review) === 'reviewing'
+  if (!Array.isArray(findings) || (findings.length === 0 && !reviewing)) {
+    problems.push(
+      reviewing ? 'findings: an array is required' : 'findings: at least one is required',
+    )
     return problems
   }
   const theirs = review.ownership === 'theirs'
   const ids = new Set()
-  review.findings.forEach((finding, i) => {
+  findings.forEach((finding, i) => {
     checkFinding(finding, `findings[${i}]`, theirs, problems)
     const id = isObject(finding) ? String(finding.id) : ''
     if (ids.has(id)) problems.push(`findings[${i}].id: ${id} is used twice`)
@@ -641,12 +693,66 @@ export function parseReview(text) {
     throw new FormatError('the review is not JSON')
   }
   const problems = validateReview(json)
-  if (problems.length) {
-    const shown = problems.slice(0, 3).join('; ')
-    const more = problems.length > 3 ? ` (and ${problems.length - 3} more)` : ''
-    throw new FormatError(`${shown}${more}`)
-  }
+  if (problems.length) throw new FormatError(problemsText(problems))
   return json
+}
+
+/**
+ * The first problems of a list as one message.
+ * @param {readonly string[]} problems
+ */
+export function problemsText(problems) {
+  const shown = problems.slice(0, 3).join('; ')
+  const more = problems.length > 3 ? ` (and ${problems.length - 3} more)` : ''
+  return `${shown}${more}`
+}
+
+/**
+ * `value` with its objects' keys sorted, at every depth: two layouts of the
+ * same content stringify alike.
+ * @param {any} value
+ * @returns {any}
+ */
+const canonical = (value) =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : isObject(value)
+      ? Object.fromEntries(
+          Object.keys(value)
+            .toSorted()
+            .map((key) => [key, canonical(value[key])]),
+        )
+      : value
+
+/**
+ * A review's envelope: everything but its findings, as review.json holds it.
+ * @template {{ findings?: unknown }} T
+ * @param {T} review
+ * @returns {Omit<T, 'findings'>}
+ */
+export function envelopeOf(review) {
+  const { findings: _findings, ...envelope } = review
+  return envelope
+}
+
+/**
+ * What tells a review from another with the same id, as JSON: its envelope,
+ * status left out. A review that grew, or completed, is still the same one.
+ * @param {{ findings?: unknown, status?: unknown }} review
+ */
+export function identityOf(review) {
+  const { status: _status, ...identity } = envelopeOf(review)
+  return JSON.stringify(canonical(identity))
+}
+
+/**
+ * A finding's content as JSON, `addedAt` left out: the same finding added
+ * again agrees with its file.
+ * @param {{ addedAt?: unknown }} finding
+ */
+export function contentOf(finding) {
+  const { addedAt: _addedAt, ...content } = finding
+  return JSON.stringify(canonical(content))
 }
 
 /**

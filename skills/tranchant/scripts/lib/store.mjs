@@ -1,4 +1,12 @@
-import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
 import { withFileLock } from './filelock.mjs'
@@ -8,11 +16,15 @@ import {
   FormatError,
   MOVES,
   canMove,
+  contentOf,
   currentRun,
   nextRunId,
   parseDecisions,
-  parseReview,
+  problemsText,
   stateWords,
+  statusOf,
+  validateEnvelope,
+  validateFinding,
 } from './format.mjs'
 
 /** @typedef {import('./format.mjs').Actor} Actor */
@@ -50,6 +62,16 @@ export const progressPath = (/** @type {string} */ dir, /** @type {string} */ id
 /** Every step of the runs of finding `id` that ended. */
 export const historyPath = (/** @type {string} */ dir, /** @type {string} */ id) =>
   path.join(dir, 'runs', `${id}.history.jsonl`)
+/** The file of finding `id`: one per finding, under `findings/`. */
+export const findingPath = (/** @type {string} */ dir, /** @type {string} */ id) =>
+  path.join(dir, 'findings', `${id}.json`)
+
+/** The files of `findings/` that hold a finding: `<id>.json`, nothing else. */
+const FINDING_FILE = /^([\w-]{1,64})\.json$/
+
+/** Oldest first; two added the same millisecond by id. @type {(a: Finding, b: Finding) => number} */
+const byArrival = (a, b) =>
+  (a.addedAt ?? '').localeCompare(b.addedAt ?? '') || a.id.localeCompare(b.id)
 
 /**
  * The finding's steps, oldest first: those of its run in progress, or with
@@ -143,12 +165,16 @@ export function createStore(dir) {
   const reviewFile = path.join(dir, 'review.json')
   const decisionsFile = path.join(dir, 'decisions.json')
   const runsDir = path.join(dir, 'runs')
-  /** @type {Review | undefined} */
-  let review
+  const findingsDir = path.join(dir, 'findings')
+  /** The finding files found unsound, each said once on stderr. @type {Set<string>} */
+  const warned = new Set()
 
-  /** The review, read once: its producer never rewrites it. */
-  async function readReview() {
-    if (review) return review
+  /**
+   * The review's envelope, as review.json holds it: its findings, if any
+   * are still inline, left as they are.
+   * @returns {Promise<Review>}
+   */
+  async function readEnvelope() {
     let text
     try {
       text = await readFile(reviewFile, 'utf8')
@@ -157,13 +183,98 @@ export function createStore(dir) {
         throw new StoreRefusal(`no review.json in ${dir}`)
       throw error
     }
+    let envelope
     try {
-      review = parseReview(text)
-    } catch (error) {
-      if (error instanceof FormatError) throw new StoreRefusal(error.message)
-      throw error
+      envelope = JSON.parse(text)
+    } catch {
+      throw new StoreRefusal(`${reviewFile} is not JSON`)
     }
-    return review
+    const problems = validateEnvelope(envelope)
+    if (problems.length) throw new StoreRefusal(problemsText(problems))
+    return envelope
+  }
+
+  /**
+   * `value` when it is a sound finding, named `id` when its file names one;
+   * else undefined, said once on stderr: one unsound file never takes the
+   * page down.
+   * @param {any} value
+   * @param {boolean} theirs
+   * @param {string} where
+   * @param {string} [id]
+   * @returns {Finding | undefined}
+   */
+  function soundFinding(value, theirs, where, id) {
+    const problems = validateFinding(value, { theirs, where })
+    const sound = problems.length === 0 ? value : undefined
+    if (sound && (id === undefined || sound.id === id)) return sound
+    const why = sound
+      ? `${where}: its id is ${sound.id}, not ${id}`
+      : problemsText(problems)
+    if (!warned.has(why)) {
+      warned.add(why)
+      console.error(`tranchant: ${why}; the finding is left out`)
+    }
+    return undefined
+  }
+
+  /**
+   * The findings of `findings/`, oldest first; those still inline in
+   * review.json when the folder holds none (imported before it existed).
+   * @param {Review} envelope
+   * @returns {Promise<Finding[]>}
+   */
+  async function readFindings(envelope) {
+    const theirs = envelope.ownership === 'theirs'
+    const names = await readdir(findingsDir).catch(() => [])
+    /** @type {Finding[]} */
+    const found = []
+    for (const name of names) {
+      const id = FINDING_FILE.exec(name)?.[1]
+      if (!id) continue
+      const file = path.join(findingsDir, name)
+      let value
+      try {
+        value = JSON.parse(await readFile(file, 'utf8'))
+      } catch {
+        continue
+      }
+      const finding = soundFinding(value, theirs, `findings/${name}`, id)
+      if (finding) found.push(finding)
+    }
+    if (found.length || !Array.isArray(envelope.findings))
+      return found.toSorted(byArrival)
+    return envelope.findings.flatMap((finding, i) => {
+      const sound = soundFinding(finding, theirs, `review.json findings[${i}]`)
+      return sound ? [sound] : []
+    })
+  }
+
+  /**
+   * The review as it stands: its envelope, and its findings in the order they
+   * were added. Read anew each time: a review grows while its producer runs.
+   * @returns {Promise<Review>}
+   */
+  async function readReview() {
+    const envelope = await readEnvelope()
+    return { ...envelope, findings: await readFindings(envelope) }
+  }
+
+  // Written to a temp file first, like the decisions: the server reads the folder on every change.
+  /** @param {Finding} finding */
+  async function writeFinding(finding) {
+    await mkdir(findingsDir, { recursive: true })
+    const target = findingPath(dir, finding.id)
+    const temp = path.join(findingsDir, `.${finding.id}.${process.pid}.tmp`)
+    await writeFile(temp, `${JSON.stringify(finding, null, 2)}\n`)
+    await rename(temp, target)
+  }
+
+  /** @param {Review} envelope */
+  async function writeEnvelope(envelope) {
+    const temp = `${reviewFile}.${process.pid}.tmp`
+    await writeFile(temp, `${JSON.stringify(envelope, null, 2)}\n`)
+    await rename(temp, reviewFile)
   }
 
   /**
@@ -299,10 +410,56 @@ export function createStore(dir) {
   return {
     readReview,
     readDecisions,
+    writeFinding,
 
     /** The review and its decisions, as the page reads them. */
     async readAll() {
       return { review: await readReview(), decisions: await readDecisions() }
+    },
+
+    /**
+     * A producer adds a finding to the review: `findings/<id>.json`, stamped
+     * with the time it landed. The same finding again changes nothing;
+     * another one under the same id is refused, as is any finding once the
+     * review is complete. Under review.json's lock: producers run in parallel.
+     * @param {any} finding
+     * @returns {Promise<{ id: string, added: boolean }>} `added`: false when it was there already.
+     */
+    addFinding(finding) {
+      return withFileLock(reviewFile, async () => {
+        const review = await readReview()
+        const problems = validateFinding(finding, {
+          theirs: review.ownership === 'theirs',
+        })
+        if (problems.length) throw new StoreRefusal(problemsText(problems))
+        const known = review.findings.find((one) => one.id === finding.id)
+        if (known) {
+          if (contentOf(known) !== contentOf(finding)) {
+            throw new StoreRefusal(`finding ${finding.id} exists with other content`)
+          }
+          return { id: finding.id, added: false }
+        }
+        if (statusOf(review) === 'complete') {
+          throw new StoreRefusal('the review is complete: nothing can be added')
+        }
+        await writeFinding({ ...finding, addedAt: new Date().toISOString() })
+        return { id: finding.id, added: true }
+      })
+    },
+
+    /**
+     * The producer is done: `status` becomes `complete`, and the page's
+     * in-progress indicator goes. Refused once it is.
+     * @returns {Promise<void>}
+     */
+    complete() {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        if (statusOf(envelope) === 'complete') {
+          throw new StoreRefusal('the review is complete already')
+        }
+        await writeEnvelope({ ...envelope, status: 'complete' })
+      })
     },
 
     /**
