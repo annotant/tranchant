@@ -1,0 +1,22 @@
+test/review.test.mjs
+  s_bc2462413ee2a6::t_d29f027b6d6c6f 111
+  s_bc2462413ee2a6::t_340b4c03a9a680 48,55-58,62-64,67-69
+  s_bc2462413ee2a6::t_4b9d4501a4a76b 1-47,49-54,59-61,65-66,70-73,75-110,112-117
+  s_bc2462413ee2a6::t_f4949f6510c1f0 74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4bffbd9ef035f547f764d6a514699c6cf4da503f",
+  "prompts": {},
+  "sessions": {
+    "s_bc2462413ee2a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a49408b3-1500-46cd-b249-d09ecccff78e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
