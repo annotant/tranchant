@@ -2,19 +2,42 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { expect, test, vi } from 'vitest'
 import { RETRY_MS } from '../src/api'
 import App from '../src/App'
-import { fakeEvents, fakeServer, ORDER, payload, record } from './fixture'
+import {
+  diffPayload,
+  fakeEvents,
+  fakeServer,
+  FINDINGS,
+  ORDER,
+  payload,
+  record,
+  STACKED,
+} from './fixture'
 
 const TITLE = 'Classification overview page'
 
+/** Renders the page on a server without a diff: the list view, once the page knows. */
 async function renderApp(data = payload()) {
   const server = fakeServer(data)
   render(<App />)
   await screen.findByRole('heading', { name: TITLE })
+  await screen.findByRole('listbox', { name: 'Findings' })
+  return server
+}
+
+/** Renders the page on a server that has the change's diff. */
+async function renderDiffApp(data = payload()) {
+  const server = fakeServer(data, {}, diffPayload())
+  render(<App />)
+  await screen.findByRole('heading', { name: TITLE })
+  // The file list appears once the diff is parsed and the findings placed.
+  await screen.findByRole('list', { name: 'Files' })
   return server
 }
 
 const selectedOption = () =>
   screen.getByRole('option', { selected: true }).id.replace('tr-option-', '')
+
+const focusedMarker = () => document.querySelector('.tr-marker--focused')?.id
 
 test('the header shows the branch, the ownership, Jira, the counts and the version', async () => {
   await renderApp(
@@ -223,4 +246,90 @@ test('a refusal from the server is shown', async () => {
   expect((await screen.findByRole('status')).textContent).toContain(
     'f-02 (already fixed)',
   )
+})
+
+test('without a diff, the page falls back to the list and says why', async () => {
+  await renderApp()
+  expect(screen.getByRole('button', { name: 'Diff' })).toHaveProperty('disabled', true)
+  expect(screen.getByRole('button', { name: 'List' }).getAttribute('aria-pressed')).toBe(
+    'true',
+  )
+  expect(screen.getByText(/Diff unavailable:/).textContent).toContain(
+    'is not a git repository',
+  )
+  expect(screen.queryByRole('region', { name: 'Diff' })).toBeNull()
+  expect(screen.getAllByRole('option')).toHaveLength(5)
+})
+
+test('the diff is the main view: the files, the markers in the diff, the detail beside', async () => {
+  await renderDiffApp()
+  expect(screen.getByRole('button', { name: 'Diff' }).getAttribute('aria-pressed')).toBe(
+    'true',
+  )
+  expect(screen.getByRole('list', { name: 'Files' }).querySelectorAll('li')).toHaveLength(
+    8,
+  )
+  expect(
+    screen.getByRole('region', { name: 'Diff' }).querySelectorAll('.tr-marker'),
+  ).toHaveLength(5)
+  expect(screen.queryByRole('option')).toBeNull()
+  // The first finding of the diff opens; the detail keeps its own excerpt.
+  const article = screen.getByRole('article')
+  expect(article.textContent).toContain('Null tenantId crashes the loop')
+  expect(article.querySelector('.tr-code')).not.toBeNull()
+})
+
+test('j/k walk the findings in the diff’s order, across files; a marker click opens', async () => {
+  await renderDiffApp()
+  for (let i = 0; i < 3; i++) fireEvent.keyDown(document, { key: 'j' })
+  // The list would be on f-03 here: the diff shows Drawer.tsx before the untouched test file.
+  expect(focusedMarker()).toBe('tr-marker-f-04')
+  fireEvent.keyDown(document, { key: 'Enter' })
+  expect(screen.getByRole('article').textContent).toContain('Use the design tokens')
+  fireEvent.keyDown(document, { key: 'j' })
+  expect(focusedMarker()).toBe('tr-marker-f-03')
+  fireEvent.keyDown(document, { key: 'j' })
+  expect(focusedMarker()).toBe('tr-marker-f-03')
+  fireEvent.click(screen.getByRole('button', { name: /Off-by-one in the page count/ }))
+  expect(screen.getByRole('article').textContent).toContain(
+    'Off-by-one in the page count',
+  )
+  expect(document.querySelector('.tr-marker--open')?.id).toBe('tr-marker-f-05')
+  expect(focusedMarker()).toBe('tr-marker-f-05')
+  fireEvent.keyDown(document, { key: 'x' })
+  expect(
+    screen.getByRole('checkbox', { name: 'Select Off-by-one in the page count' }),
+  ).toHaveProperty('checked', true)
+})
+
+test('the list view is a toggle, remembered across loads', async () => {
+  await renderDiffApp()
+  fireEvent.click(screen.getByRole('button', { name: 'List' }))
+  expect(
+    screen.getAllByRole('option').map((o) => o.id.replace('tr-option-', '')),
+  ).toEqual(ORDER)
+  // The finding shown stays, though the list would open on f-02 first.
+  expect(screen.getByRole('article').textContent).toContain(
+    'Null tenantId crashes the loop',
+  )
+  expect(screen.queryByRole('region', { name: 'Diff' })).toBeNull()
+  expect(localStorage.getItem('tranchant:view')).toBe('list')
+  cleanup()
+  render(<App />)
+  await screen.findByRole('heading', { name: TITLE })
+  expect(screen.getAllByRole('option')).toHaveLength(5)
+  fireEvent.click(screen.getByRole('button', { name: 'Diff' }))
+  await screen.findByRole('region', { name: 'Diff' })
+})
+
+test('a finding added while the diff is open lands in it', async () => {
+  const events = fakeEvents()
+  const server = await renderDiffApp()
+  expect(document.getElementById('tr-marker-f-06')).toBeNull()
+  server.set(payload({ review: { findings: [...FINDINGS, STACKED] } }))
+  events.send('changed')
+  await waitFor(() => expect(document.getElementById('tr-marker-f-06')).not.toBeNull())
+  const row = document.querySelector('#tr-file-1 .tr-row[data-line="21"]')
+  const stack = [...(row?.parentElement?.querySelectorAll('.tr-marker') ?? [])]
+  expect(stack.map((marker) => marker.id)).toEqual(['tr-marker-f-02', 'tr-marker-f-06'])
 })

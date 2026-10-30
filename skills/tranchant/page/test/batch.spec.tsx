@@ -9,6 +9,8 @@ async function renderApp(data = payload()) {
   const server = fakeServer(data)
   render(<App />)
   await screen.findByRole('heading', { name: 'Classification overview page' })
+  // The list view, once the page learnt there is no diff.
+  await screen.findByRole('listbox', { name: 'Findings' })
   return server
 }
 

@@ -7,6 +7,7 @@ const DECISIONS = '/api/decisions'
 const ANSWER = '/api/answer'
 const STOP = '/api/stop'
 const RUNS = '/api/runs/'
+const DIFF = '/api/diff'
 
 /** How often the page asks again once the server stopped answering. */
 export const RETRY_MS = 5000
@@ -38,6 +39,25 @@ async function failure(response: Response): Promise<string> {
 }
 
 const fetchReview = () => request<ReviewPayload>(REVIEW)
+
+/** One file of the change, as `/api/diff` counts it. */
+interface DiffStat {
+  path: string
+  oldPath?: string
+  additions: number
+  deletions: number
+  binary: boolean
+}
+
+/** What `GET /api/diff` answers: the change's unified diff and its files. */
+export interface DiffPayload {
+  base: string
+  head: string
+  files: DiffStat[]
+  diff: string
+}
+
+const fetchDiff = () => request<DiffPayload>(DIFF)
 
 export const postDecisions = (decisions: DecisionInput[]) =>
   request<DecisionsResult>(DECISIONS, {
@@ -147,4 +167,50 @@ export function useReview() {
   }, [load])
 
   return { payload, reachable, loaded, reload: load }
+}
+
+export type DiffState =
+  | { status: 'loading' }
+  | { status: 'ready'; payload: DiffPayload }
+  | { status: 'unavailable'; reason: string }
+
+/**
+ * The change's diff at `/api/diff`, read once per head the review shows:
+ * `unavailable` with the server's reason (no repository, a commit not
+ * fetched) when it answers 409, or when it does not answer, in which case
+ * the page asks again once it is reachable.
+ */
+export function useDiff(head: string | undefined, reachable: boolean): DiffState {
+  const [state, setState] = useState<DiffState>({ status: 'loading' })
+  const asked = useRef<string>(undefined)
+
+  useEffect(() => {
+    if (!head || !reachable || asked.current === head) return undefined
+    asked.current = head
+    let disposed = false
+    let settled = false
+    async function load() {
+      try {
+        const payload = await fetchDiff()
+        settled = true
+        if (!disposed) setState({ status: 'ready', payload })
+      } catch (error) {
+        settled = true
+        if (disposed) return
+        asked.current = undefined
+        setState({
+          status: 'unavailable',
+          reason: error instanceof Error ? error.message : 'the diff could not be read',
+        })
+      }
+    }
+    void load()
+    return () => {
+      disposed = true
+      // A request cut short answers nothing: ask again next time.
+      if (!settled) asked.current = undefined
+    }
+  }, [head, reachable])
+
+  return state
 }

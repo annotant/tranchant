@@ -1,5 +1,6 @@
 import { act } from '@testing-library/react'
 import { expect, vi } from 'vitest'
+import type { DiffPayload } from '../src/api'
 import type {
   DecisionInput,
   Finding,
@@ -192,6 +193,101 @@ export const FINDINGS: Finding[] = [
 /** The list's order of FINDINGS: review (Bugs, by path) then auto (Bugs, Tests, Conventions). */
 export const ORDER = ['f-02', 'f-01', 'f-05', 'f-03', 'f-04']
 
+/** A sixth finding on the line f-02 is on: the two stack. */
+export const STACKED: Finding = {
+  ...FINDINGS[2]!,
+  id: 'f-06',
+  title: 'Is the admin branch tested?',
+  path: 'src/api/guard.ts',
+  line: 21,
+  excerpt: FINDINGS[1]!.excerpt,
+}
+
+/**
+ * The change's diff, as `/api/diff` hands it: usePeople.ts shows f-01's line
+ * with its excerpt text, guard.ts f-02's (and STACKED's), pager.ts f-05's;
+ * Drawer.tsx is touched far from f-04's line; usePeople.test.ts (f-03) is not
+ * in it at all. Then a rename, a binary and a deleted file. Its first file is
+ * not the list's first finding: the two views open on different findings.
+ */
+export const DIFF = `${[
+  'diff --git a/src/people/usePeople.ts b/src/people/usePeople.ts',
+  'index 3333333..4444444 100644',
+  '--- a/src/people/usePeople.ts',
+  '+++ b/src/people/usePeople.ts',
+  '@@ -36,3 +36,11 @@ import { useQuery } from "@tanstack/react-query"',
+  '-export function usePeople() {',
+  '-  return []',
+  '-}',
+  ...FINDINGS[0]!.excerpt.lines.map((line) => `+${line}`),
+  'diff --git a/src/api/guard.ts b/src/api/guard.ts',
+  'index 1111111..2222222 100644',
+  '--- a/src/api/guard.ts',
+  '+++ b/src/api/guard.ts',
+  HUNK,
+  'diff --git a/src/people/pager.ts b/src/people/pager.ts',
+  'index 5555555..6666666 100644',
+  '--- a/src/people/pager.ts',
+  '+++ b/src/people/pager.ts',
+  '@@ -4,2 +4,2 @@',
+  ' export const pages = (total: number, size: number) =>',
+  '-  Math.floor(total / size) + 1',
+  '+  Math.floor(total / size)',
+  'diff --git a/src/people/Drawer.tsx b/src/people/Drawer.tsx',
+  'index 7777777..8888888 100644',
+  '--- a/src/people/Drawer.tsx',
+  '+++ b/src/people/Drawer.tsx',
+  '@@ -10,3 +10,3 @@',
+  ' import { Box } from "./Box"',
+  '-import { Table } from "./Table"',
+  '+import { Table } from "../table/Table"',
+  ' import { useDrawer } from "./useDrawer"',
+  'diff --git a/src/people/old-name.ts b/src/people/new-name.ts',
+  'similarity index 80%',
+  'rename from src/people/old-name.ts',
+  'rename to src/people/new-name.ts',
+  'index 9999999..aaaaaaa 100644',
+  '--- a/src/people/old-name.ts',
+  '+++ b/src/people/new-name.ts',
+  '@@ -1,2 +1,2 @@',
+  '-export const name = "old"',
+  '+export const name = "new"',
+  ' export default name',
+  'diff --git a/assets/logo.png b/assets/logo.png',
+  'index bbbbbbb..ccccccc 100644',
+  'Binary files a/assets/logo.png and b/assets/logo.png differ',
+  'diff --git a/src/people/legacy.ts b/src/people/legacy.ts',
+  'deleted file mode 100644',
+  'index ddddddd..0000000',
+  '--- a/src/people/legacy.ts',
+  '+++ /dev/null',
+  '@@ -1 +0,0 @@',
+  '-export {}',
+].join('\n')}\n`
+
+export const DIFF_FILES: DiffPayload['files'] = [
+  { path: 'src/people/usePeople.ts', additions: 11, deletions: 3, binary: false },
+  { path: 'src/api/guard.ts', additions: 4, deletions: 1, binary: false },
+  { path: 'src/people/pager.ts', additions: 1, deletions: 1, binary: false },
+  { path: 'src/people/Drawer.tsx', additions: 1, deletions: 1, binary: false },
+  {
+    path: 'src/people/new-name.ts',
+    oldPath: 'src/people/old-name.ts',
+    additions: 1,
+    deletions: 1,
+    binary: false,
+  },
+  { path: 'assets/logo.png', additions: 0, deletions: 0, binary: true },
+  { path: 'src/people/legacy.ts', additions: 0, deletions: 1, binary: false },
+]
+
+export const diffPayload = (): DiffPayload => ({
+  base: 'origin/master',
+  head: HEAD,
+  files: DIFF_FILES,
+  diff: DIFF,
+})
+
 export function review(
   ownership: Ownership = 'ours',
   fields: Partial<Review> = {},
@@ -291,12 +387,14 @@ export function decisionsOf(post: Post | undefined): DecisionInput[] {
 
 /**
  * Stands in for the server: serves `payload`, records each POST, answers
- * `applied` for every decision. `down()` makes every request fail, as when
- * the session ended; `up()` brings it back.
+ * `applied` for every decision, and `diff` on `/api/diff` (409, as when the
+ * project is no repository, without one). `down()` makes every request fail,
+ * as when the session ended; `up()` brings it back.
  */
 export function fakeServer(
   initial: ReviewPayload,
   histories: Record<string, Step[]> = {},
+  diff?: DiffPayload,
 ) {
   let current = initial
   let down = false
@@ -325,6 +423,14 @@ export function fakeServer(
     }
     if (url.pathname.startsWith('/api/runs/')) {
       return Response.json(histories[decodeURIComponent(url.pathname.slice(10))] ?? [])
+    }
+    if (url.pathname === '/api/diff') {
+      return diff
+        ? Response.json(diff)
+        : Response.json(
+            { error: '/Users/me/dev/dashboard-ui is not a git repository' },
+            { status: 409 },
+          )
     }
     return Response.json(current)
   })
