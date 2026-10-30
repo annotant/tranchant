@@ -336,3 +336,33 @@ the producer's; the others, an agent's or the server's.
 | `add.mjs --review <dir> [--file <finding.json>]`                                                                            | Adds one finding, from the file or stdin, to a review still `reviewing`: checked as a review's are (id, anchor, `comment` when `theirs`), written to `findings/<id>.json` with `addedAt`; prints `ADDED <id>`. The same finding again is accepted silently; another one under the same id, an unsound one, or any once the review is complete prints `ADD_REFUSED <reason>` and exits 2.                                                                                                                                                                                                                                   |
 | `complete.mjs --review <dir>`                                                                                               | Sets `status` to `complete`; prints `COMPLETE`. On a review complete already, `COMPLETE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `hook.mjs <pre\|post\|stop\|note\|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]` | The settings hooks of one finding's agent: file locks, refused Bash writes, steps.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+
+## The recipe
+
+`/tranchant review` runs one reviewer agent per lens of a recipe, a JSON
+file; the plugin's default is
+[`agents/review/recipe.json`](../agents/review/recipe.json), and `--recipe
+<path>` replaces it with one of the same shape.
+
+```jsonc
+{
+  "version": 1,
+  "lenses": [
+    {
+      "name": "correctness", // [\w-]{1,64}; the agents' finding ids start with it
+      "prompt": "correctness.md", // the lens's prompt, relative to the recipe file
+      "paths": ["**/*.ts", "**/*.tsx"], // the lens runs when a changed file matches one
+    },
+    { "name": "bugs", "prompt": "bugs.md", "otherwise": true }, // the files no other lens matched
+  ],
+}
+```
+
+A glob is matched against each changed file's path, relative to the project,
+with `**` crossing folders and `*` staying within a name. A lens runs once
+per review, when at least one changed file matches one of its globs; the
+lens with `otherwise` (one at most, no `paths`) runs when a changed file
+matches no other lens's globs. Each lens's agent gets `REVIEW`, `SKILL`,
+`PROJECT`, the base and the head, and the prompt's body as its instructions;
+it adds its findings with `add.mjs`, their ids `<name>-<n>`. The verifier
+(`agents/review/verifier.md`) runs once per finding as they land.
