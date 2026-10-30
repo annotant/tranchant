@@ -9,7 +9,7 @@
   "env": {
     "es2024": true
   },
-  "ignorePatterns": ["skills/tranchant/page/dist/**"],
+  "ignorePatterns": ["skills/tranchant/page/dist/**", "test/fixtures/front-end/**"],
   "overrides": [
     {
       "files": ["skills/tranchant/scripts/**", "**/*.mjs"],
