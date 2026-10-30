@@ -5,7 +5,8 @@
 // and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
 // time). It watches the review folder and its run files, and pushes
 // `changed` to the pages on /api/events: they reload only then. It watches
-// the page's bundle too, and pushes `page` when a dev build replaces it.
+// the page's bundle too, and pushes `page` when a dev build replaces it. It
+// computes the change's diff (/api/diff) once, with git, for the page's main view.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -15,6 +16,7 @@ import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine } from './lib/format.mjs'
 import { StoreRefusal, createStore, readProgress } from './lib/store.mjs'
@@ -187,6 +189,136 @@ async function currentHead() {
   }
 }
 
+/** The most bytes of diff the server reads from git and hands the page. */
+const MAX_DIFF = 32 * 1024 * 1024
+
+/** A diff the server cannot compute; the reason answers 409. */
+class DiffUnavailable extends Error {}
+
+/**
+ * One file of the change, as `git diff --numstat` counts it.
+ * @typedef {{ path: string, oldPath?: string, additions: number, deletions: number, binary: boolean }} DiffStat
+ */
+
+/**
+ * The files of `git diff --numstat -z`: `added`, `deleted` and the path, tab
+ * separated; a rename has an empty path then the old and the new one; `-`
+ * counts a binary.
+ * @param {string} raw
+ * @returns {DiffStat[]}
+ */
+function parseNumstat(raw) {
+  const parts = raw.split('\0')
+  /** @type {DiffStat[]} */
+  const files = []
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i] ?? ''
+    const first = part.indexOf('\t')
+    const second = part.indexOf('\t', first + 1)
+    if (first === -1 || second === -1) continue
+    const added = part.slice(0, first)
+    const deleted = part.slice(first + 1, second)
+    let file = part.slice(second + 1)
+    let oldPath
+    if (file === '') {
+      oldPath = parts[++i]
+      file = parts[++i] ?? ''
+    }
+    const binary = added === '-'
+    files.push({
+      path: file,
+      ...(oldPath !== undefined && { oldPath }),
+      additions: binary ? 0 : Number(added),
+      deletions: binary ? 0 : Number(deleted),
+      binary,
+    })
+  }
+  return files
+}
+
+/**
+ * Why git failed, in one line: its first `fatal:` or `error:` line.
+ * @param {unknown} error
+ */
+function gitWords(error) {
+  if (errorCode(error) === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    return `the diff is larger than ${MAX_DIFF / 1024 / 1024} MiB`
+  }
+  const stderr =
+    error && typeof error === 'object' && 'stderr' in error ? String(error.stderr) : ''
+  const line = stderr
+    .split('\n')
+    .map((entry) => entry.trim())
+    .find(Boolean)
+  return line?.replace(/^(?:fatal|error): /, '') ?? String(error)
+}
+
+/** Runs git in the project, the diff's size allowed. @param {string[]} args */
+const git = (args) =>
+  gitExec('git', ['-C', project, ...args], { timeout: 30_000, maxBuffer: MAX_DIFF })
+
+/**
+ * The unified diff of the change and its files: the MR's own diff refs when
+ * the review has them, else what reached `headSha` since `base`.
+ * @returns {Promise<{ base: string, head: string, files: DiffStat[], diff: string }>}
+ */
+async function computeDiff() {
+  const refs = review.mr?.diffRefs
+  const base = refs ? refs.baseSha : review.base
+  const head = refs ? refs.headSha : review.headSha
+  const range = refs ? `${base}..${head}` : `${base}...${head}`
+  try {
+    await git(['rev-parse', '--is-inside-work-tree'])
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') throw new DiffUnavailable('git is not installed')
+    throw new DiffUnavailable(`${project} is not a git repository`)
+  }
+  try {
+    await git([
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      '--end-of-options',
+      `${head}^{commit}`,
+    ])
+  } catch {
+    throw new DiffUnavailable(`commit ${head} is not in ${project}: fetch it first`)
+  }
+  // Relative to the project, which may be a folder of the repository: the
+  // findings' paths are, and the page matches them.
+  const flags = ['--no-color', '--no-ext-diff', '--relative']
+  try {
+    const [patch, numstat] = await Promise.all([
+      git([
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        ...flags,
+        '--src-prefix=a/',
+        '--dst-prefix=b/',
+        range,
+        '--',
+      ]),
+      git(['diff', ...flags, '--numstat', '-z', range, '--']),
+    ])
+    return { base, head, files: parseNumstat(numstat.stdout), diff: patch.stdout }
+  } catch (error) {
+    throw new DiffUnavailable(`git diff ${range} failed: ${gitWords(error)}`)
+  }
+}
+
+/** @type {Promise<Awaited<ReturnType<typeof computeDiff>>> | undefined} */
+let diff
+
+/** The diff, computed once: the review's head never changes. A failure is tried again. */
+function diffOnce() {
+  diff ??= computeDiff().catch((error) => {
+    diff = undefined
+    throw error
+  })
+  return diff
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`)
   // A page of another site may send a request it cannot read the answer of:
@@ -232,6 +364,16 @@ async function handle(req, res) {
       runs,
       head: { reviewed: review.headSha, current },
     })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/diff') {
+    try {
+      return send(res, 200, await diffOnce())
+    } catch (error) {
+      if (error instanceof DiffUnavailable)
+        return send(res, 409, { error: error.message })
+      throw error
+    }
   }
 
   const run = /^\/api\/runs\/([^/]+)$/.exec(url.pathname)?.[1]

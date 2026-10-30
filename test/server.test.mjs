@@ -6,7 +6,8 @@ import { appendFile, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promi
 import path from 'node:path'
 import { before, test } from 'node:test'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
-import { SCRIPTS, importReview, json, run, tempDir } from './helpers.mjs'
+import { buildPlayground } from './fixtures/playground.mjs'
+import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
 
 const SERVER = path.join(SCRIPTS, 'server.mjs')
 const FIRST_LINE = /^(READY|PORT_BUSY|REVIEW_REFUSED|HOOKS_MISSING|PAGE_MISSING)/
@@ -217,6 +218,97 @@ test('answers the review, its decisions, its runs and the heads', async () => {
   assert.deepEqual(body.runs, {})
   assert.equal(body.head.reviewed, main.review.headSha)
   assert.match(body.head.current, /^[0-9a-f]{40}$/)
+})
+
+/**
+ * The lines of file `file` on the new side of a unified diff, by number,
+ * with their sign: what the page shows at each line.
+ * @param {string} diff
+ * @param {string} file
+ */
+function newSide(diff, file) {
+  /** @type {Map<number, string>} */
+  const lines = new Map()
+  const section = diff
+    .split(/^(?=diff --git )/m)
+    .find((part) => part.startsWith(`diff --git a/${file} b/${file}\n`))
+  let next = 0
+  for (const line of (section ?? '').split('\n')) {
+    const header = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line)
+    if (header) next = Number(header[1])
+    else if (next && (line.startsWith('+') || line.startsWith(' ')))
+      lines.set(next++, line)
+  }
+  return lines
+}
+
+/** A playground built for a fixture review, in a folder of its own. */
+const playground = async (/** @type {any} */ t, /** @type {'ours' | 'theirs'} */ name) =>
+  buildPlayground(await tempDir(t, 'tranchant-playground-'), await fixture(name))
+
+test('answers the diff of the change, every playground finding on an added line of it', async (t) => {
+  const placed = await playground(t, 'ours')
+  const server = await startServer(t, { name: 'ours', overrides: placed })
+  assert.match(server.first, /^READY /, server.output())
+  const response = await fetch(`${server.base}/api/diff`)
+  assert.equal(response.status, 200)
+  const body = await json(response)
+  assert.deepEqual(Object.keys(body).toSorted(), ['base', 'diff', 'files', 'head'])
+  assert.equal(body.base, 'main')
+  assert.equal(body.head, placed.headSha)
+  const named = placed.findings.flatMap((finding) => [
+    finding.path,
+    ...(finding.related ?? []).map((related) => related.path),
+  ])
+  assert.deepEqual(
+    body.files.map((file) => file.path),
+    [...new Set(named)].toSorted(),
+  )
+  for (const file of body.files) {
+    assert.ok(file.additions > 0 && file.deletions > 0, file.path)
+    assert.equal(file.binary, false)
+  }
+  for (const finding of placed.findings) {
+    const text = finding.excerpt.lines[finding.line - finding.excerpt.startLine]
+    assert.equal(
+      newSide(body.diff, finding.path).get(finding.line),
+      `+${text}`,
+      finding.id,
+    )
+  }
+  assert.deepEqual(await json(await fetch(`${server.base}/api/diff`)), body)
+})
+
+test('with diff refs, the diff is the MR’s own, base sha to head sha', async (t) => {
+  const placed = await playground(t, 'theirs')
+  const server = await startServer(t, { name: 'theirs', overrides: placed })
+  const body = await json(await fetch(`${server.base}/api/diff`))
+  assert.equal(body.base, placed.mr?.diffRefs?.baseSha)
+  assert.equal(body.head, placed.mr?.diffRefs?.headSha)
+  assert.equal(body.files.length, 7)
+  const notes = [...newSide(body.diff, 'src/people/PersonNotes.tsx').values()]
+  assert.equal(notes.filter((line) => line.startsWith('+')).length, 10)
+})
+
+test('says why the diff is unavailable: no repository, a head not fetched, a base unknown', async (t) => {
+  const unfetched = await fetch(`${main.base}/api/diff`)
+  assert.equal(unfetched.status, 409)
+  assert.deepEqual(await json(unfetched), {
+    error: `commit ${main.review.headSha} is not in ${main.project}: fetch it first`,
+  })
+  const plain = await startServer(t, { name: 'ours' })
+  const none = await fetch(`${plain.base}/api/diff`)
+  assert.equal(none.status, 409)
+  assert.deepEqual(await json(none), {
+    error: `${plain.project} is not a git repository`,
+  })
+  const placed = { ...(await playground(t, 'ours')), base: 'nowhere' }
+  const unknown = await startServer(t, { name: 'ours', overrides: placed })
+  const failed = await fetch(`${unknown.base}/api/diff`)
+  assert.equal(failed.status, 409)
+  assert.deepEqual(await json(failed), {
+    error: `git diff nowhere...${placed.headSha} failed: bad revision 'nowhere...${placed.headSha}'`,
+  })
 })
 
 test('applies a batch of decisions in order, and prints a line for each', async () => {

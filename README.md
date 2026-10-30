@@ -67,6 +67,10 @@ opens the page itself.
 
 In the page:
 
+- **The diff** of the change is the main view, every finding a marker on
+  its line; **List** shows them by bucket and topic instead, and is what
+  you get when the diff cannot be computed (no repository, commits not
+  fetched).
 - **Fix now** applies the finding to the working tree. Add context first when
   the fix needs a choice the agent cannot make.
 - **Keep & post** / **Edit & post** put the comment on the MR, as suggested or
