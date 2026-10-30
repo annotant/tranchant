@@ -1,5 +1,6 @@
 // Rows, segments and notes have no identity but their place: a new excerpt re-renders them all.
 /* oxlint-disable react/no-array-index-key */
+import type { ReactNode } from 'react'
 import type { Excerpt as ExcerptText, Mark } from './domain'
 
 type RowKind = 'context' | 'added' | 'removed' | 'header' | 'meta'
@@ -75,30 +76,29 @@ const NO_MARKS: readonly Mark[] = []
 const signOf = (row: Row) =>
   row.kind === 'added' ? '+' : row.kind === 'removed' ? '-' : ' '
 
-interface Props {
-  excerpt: ExcerptText
-  hunk?: string | undefined
+/** The gutter's width: the longest line number, two digits at least. */
+export const digitsOf = (rows: readonly Row[]) =>
+  Math.max(
+    2,
+    ...rows.map((row) => (row.number === undefined ? 0 : String(row.number).length)),
+  )
+
+interface RowsProps {
+  rows: readonly Row[]
   marks?: readonly Mark[] | undefined
   /** The finding's line, set apart in the gutter. */
   anchor?: number | undefined
-  label?: string
+  /** Whether the rows carry a sign column: a hunk's do. */
+  signed: boolean
+  /** What to show under a numbered row: the diff view's markers. */
+  under?: ((line: number) => ReactNode) | undefined
 }
 
 // No syntax highlighting, deliberately: the marks are the only colour the
 // code carries, so the eye lands on them.
-export function Excerpt({ excerpt, hunk, marks = NO_MARKS, anchor, label }: Props) {
-  const rows = hunk ? parseHunk(hunk) : plainRows(excerpt)
-  const digits = Math.max(
-    2,
-    ...rows.map((row) => (row.number === undefined ? 0 : String(row.number).length)),
-  )
+export function CodeRows({ rows, marks = NO_MARKS, anchor, signed, under }: RowsProps) {
   return (
-    <div
-      className={`tr-code ${hunk ? 'tr-code--hunk' : ''}`}
-      style={{ '--tr-digits': `${digits}ch`, '--tr-sign': hunk ? '1ch' : '0ch' }}
-      aria-label={label}
-      role="figure"
-    >
+    <>
       {rows.map((row, index) => {
         const lineMarks =
           row.number === undefined ? [] : marks.filter((mark) => mark.line === row.number)
@@ -119,7 +119,7 @@ export function Excerpt({ excerpt, hunk, marks = NO_MARKS, anchor, label }: Prop
                 {row.number ?? ''}
               </span>
               <span className="tr-text">
-                {hunk && row.kind !== 'header' && row.kind !== 'meta' && (
+                {signed && row.kind !== 'header' && row.kind !== 'meta' && (
                   <span className="tr-sign">{signOf(row)}</span>
                 )}
                 {columns.length
@@ -145,9 +145,33 @@ export function Excerpt({ excerpt, hunk, marks = NO_MARKS, anchor, label }: Prop
                   <span className="tr-callout-body">{mark.note}</span>
                 </div>
               ))}
+            {row.number !== undefined && under?.(row.number)}
           </div>
         )
       })}
+    </>
+  )
+}
+
+interface Props {
+  excerpt: ExcerptText
+  hunk?: string | undefined
+  marks?: readonly Mark[] | undefined
+  /** The finding's line, set apart in the gutter. */
+  anchor?: number | undefined
+  label?: string
+}
+
+export function Excerpt({ excerpt, hunk, marks, anchor, label }: Props) {
+  const rows = hunk ? parseHunk(hunk) : plainRows(excerpt)
+  return (
+    <div
+      className={`tr-code ${hunk ? 'tr-code--hunk' : ''}`}
+      style={{ '--tr-digits': `${digitsOf(rows)}ch`, '--tr-sign': hunk ? '1ch' : '0ch' }}
+      aria-label={label}
+      role="figure"
+    >
+      <CodeRows rows={rows} marks={marks} anchor={anchor} signed={!!hunk} />
     </div>
   )
 }
