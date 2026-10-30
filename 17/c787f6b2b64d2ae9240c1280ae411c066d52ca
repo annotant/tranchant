@@ -1,0 +1,19 @@
+skills/tranchant/page/src/Excerpt.tsx
+  s_4e6f577b529ff9::t_1cf791f68a8667 3,79-87,91-94,99,101,122,148,152-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "17c787f6b2b64d2ae9240c1280ae411c066d52ca",
+  "prompts": {},
+  "sessions": {
+    "s_4e6f577b529ff9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "369febc2-8b22-40a4-8070-f2f763bc49ec",
+        "model": "unknown"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
