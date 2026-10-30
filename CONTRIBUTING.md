@@ -32,8 +32,8 @@ npm run build
 ## Trying your changes
 
 Build the playground, a throwaway git repository holding the files the
-fixture review names, then start Claude Code in your clone and open that
-review:
+fixture review names, with a base commit and a head commit so the page has
+a diff to show, then start Claude Code in your clone and open that review:
 
 ```sh
 node test/fixtures/playground.mjs    # --theirs for the MR variant, --fresh to rebuild
