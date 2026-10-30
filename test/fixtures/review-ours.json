@@ -1,0 +1,241 @@
+{
+  "version": 1,
+  "id": "a2c9e4d1-5b6f-4a7c-8d9e-0f1a2b3c4d5e",
+  "createdAt": "2026-10-30T16:02:11.004Z",
+  "project": "/Users/me/dev/dashboard-ui",
+  "branch": "feature/people-drawer-ours",
+  "base": "origin/master",
+  "headSha": "3552e3ef0c9b4d7a8e1f2a3b4c5d6e7f8a9b0c1d",
+  "ownership": "ours",
+  "title": "People drawer and table (own branch)",
+  "summary": "## Change Map\n\n- `src/people/usePeople.ts`: a new React Query hook listing a tenant's people, paginated.\n- `src/people/PersonDrawer.tsx`: a drawer opened from a table row, showing a person's notes.\n- `src/people/PeopleTable.tsx`: a DataGrid of people with a last-seen date.\n\n## Summary\n\nThe drawer opens before the tenant query settles and crashes the hook; the notes render raw HTML. The rest is test and convention cleanups.",
+  "strengths": [
+    "Tests cover the empty state and the loading skeleton.",
+    "The drawer reuses the files page's skeleton instead of a new one."
+  ],
+  "findings": [
+    {
+      "id": "f-01",
+      "topic": "Bugs",
+      "bucket": "review",
+      "tag": "concern",
+      "title": "Undefined tenantId crashes the people hook",
+      "path": "src/people/usePeople.ts",
+      "line": 42,
+      "excerpt": {
+        "startLine": 36,
+        "lines": [
+          "export function usePeople(tenantId?: string, page = 1) {",
+          "  const client = useGraphQLClient()",
+          "  return useQuery({",
+          "    queryKey: ['people', tenantId, page],",
+          "    queryFn: async () => {",
+          "      const variables = {",
+          "        tenant: tenantId.length ? tenantId : DEFAULT_TENANT,",
+          "        offset: (page - 1) * PAGE_SIZE,",
+          "      }",
+          "      return client.request(PEOPLE_QUERY, variables)",
+          "    },",
+          "  })",
+          "}"
+        ]
+      },
+      "marks": [
+        {
+          "line": 42,
+          "from": 16,
+          "to": 31,
+          "note": "undefined when the drawer opens before the tenant query settles"
+        },
+        {
+          "line": 45
+        }
+      ],
+      "problem": "`tenantId.length` throws when `tenantId` is undefined. The drawer mounts the hook before the tenant query resolves.",
+      "why": "The person page then shows the error boundary instead of the skeleton, on every first open.",
+      "fix": "Return early while `tenantId` is undefined, as `useFiles` does three lines above its query: pass `enabled: tenantId !== undefined` to `useQuery`.",
+      "diagram": {
+        "kind": "svg",
+        "source": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 600 240\" font-family=\"sans-serif\" font-size=\"12\"><g stroke=\"#777\" fill=\"none\"><line x1=\"100\" y1=\"40\" x2=\"100\" y2=\"220\"/><line x1=\"300\" y1=\"40\" x2=\"300\" y2=\"220\"/><line x1=\"500\" y1=\"40\" x2=\"500\" y2=\"220\"/></g><g text-anchor=\"middle\" fill=\"#222\"><text x=\"100\" y=\"28\">PersonDrawer</text><text x=\"300\" y=\"28\">usePeople</text><text x=\"500\" y=\"28\">tenant query</text></g><g stroke=\"#1a7f5a\" fill=\"none\"><line x1=\"100\" y1=\"70\" x2=\"300\" y2=\"70\"/><line x1=\"300\" y1=\"110\" x2=\"500\" y2=\"110\"/></g><g fill=\"#222\" text-anchor=\"middle\"><text x=\"200\" y=\"62\">mount: tenantId undefined</text><text x=\"400\" y=\"102\">fetch tenant</text><text x=\"200\" y=\"152\" fill=\"#c0392b\">tenantId.length → TypeError</text><text x=\"400\" y=\"200\">settles too late</text></g><line x1=\"300\" y1=\"160\" x2=\"100\" y2=\"160\" stroke=\"#c0392b\"/><line x1=\"500\" y1=\"208\" x2=\"300\" y2=\"208\" stroke=\"#999\" stroke-dasharray=\"4 3\"/></svg>",
+        "caption": "The drawer mounts before the tenant query resolves: the hook reads tenantId too early."
+      },
+      "related": [
+        {
+          "path": "src/people/useFiles.ts",
+          "line": 12,
+          "excerpt": {
+            "startLine": 10,
+            "lines": [
+              "  return useQuery({",
+              "    queryKey: ['files', tenantId, page],",
+              "    enabled: tenantId !== undefined,",
+              "    queryFn: () => client.request(FILES_QUERY, { tenant: tenantId, page }),",
+              "  })"
+            ]
+          },
+          "marks": [
+            {
+              "line": 12,
+              "note": "the guard usePeople lacks"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "f-02",
+      "topic": "Security & Permissions",
+      "bucket": "review",
+      "tag": "concern",
+      "title": "Person notes rendered as raw HTML",
+      "path": "src/people/PersonNotes.tsx",
+      "line": 27,
+      "excerpt": {
+        "startLine": 22,
+        "lines": [
+          "export function PersonNotes({ notes }: Props) {",
+          "  return (",
+          "    <NotesList>",
+          "      {notes.map((note) => (",
+          "        <NoteItem key={note.id}>",
+          "          <div dangerouslySetInnerHTML={{ __html: note.body }} />",
+          "        </NoteItem>",
+          "      ))}",
+          "    </NotesList>",
+          "  )"
+        ]
+      },
+      "hunk": "@@ -20,6 +22,10 @@ import { NoteItem, NotesList } from './PersonNotes.styles'\n export function PersonNotes({ notes }: Props) {\n   return (\n     <NotesList>\n-      {notes.map((note) => <NoteItem key={note.id}>{note.body}</NoteItem>)}\n+      {notes.map((note) => (\n+        <NoteItem key={note.id}>\n+          <div dangerouslySetInnerHTML={{ __html: note.body }} />\n+        </NoteItem>\n+      ))}\n     </NotesList>\n   )",
+      "marks": [
+        {
+          "line": 27,
+          "from": 15,
+          "to": 60,
+          "note": "note.body comes from the API as the author typed it"
+        }
+      ],
+      "problem": "A note's body is injected as HTML. Notes are typed by any user of the tenant, so a `<img onerror>` in one runs in every reader's session.",
+      "why": "Stored XSS on a page that shows the session's token to the API.",
+      "fix": "Render `note.body` as text, as the previous version did; if rich notes are wanted, go through the `Markdown` component of `src/notes`, which sanitizes."
+    },
+    {
+      "id": "f-03",
+      "topic": "Tests",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "Inline screen queries in the drawer test",
+      "path": "src/people/__tests__/PersonDrawer.test.tsx",
+      "line": 18,
+      "excerpt": {
+        "startLine": 14,
+        "lines": [
+          "test('shows the notes', async () => {",
+          "  createComponent({ notes: [note('Hello')] })",
+          "  await userEvent.click(ui.openButton.get())",
+          "",
+          "  expect(screen.getByRole('list', { name: 'Notes' })).toBeVisible()",
+          "  expect(screen.getByText('Hello')).toBeVisible()",
+          "})",
+          "",
+          "test('shows the empty state', () => {",
+          "  createComponent({ notes: [] })",
+          "})"
+        ]
+      },
+      "marks": [
+        {
+          "line": 18,
+          "from": 9,
+          "to": 54
+        },
+        {
+          "line": 19,
+          "from": 9,
+          "to": 35
+        }
+      ],
+      "problem": "Two locators are inline `screen.getBy…` calls instead of entries of the `ui` object.",
+      "why": "The project's test conventions keep every locator in `ui`, built with `testing-library-selector`, so a test reads as a list of named parts.",
+      "fix": "Add `notesList: byRole('list', { name: 'Notes' })` and `noteText: (text) => byText(text)` to `ui`, and use them here."
+    },
+    {
+      "id": "f-04",
+      "topic": "Conventions",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "Raw pixel spacing in the table styles",
+      "path": "src/people/PeopleTable.styles.ts",
+      "line": 9,
+      "excerpt": {
+        "startLine": 5,
+        "lines": [
+          "export const Toolbar = styled.div`",
+          "  display: flex;",
+          "  align-items: center;",
+          "  justify-content: space-between;",
+          "  padding: 12px 16px;",
+          "  gap: ${Metrics.small};",
+          "  border-bottom: 1px solid ${Colors.border.regular};",
+          "`"
+        ]
+      },
+      "marks": [
+        {
+          "line": 9,
+          "from": 11,
+          "to": 20,
+          "note": "Metrics.small Metrics.normal"
+        }
+      ],
+      "problem": "`padding` uses raw pixel values where the line below already uses the `Metrics` tokens.",
+      "why": "The ui-kit's spacing scale is the source of truth; a raw value drifts from it on the next scale change.",
+      "fix": "`padding: ${Metrics.small} ${Metrics.normal};`"
+    },
+    {
+      "id": "f-05",
+      "topic": "Code Quality",
+      "bucket": "auto",
+      "tag": "suggestion",
+      "title": "Duplicated last-seen date formatter",
+      "path": "src/people/PeopleTable.tsx",
+      "line": 58,
+      "excerpt": {
+        "startLine": 52,
+        "lines": [
+          "const columns: Column<Person>[] = [",
+          "  { key: 'name', header: t('people.name'), render: (person) => person.name },",
+          "  {",
+          "    key: 'lastSeen',",
+          "    header: t('people.lastSeen'),",
+          "    render: (person) =>",
+          "      person.lastSeen ? new Date(person.lastSeen).toLocaleDateString(locale) : '—',",
+          "  },",
+          "]"
+        ]
+      },
+      "marks": [
+        {
+          "line": 58,
+          "from": 23,
+          "to": 78
+        }
+      ],
+      "problem": "The last-seen cell formats its date inline, as `src/main/utils/formatDate.ts` already does for the files table.",
+      "why": "Two formatters drift: the files table shows the time zone, this one will not.",
+      "fix": "`render: (person) => formatDate(person.lastSeen, locale)`, importing it from `src/main/utils/formatDate`.",
+      "related": [
+        {
+          "path": "src/main/utils/formatDate.ts",
+          "line": 4,
+          "excerpt": {
+            "startLine": 3,
+            "lines": [
+              "export const formatDate = (iso: string | null, locale: string) =>",
+              "  iso ? new Date(iso).toLocaleString(locale, { timeZoneName: 'short' }) : '—'"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

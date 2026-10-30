@@ -1,0 +1,336 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { postAnswer, postDecisions, postStop, useReview } from './api'
+import { BatchBar } from './BatchBar'
+import {
+  allows,
+  canPost,
+  counts,
+  type DecisionInput,
+  groupFindings,
+  orderedFindings,
+  type Review,
+  stateOf,
+} from './domain'
+import { FindingDetail } from './FindingDetail'
+import { FindingList } from './FindingList'
+import { Markdown } from './markdown'
+
+const SUMMARY_KEY = 'tranchant:summary'
+
+function readSummaryOpen(): boolean {
+  try {
+    return localStorage.getItem(SUMMARY_KEY) !== 'closed'
+  } catch {
+    return true
+  }
+}
+
+function writeSummaryOpen(open: boolean) {
+  try {
+    localStorage.setItem(SUMMARY_KEY, open ? 'open' : 'closed')
+  } catch {
+    // A private window or a blocked store: the panel just opens next time.
+  }
+}
+
+const isEditing = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || /^(input|textarea|select)$/i.test(target.tagName))
+
+function Header({
+  review,
+  tally,
+  moved,
+}: {
+  review: Review
+  tally: ReturnType<typeof counts>
+  moved: boolean
+}) {
+  return (
+    <header className="tr-header">
+      <div className="tr-header-main">
+        <h1>{review.title}</h1>
+        <div className="tr-header-meta">
+          <code className="tr-branch">
+            {review.branch} → {review.base}
+          </code>
+          {review.ownership === 'ours' ? (
+            <span className="tr-chip tr-chip--ours">your branch</span>
+          ) : review.mr ? (
+            <a
+              className="tr-chip tr-chip--theirs"
+              href={review.mr.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {review.mr.author ? `${review.mr.author}'s MR` : 'their MR'} !
+              {review.mr.iid}
+            </a>
+          ) : (
+            <span className="tr-chip tr-chip--theirs">their branch</span>
+          )}
+          {review.jira && (
+            <a
+              className="tr-chip"
+              href={review.jira.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {review.jira.key}
+            </a>
+          )}
+          {moved && (
+            <span
+              className="tr-chip tr-chip--warn"
+              title="HEAD is not the commit reviewed; fixes run on the current files"
+            >
+              checkout moved
+            </span>
+          )}
+        </div>
+      </div>
+      <dl className="tr-counts" aria-label="Findings by state">
+        <div>
+          <dt>open</dt>
+          <dd>{tally.open}</dd>
+        </div>
+        <div>
+          <dt>fixed</dt>
+          <dd>{tally.fixed}</dd>
+        </div>
+        <div>
+          <dt>posted</dt>
+          <dd>{tally.posted}</dd>
+        </div>
+        <div>
+          <dt>dropped</dt>
+          <dd>{tally.dropped}</dd>
+        </div>
+      </dl>
+      <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
+    </header>
+  )
+}
+
+export default function App() {
+  const { payload, reachable, loaded, reload } = useReview()
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  const [cursorState, setCursor] = useState<string>()
+  const [openState, setOpenId] = useState<string>()
+  const [summaryOpen, setSummaryOpen] = useState(readSummaryOpen)
+  const [notice, setNotice] = useState<string>()
+
+  const review = payload?.review
+  const records = useMemo(() => payload?.findings ?? {}, [payload])
+  const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
+  const ordered = useMemo(() => orderedFindings(review?.findings ?? []), [review])
+  const disabled = !reachable
+  const has = (id: string | undefined) =>
+    !!id && ordered.some((finding) => finding.id === id)
+  // The first finding opens itself, and the cursor starts on the open one.
+  const openId = has(openState) ? openState : ordered[0]?.id
+  const cursor = has(cursorState) ? cursorState : openId
+
+  const decide = useCallback(
+    async (decisions: DecisionInput[]) => {
+      if (!decisions.length) return
+      try {
+        const result = await postDecisions(decisions)
+        setNotice(
+          result.refused.length
+            ? `Refused: ${result.refused.map((one) => `${one.id} (${one.reason})`).join(', ')}`
+            : undefined,
+        )
+        setSelected((current) => {
+          const next = new Set(current)
+          for (const id of result.applied) next.delete(id)
+          return next
+        })
+      } catch (failure) {
+        setNotice(failure instanceof Error ? failure.message : 'The request failed.')
+      }
+      await reload()
+    },
+    [reload],
+  )
+
+  const answer = useCallback(
+    async (id: string, text: string, choices: string[]) => {
+      try {
+        await postAnswer(id, text, choices)
+        setNotice(undefined)
+      } catch (failure) {
+        setNotice(failure instanceof Error ? failure.message : 'The answer was not sent.')
+      }
+      await reload()
+    },
+    [reload],
+  )
+
+  const stop = useCallback(
+    async (id: string) => {
+      try {
+        await postStop(id)
+        setNotice(undefined)
+      } catch (failure) {
+        setNotice(
+          failure instanceof Error ? failure.message : 'The agent was not stopped.',
+        )
+      }
+      await reload()
+    },
+    [reload],
+  )
+
+  const toggle = useCallback((id: string) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const open = useCallback((id: string) => {
+    setCursor(id)
+    setOpenId(id)
+  }, [])
+
+  useEffect(() => {
+    if (!review) return undefined
+    function onKey(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey || isEditing(event.target))
+        return
+      const index = ordered.findIndex((finding) => finding.id === cursor)
+      const move = (delta: number) => {
+        const next = ordered[Math.min(ordered.length - 1, Math.max(0, index + delta))]
+        if (next) setCursor(next.id)
+      }
+      const shortcuts: Record<string, DecisionInput['action']> = {
+        f: 'fix',
+        p: 'post',
+        d: 'drop',
+        s: 'skip',
+      }
+      const action = shortcuts[event.key]
+      if (event.key === 'j' || event.key === 'ArrowDown') move(1)
+      else if (event.key === 'k' || event.key === 'ArrowUp') move(-1)
+      else if (event.key === 'Enter' && cursor) setOpenId(cursor)
+      else if (event.key === 'x' && cursor) toggle(cursor)
+      else if (action && cursor && review && !disabled) {
+        if (allows(action, stateOf(records, cursor), review)) {
+          void decide([{ id: cursor, action }])
+        }
+      } else return
+      event.preventDefault()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [review, ordered, cursor, records, disabled, decide, toggle])
+
+  if (!loaded) return <div className="tr-loading">Loading the review…</div>
+  if (!review) {
+    return (
+      <div className="tr-app">
+        <div className="tr-banner" role="alert">
+          Tranchant stopped serving this review. Retrying…
+        </div>
+      </div>
+    )
+  }
+
+  const tally = counts(review, records)
+  const moved =
+    payload?.head.current !== null && payload?.head.current !== payload?.head.reviewed
+  const current = ordered.find((finding) => finding.id === openId)
+
+  return (
+    <div className="tr-app">
+      {!reachable && (
+        <div className="tr-banner" role="alert">
+          Tranchant stopped serving this review. Retrying every 5 seconds…
+        </div>
+      )}
+      <Header review={review} tally={tally} moved={moved} />
+      <details
+        className="tr-summary"
+        open={summaryOpen}
+        onToggle={(event) => {
+          const next = event.currentTarget.open
+          setSummaryOpen(next)
+          writeSummaryOpen(next)
+        }}
+      >
+        <summary>Summary</summary>
+        <div className="tr-summary-body">
+          <Markdown source={review.summary} />
+          {review.strengths && review.strengths.length > 0 && (
+            <section aria-label="What looks good">
+              <h3>What looks good</h3>
+              <ul>
+                {review.strengths.map((strength) => (
+                  <li key={strength}>{strength}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      </details>
+      <BatchBar
+        review={review}
+        records={records}
+        ordered={ordered}
+        selected={selected}
+        disabled={disabled}
+        onSelect={(ids) => setSelected(new Set(ids))}
+        onDecide={(decisions) => void decide(decisions)}
+      />
+      {notice && (
+        <p className="tr-notice" role="status">
+          {notice}
+          <button
+            type="button"
+            className="tr-btn tr-btn--link"
+            onClick={() => setNotice(undefined)}
+          >
+            dismiss
+          </button>
+        </p>
+      )}
+      <div className="tr-main">
+        <nav className="tr-list-pane" aria-label="Findings">
+          <FindingList
+            groups={groups}
+            records={records}
+            cursor={cursor}
+            openId={openId}
+            selected={selected}
+            onOpen={open}
+            onToggle={toggle}
+          />
+          <p className="tr-keys tr-muted">
+            j/k move · Enter open · x select · f fix ·{' '}
+            {canPost(review) ? 'p post · ' : ''}d drop · s skip
+          </p>
+        </nav>
+        <main className="tr-detail-pane">
+          {current ? (
+            <FindingDetail
+              key={current.id}
+              review={review}
+              finding={current}
+              record={records[current.id]}
+              steps={payload?.runs[current.id] ?? []}
+              disabled={disabled}
+              onDecide={(decisions) => void decide(decisions)}
+              onAnswer={(id, text, choices) => void answer(id, text, choices)}
+              onStop={(id) => void stop(id)}
+            />
+          ) : (
+            <p className="tr-muted">No finding.</p>
+          )}
+        </main>
+      </div>
+    </div>
+  )
+}

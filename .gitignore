@@ -1,0 +1,16 @@
+node_modules/
+*.tmp
+*.log
+.DS_Store
+
+# The built page: `npm run build` locally, and the Release workflow for the
+# stable branch users install from.
+skills/tranchant/page/dist/
+
+# The Claude Code API types and the tsconfig.json that reads them, written by
+# Claude Code when it loads the plugin from this folder.
+.claude-plugin/types/
+/tsconfig.json
+
+# The throwaway repository test/fixtures/playground.mjs builds to try the plugin on.
+/.playground/

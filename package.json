@@ -1,0 +1,31 @@
+{
+  "name": "tranchant",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  },
+  "workspaces": [
+    "skills/tranchant/page"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace skills/tranchant/page",
+    "watch": "npm run watch --workspace skills/tranchant/page",
+    "typecheck": "tsc -p skills/tranchant/scripts && tsc -p test && tsc -p skills/tranchant/page",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives",
+    "lint:unused": "knip",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run lint:unused && npm run typecheck && npm run build && npm test",
+    "test": "node --test \"test/**/*.test.mjs\" && npm test --workspace skills/tranchant/page",
+    "test:hooks": "claude plugin validate .claude-plugin/plugin.json && claude plugin test ."
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "knip": "6.42.1",
+    "oxlint": "1.89.0",
+    "oxlint-tsgolint": "7.0.2004",
+    "prettier": "3.9.10"
+  }
+}

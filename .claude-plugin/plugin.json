@@ -1,0 +1,14 @@
+{
+  "name": "tranchant",
+  "version": "0.1.0",
+  "description": "Settle a code review from a page: fix each finding on your branch with a background agent, or post it on someone else's merge request",
+  "author": {
+    "name": "Kevin Manson",
+    "url": "https://github.com/neolitec"
+  },
+  "repository": "https://github.com/annotant/tranchant",
+  "homepage": "https://github.com/annotant/tranchant#readme",
+  "license": "MIT",
+  "keywords": ["code-review", "review", "gitlab", "merge-request", "findings"],
+  "types": "./types/index.d.ts"
+}

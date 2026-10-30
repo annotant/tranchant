@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "unicorn", "oxc", "import", "promise", "node"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "env": {
+    "es2024": true
+  },
+  "ignorePatterns": ["skills/tranchant/page/dist/**"],
+  "overrides": [
+    {
+      "files": ["skills/tranchant/scripts/**", "**/*.mjs"],
+      "env": {
+        "node": true
+      },
+      "rules": {
+        "no-await-in-loop": "off"
+      }
+    },
+    {
+      "files": ["hooks/**", "test/hooks.test.ts"],
+      "rules": {
+        "no-await-in-loop": "off"
+      }
+    },
+    {
+      "files": ["skills/tranchant/page/src/**"],
+      "env": {
+        "browser": true
+      }
+    },
+    {
+      "files": ["test/**"],
+      "rules": {
+        "typescript/no-floating-promises": "off"
+      }
+    }
+  ],
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "oxc/no-map-spread": "off"
+  }
+}

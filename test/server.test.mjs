@@ -1,0 +1,455 @@
+// scripts/server.mjs, run as the plugin's hooks run it: its lines on stdout,
+// its API on the port it printed.
+import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { appendFile, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { before, test } from 'node:test'
+import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
+import { SCRIPTS, importReview, json, run, tempDir } from './helpers.mjs'
+
+const SERVER = path.join(SCRIPTS, 'server.mjs')
+const FIRST_LINE = /^(READY|PORT_BUSY|REVIEW_REFUSED|HOOKS_MISSING|PAGE_MISSING)/
+
+/** @type {string} */
+let stateDir
+/** A stand-in for the built bundle. */
+let page = ''
+/** The fake glab: records its call, answers a discussion, or fails when `glabDir/fail` exists. */
+let glab = ''
+let glabDir = ''
+
+before(async (t) => {
+  stateDir = await tempDir(t)
+  page = path.join(await tempDir(t), 'page.js')
+  await writeFile(page, "/* tranchant page (test) */ console.log('page')\n")
+  glabDir = await tempDir(t)
+  glab = path.join(glabDir, 'glab')
+  await writeFile(
+    glab,
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$@" > "${glabDir}/args.txt"`,
+      `cat > "${glabDir}/stdin.txt"`,
+      `if [ -f "${glabDir}/fail" ]; then echo "glab: 400 Bad Request: line not in diff" >&2; exit 1; fi`,
+      `printf '%s' '{"id":"6a1f","notes":[{"id":4242}]}'`,
+      '',
+    ].join('\n'),
+  )
+  await chmod(glab, 0o755)
+})
+
+/**
+ * Starts a server on a fixture review (or on `dir`), and waits for its first
+ * line.
+ * @param {any} t
+ * @param {{ name?: 'theirs' | 'ours', dir?: string, env?: Record<string, string>, overrides?: Record<string, unknown> }} [options]
+ */
+async function startServer(t, { name = 'theirs', dir: given, env = {}, overrides } = {}) {
+  const imported = given ? undefined : await importReview(t, name, stateDir, overrides)
+  const dir = given ?? imported?.dir ?? ''
+  const child = spawn(process.execPath, [SERVER, '--review', dir], {
+    env: {
+      ...process.env,
+      TRANCHANT_STATE_DIR: stateDir,
+      TRANCHANT_HOOKS: '1',
+      TRANCHANT_PAGE: page,
+      TRANCHANT_GLAB: glab,
+      // Never during a test: the server sees every change through its watches.
+      TRANCHANT_POLL_MS: '600000',
+      ...env,
+    },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  })
+  t.after(() => child.kill())
+  let output = ''
+  child.stdout.on('data', (chunk) => (output += chunk))
+  /** @type {Promise<number | null>} */
+  const exit = new Promise((resolve) => child.on('exit', (code) => resolve(code)))
+  const first = await new Promise((resolve) => {
+    const check = () => {
+      const line = output.split('\n').find((entry) => FIRST_LINE.test(entry))
+      if (line) resolve(line)
+    }
+    child.stdout.on('data', check)
+    child.on('exit', () => resolve(output.split('\n')[0] ?? ''))
+    check()
+  })
+  const port = Number(/^READY http:\/\/127\.0\.0\.1:(\d+)/.exec(first)?.[1] ?? 0)
+  /**
+   * The first line starting with `prefix` the server printed after `from`.
+   * @param {string} prefix
+   * @param {number} from A length of the output, taken before the request.
+   */
+  async function nextLine(prefix, from) {
+    for (let waited = 0; waited < 5000; waited += 25) {
+      const line = output
+        .slice(from)
+        .split('\n')
+        .find((entry) => entry.startsWith(prefix))
+      if (line) return line
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    throw new Error(`no line starting with ${prefix} in:\n${output.slice(from)}`)
+  }
+  return {
+    first,
+    port,
+    base: `http://127.0.0.1:${port}`,
+    dir,
+    review: imported?.review,
+    project: imported?.project ?? '',
+    output: () => output,
+    nextLine,
+    exit,
+  }
+}
+
+/** @typedef {Awaited<ReturnType<typeof startServer>>} Server */
+
+/** @type {Server} */
+let main
+
+before(async (t) => {
+  main = await startServer(t)
+  assert.match(main.first, /^READY /, main.output())
+  // A checkout with a HEAD, for `head.current`.
+  const git = (/** @type {string[]} */ args) =>
+    run('git', ['-C', main.project, '-c', 'commit.gpgsign=false', ...args])
+  await git(['init', '-q'])
+  await git([
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@t',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'init',
+  ])
+})
+
+/**
+ * @param {string} route
+ * @param {unknown} body
+ * @param {Record<string, string>} [headers]
+ */
+const post = (route, body, headers = {}) =>
+  fetch(`${main.base}${route}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  })
+
+const findings = async () => (await json(await fetch(`${main.base}/api/review`))).findings
+
+/**
+ * Listens to the server's events, as the page does.
+ */
+async function listen() {
+  const controller = new AbortController()
+  const response = await fetch(`${main.base}/api/events`, { signal: controller.signal })
+  if (!response.body) throw new Error('no event stream')
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+  let received = ''
+  return {
+    response,
+    /**
+     * The next `changed` event naming finding `id`, within 3 s.
+     * @param {string} id
+     */
+    async changed(id) {
+      const deadline = setTimeout(() => controller.abort(), 3000)
+      try {
+        for (;;) {
+          const events = received.split('\n\n')
+          received = events.pop() ?? ''
+          for (const event of events) {
+            const data = /^event: changed\ndata: (.*)$/m.exec(event)?.[1]
+            if (data && JSON.parse(data).ids.includes(id)) return event
+          }
+          const { value, done } = await reader.read()
+          if (done) throw new Error(`no changed event for ${id}`)
+          received += value
+        }
+      } catch (error) {
+        throw controller.signal.aborted ? new Error(`no changed event for ${id}`) : error
+      } finally {
+        clearTimeout(deadline)
+      }
+    },
+    close: () => controller.abort(),
+  }
+}
+
+test('prints READY with the review and the project, and answers the health check', async () => {
+  assert.equal(
+    main.first,
+    `READY ${main.base} review=${main.review.id} project=${main.project}`,
+  )
+  const health = await json(await fetch(`${main.base}/api/health`))
+  assert.deepEqual(health, { ok: true, review: main.review.id, version: '0.1.0' })
+})
+
+test('serves the page shell with the review’s title, and the bundle', async () => {
+  const shell = await fetch(`${main.base}/`)
+  assert.equal(shell.status, 200)
+  assert.match(shell.headers.get('content-type') ?? '', /text\/html/)
+  assert.match(shell.headers.get('content-security-policy') ?? '', /script-src 'self'/)
+  const html = await shell.text()
+  assert.ok(html.startsWith('<!doctype html>'))
+  assert.ok(html.includes('<title>Tranchant · People drawer and table</title>'), html)
+  assert.ok(html.includes('<div id="root"></div>'))
+  assert.ok(html.includes('<script type="module" src="/page.js"></script>'))
+  const bundle = await fetch(`${main.base}/page.js`)
+  assert.equal(bundle.status, 200)
+  assert.match(bundle.headers.get('content-type') ?? '', /javascript/)
+  assert.equal(await bundle.text(), await readFile(page, 'utf8'))
+})
+
+test('answers the review, its decisions, its runs and the heads', async () => {
+  const body = await json(await fetch(`${main.base}/api/review`))
+  assert.deepEqual(Object.keys(body).toSorted(), ['findings', 'head', 'review', 'runs'])
+  assert.equal(body.review.id, main.review.id)
+  assert.equal(body.review.findings.length, 5)
+  assert.deepEqual(body.findings, {})
+  assert.deepEqual(body.runs, {})
+  assert.equal(body.head.reviewed, main.review.headSha)
+  assert.match(body.head.current, /^[0-9a-f]{40}$/)
+})
+
+test('applies a batch of decisions in order, and prints a line for each', async () => {
+  const printed = main.output().length
+  const response = await post('/api/decisions', {
+    decisions: [
+      { id: 'f-01', action: 'fix', context: 'keep the early return' },
+      { id: 'f-02', action: 'drop', reason: 'Notes are sanitized upstream' },
+      { id: 'f-03', action: 'skip' },
+      { id: 'f-99', action: 'fix' },
+      { id: 'f-04', action: 'burn' },
+      { id: 'f-01', action: 'fix' },
+    ],
+  })
+  assert.equal(response.status, 200)
+  const result = await json(response)
+  assert.deepEqual(result.applied, ['f-01', 'f-02', 'f-03'])
+  assert.deepEqual(result.refused, [
+    { id: 'f-99', reason: 'no finding f-99 in the review' },
+    { id: 'f-04', reason: 'not a decision' },
+    { id: 'f-01', reason: 'fix refused: finding f-01 is queued' },
+  ])
+  assert.equal(await main.nextLine('FIX f-01', printed), 'FIX f-01')
+  assert.equal(await main.nextLine('DROPPED f-02', printed), 'DROPPED f-02')
+  assert.equal(await main.nextLine('SKIPPED f-03', printed), 'SKIPPED f-03')
+  const decided = await findings()
+  assert.equal(decided['f-01'].state, 'queued')
+  assert.equal(decided['f-01'].decision.context, 'keep the early return')
+  assert.equal(decided['f-02'].state, 'dropped')
+  assert.equal(decided['f-02'].reason, 'Notes are sanitized upstream')
+  assert.equal(decided['f-03'].state, 'skipped')
+})
+
+test('refuses a request from another origin, and takes its own', async () => {
+  const other = await post(
+    '/api/decisions',
+    { decisions: [] },
+    { origin: 'https://evil.example' },
+  )
+  assert.equal(other.status, 403)
+  assert.deepEqual(await json(other), { error: 'origin not allowed' })
+  const read = await fetch(`${main.base}/api/review`, {
+    headers: { origin: 'http://localhost:3000' },
+  })
+  assert.equal(read.status, 403)
+  const own = await post('/api/decisions', { decisions: [] }, { origin: main.base })
+  assert.equal(own.status, 200)
+  const local = await fetch(`${main.base}/api/health`, {
+    headers: { origin: `http://localhost:${main.port}` },
+  })
+  assert.equal(local.status, 200)
+  const broken = await fetch(`${main.base}/api/decisions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{',
+  })
+  assert.equal(broken.status, 400)
+})
+
+test('tells the pages what changed, and prints STOP when the reviewer stops a finding', async () => {
+  const events = await listen()
+  try {
+    const printed = main.output().length
+    await post('/api/decisions', { decisions: [{ id: 'f-04', action: 'fix' }] })
+    await events.changed('f-04')
+    await main.nextLine('FIX f-04', printed)
+    const stopped = await post('/api/stop', { id: 'f-04' })
+    assert.equal(stopped.status, 200)
+    assert.equal((await json(stopped)).finding.state, 'stopped')
+    assert.equal(await main.nextLine('STOP f-04', printed), 'STOP f-04')
+    await events.changed('f-04')
+    const again = await post('/api/stop', { id: 'f-04' })
+    assert.equal(again.status, 409)
+    assert.deepEqual(await json(again), {
+      error: 'stop refused: finding f-04 is stopped',
+    })
+  } finally {
+    events.close()
+  }
+})
+
+test('an answer queues the finding again, and prints FIX', async () => {
+  const store = createStore(main.dir)
+  await post('/api/decisions', { decisions: [{ id: 'f-05', action: 'fix' }] })
+  await store.claim('f-05', { agent: 'a5' })
+  await store.ask('f-05', {
+    text: 'Which formatter?',
+    options: [{ label: 'formatDate' }, { label: 'Intl' }],
+  })
+  const early = await post('/api/answer', { id: 'f-01', text: 'x' })
+  assert.equal(early.status, 409)
+  const printed = main.output().length
+  const answered = await post('/api/answer', {
+    id: 'f-05',
+    text: ' keep the time zone ',
+    choices: ['Intl', 'x'],
+  })
+  assert.equal(answered.status, 200)
+  const { finding } = await json(answered)
+  assert.equal(finding.state, 'queued')
+  assert.deepEqual(finding.answer.choices, ['Intl'])
+  assert.equal(finding.answer.text, 'keep the time zone')
+  assert.equal(await main.nextLine('FIX f-05', printed), 'FIX f-05')
+})
+
+test('lists the steps of a run in progress, then its history', async () => {
+  const store = createStore(main.dir)
+  await store.claim('f-01', { agent: 'a1', model: 'claude-opus-5-5' })
+  await mkdir(path.dirname(progressPath(main.dir, 'f-01')), { recursive: true })
+  await appendFile(
+    progressPath(main.dir, 'f-01'),
+    [
+      { at: 1, kind: 'start', label: 'Started', state: 'done', id: 't1' },
+      {
+        at: 2,
+        kind: 'edit',
+        label: 'src/people/usePeople.ts',
+        state: 'running',
+        id: 't2',
+      },
+      { at: 3, kind: 'edit', label: 'src/people/usePeople.ts', state: 'done', id: 't2' },
+    ]
+      .map((step) => `${JSON.stringify(step)}\n`)
+      .join(''),
+  )
+  const review = await json(await fetch(`${main.base}/api/review`))
+  assert.deepEqual(
+    review.runs['f-01'].map((step) => [step.kind, step.state]),
+    [
+      ['start', 'done'],
+      ['edit', 'done'],
+    ],
+  )
+  await store.done('f-01', 'Returned early.')
+  const runs = await json(await fetch(`${main.base}/api/runs/f-01`))
+  assert.deepEqual(runs.progress, [])
+  assert.equal(runs.history.length, 2)
+  assert.equal((await fetch(`${main.base}/api/runs/..%2Fx`)).status, 404)
+  assert.deepEqual((await json(await fetch(`${main.base}/api/review`))).runs, {})
+})
+
+test('posts a comment with glab itself, and records where it landed', async () => {
+  const printed = main.output().length
+  const response = await post('/api/decisions', {
+    decisions: [{ id: 'f-02', action: 'post', comment: 'Edited words' }],
+  })
+  assert.deepEqual((await json(response)).applied, ['f-02'])
+  assert.equal(await main.nextLine('POSTED f-02', printed), 'POSTED f-02')
+  const { mr } = main.review
+  const posted = (await findings())['f-02']
+  assert.equal(posted.state, 'posted')
+  assert.equal(posted.posted.discussionId, '6a1f')
+  assert.equal(posted.posted.url, `${mr.url}#note_4242`)
+  // A positioned discussion, as a JSON body, on the MR's project and iid.
+  const args = (await readFile(path.join(glabDir, 'args.txt'), 'utf8')).trim().split('\n')
+  assert.deepEqual(args, [
+    'api',
+    '--method',
+    'POST',
+    '--header',
+    'Content-Type: application/json',
+    '--input',
+    '-',
+    'projects/qohash%2Fdashboard-ui/merge_requests/5751/discussions',
+  ])
+  assert.deepEqual(JSON.parse(await readFile(path.join(glabDir, 'stdin.txt'), 'utf8')), {
+    body: 'Edited words',
+    position: {
+      position_type: 'text',
+      base_sha: mr.diffRefs.baseSha,
+      head_sha: mr.diffRefs.headSha,
+      start_sha: mr.diffRefs.startSha,
+      old_path: 'src/people/PersonNotes.tsx',
+      new_path: 'src/people/PersonNotes.tsx',
+      new_line: 27,
+    },
+  })
+})
+
+test('a post glab refuses fails the finding with glab’s first line', async () => {
+  await writeFile(path.join(glabDir, 'fail'), '')
+  try {
+    const printed = main.output().length
+    await post('/api/decisions', { decisions: [{ id: 'f-03', action: 'post' }] })
+    assert.equal(
+      await main.nextLine('POST_FAILED f-03', printed),
+      'POST_FAILED f-03 glab: 400 Bad Request: line not in diff',
+    )
+    const failed = (await findings())['f-03']
+    assert.equal(failed.state, 'failed')
+    assert.equal(failed.reason, 'glab: 400 Bad Request: line not in diff')
+    // The finding's own comment went, the reviewer having edited nothing.
+    assert.equal(
+      JSON.parse(await readFile(path.join(glabDir, 'stdin.txt'), 'utf8')).body,
+      main.review.findings[2].comment,
+    )
+  } finally {
+    await rm(path.join(glabDir, 'fail'), { force: true })
+  }
+})
+
+test('starts again on what was queued: FIX for a fix, a post for a post', async (t) => {
+  const imported = await importReview(t, 'theirs', stateDir, {
+    id: 'b7e6d5c4-3a2b-4c1d-9e8f-7a6b5c4d3e2f',
+  })
+  const store = createStore(imported.dir)
+  await store.decide('f-01', { action: 'fix' })
+  await store.decide('f-04', { action: 'post' })
+  const server = await startServer(t, { dir: imported.dir })
+  assert.match(server.first, /^READY /)
+  assert.equal(await server.nextLine('FIX f-01', 0), 'FIX f-01')
+  assert.equal(await server.nextLine('POSTED f-04', 0), 'POSTED f-04')
+})
+
+test('refuses to start outside the hooks, without the page, or on a folder with no review', async (t) => {
+  const hooks = await startServer(t, { env: { TRANCHANT_HOOKS: '' } })
+  assert.match(hooks.first, /^HOOKS_MISSING Tranchant's hooks did not load/)
+  assert.equal(await hooks.exit, 2)
+  const missing = await startServer(t, {
+    env: { TRANCHANT_PAGE: path.join(glabDir, 'none.js') },
+  })
+  assert.match(missing.first, /^PAGE_MISSING run `npm ci && npm run build` in /)
+  assert.equal(await missing.exit, 2)
+  const empty = await startServer(t, { dir: await tempDir(t) })
+  assert.match(empty.first, /^REVIEW_REFUSED no review.json in /)
+  assert.equal(await empty.exit, 2)
+})
+
+test('says who holds a busy port', async (t) => {
+  const busy = await startServer(t, { env: { TRANCHANT_PORT: String(main.port) } })
+  assert.equal(
+    busy.first,
+    `PORT_BUSY ${main.port} is used by another /tranchant session (review ${main.review.id})`,
+  )
+  assert.equal(await busy.exit, 3)
+})

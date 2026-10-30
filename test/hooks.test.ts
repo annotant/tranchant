@@ -1,0 +1,661 @@
+// The hooks module (hooks/register.ts), run by `claude plugin test .` against
+// Claude Code itself: the disk, processes and tools beneath it are in memory.
+import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
+import type { AgentOfferInput, CommandRunInput, EngineInterface, On } from 'claude-code'
+
+import type { Served } from '../types'
+
+type AgentSpec = Parameters<EngineInterface['agent']['register']>[0]
+
+/** `agent.offer`'s input for one of the plugin's agent types. */
+const offerOf = (agent: string): AgentOfferInput => ({
+  agent,
+  description: '',
+  source: 'plugin',
+  provider: { plugin: 'tranchant', tier: 'user' },
+})
+
+const ROOT = '/repo/web'
+const FILE = `${ROOT}/.tranchant/review.json`
+const DIR = '/home/u/.cache/tranchant/0123456789ab/reviews/rev-1'
+const TITLE = 'Classification overview'
+const READY = `READY http://127.0.0.1:4599 review=rev-1 project=${ROOT}`
+
+const ok = (stdout: string) => ({
+  value: {
+    exitCode: 0,
+    stdout,
+    stderr: '',
+    isStdoutTruncated: false,
+    isStderrTruncated: false,
+  },
+})
+
+/** The disk, processes and tools beneath the mod, in memory. */
+/** `gitRoot`: the repository the project is in, as `git rev-parse` answers. */
+/** `seeded`: what `$.state`'s `serving` holds before the module runs, as after a reload. */
+/** `refusing`: what open.mjs prints instead of `REVIEW <dir>`. */
+function world(
+  on: On,
+  {
+    gitRoot,
+    refused,
+    seeded,
+    refusing,
+  }: {
+    gitRoot?: string
+    refused?: string
+    seeded?: Record<string, Served>
+    refusing?: string
+  } = {},
+) {
+  const files = new Map<string, string>([
+    [FILE, JSON.stringify({ version: 1, id: 'rev-1' })],
+    [
+      `${DIR}/review.json`,
+      JSON.stringify({ version: 1, id: 'rev-1', title: TITLE, project: ROOT }),
+    ],
+  ])
+  on('fs.read', (_$, e) => {
+    // The plugin's agent file.
+    if (e.path.endsWith('/agents/worker.md'))
+      return { value: '---\nname: worker\n---\n\nYou apply one finding.\n' }
+    const text = files.get(e.path)
+    if (text === undefined) throw new Error(`ENOENT ${e.path}`)
+    return { value: text }
+  })
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('fs.exists', (_$, e) => ({ value: files.has(e.path) }))
+  // Claude Code refuses a command named after a skill (`refused`).
+  on('command.register', (_$, e) => {
+    if (e.name === refused)
+      throw new Error(`"/${e.name}" refused: it is the plugin's skill`)
+    return { value: { command: e.name } }
+  })
+  const tools: { name: string; isDeferred?: boolean }[] = []
+  on('tool.register', (_$, e) => {
+    tools.push({ name: e.name, isDeferred: e.isDeferred })
+    return { value: { tool: `mcp__tranchant__${e.name}` } }
+  })
+  on('session.cwd', () => ({ value: ROOT }))
+  on('session.model', () => ({ value: 'claude-sonnet-5-5' }))
+  const toasts: string[] = []
+  const logged: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.log', (_$, e) => {
+    logged.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.status', () => ({ value: undefined }))
+  // What the hooks ran: open.mjs's file, the browser's URL, each `hook.mjs
+  // ended`'s and `note`'s arguments.
+  const imported: string[] = []
+  const browsed: string[] = []
+  const endings: string[][] = []
+  const notes: { argv: string[]; stdin: string }[] = []
+  on('process.run', (_$, e) => {
+    if (e.argv.includes('--show-toplevel')) {
+      return {
+        value: {
+          exitCode: gitRoot ? 0 : 128,
+          stdout: gitRoot ? `${gitRoot}\n` : '',
+          stderr: gitRoot ? '' : 'fatal: not a git repository',
+          isStdoutTruncated: false,
+          isStderrTruncated: false,
+        },
+      }
+    }
+    if (e.argv[1]?.endsWith('/scripts/open.mjs')) {
+      imported.push(e.argv[2] ?? '')
+      return ok(`${refusing ?? `REVIEW ${DIR}`}\n`)
+    }
+    if (e.argv[2] === 'ended') {
+      endings.push(e.argv.slice(3))
+      return ok('')
+    }
+    if (e.argv[2] === 'note') {
+      notes.push({ argv: e.argv.slice(3), stdin: e.init?.stdin ?? '' })
+      return ok('')
+    }
+    if (e.argv[0] === 'open' || e.argv[0] === 'xdg-open') {
+      browsed.push(`${e.argv[0]} ${e.argv[1] ?? ''}`)
+      return ok('')
+    }
+    return ok('')
+  })
+  const stopped: string[] = []
+  on('tool.call', (_$, e) => {
+    if (e.tool === 'TaskStop') stopped.push(e.task_id ?? '')
+    return { result: 'ok' }
+  })
+  // Claude Code offers the model every agent type no hook keeps from it.
+  on('agent.offer', () => ({ isOffered: true }))
+  on('turn.complete', () => ({ text: '' }))
+  // The agent types the plugin defines, by full name.
+  const registered = new Map<string, AgentSpec>()
+  on('agent.register', (_$, e) => {
+    registered.set(`tranchant:${e.name}`, e)
+    return { value: { agent: `tranchant:${e.name}` } }
+  })
+  const spawned: { prompt: string; name?: string; type: string; description?: string }[] =
+    []
+  // A spawn the plugin makes, answered here, carries no id: the list has it.
+  on('agent.list', () => ({
+    value: spawned.map((agent, index) => ({
+      id: `a${index + 1}`,
+      name: agent.name,
+      type: agent.type,
+      description: '',
+      status: 'running' as const,
+    })),
+  }))
+  // Held, a spawn answers only once released: an agent slow to start.
+  let held: Promise<void> | undefined
+  let release: () => void = ignore
+  on('agent.spawn', async (_$, e) => {
+    await held
+    const input: Record<string, unknown> = { ...e }
+    const type = String(input.subagent_type ?? e.subagentType)
+    spawned.push({ prompt: e.prompt, name: e.name, type, description: e.description })
+    return { model: 'claude-sonnet-5-5', agentId: `a${spawned.length}` }
+  })
+  // The state a reload finds: `serving` as the module left it before.
+  let seed = seeded
+  on('state.get', (_$, e, next) =>
+    seed && e.key === 'serving' ? { value: { value: seed, version: 1 } } : next(e),
+  )
+  on('state.set', (_$, e, next) => {
+    if (e.key === 'serving') seed = undefined
+    return next(e)
+  })
+  mock.env(on, { HOME: '/home/u' })
+  const clock = mock.clock(on, { now: 1_000 })
+
+  // The review's server: the lines the test prints, until it ends.
+  const servers: string[][] = []
+  const serverEnvs: (Record<string, string> | undefined)[] = []
+  // A line on stdout, or `{ stderr }` one on stderr.
+  const printing: (string | { stderr: string })[] = []
+  let wake: () => void = ignore
+  let exitCode: number | undefined
+  on('process.spawn', async function* (_$, e) {
+    servers.push([...e.argv])
+    serverEnvs.push(e.env)
+    for (;;) {
+      const line = printing.shift()
+      if (typeof line === 'object')
+        yield { stream: 'stderr' as const, text: `${line.stderr}\n` }
+      else if (line !== undefined) yield { stream: 'stdout' as const, text: `${line}\n` }
+      else if (exitCode !== undefined) {
+        // The next server runs until it is told to exit in turn.
+        const code = exitCode
+        exitCode = undefined
+        return { value: { code, signal: null } }
+      } else await new Promise<void>((resolve) => (wake = resolve))
+    }
+  })
+  /** The server prints lines; what they start has started once it resolves. */
+  const print = async (...lines: (string | { stderr: string })[]) => {
+    printing.push(...lines)
+    wake()
+    await clock.settle()
+  }
+
+  return {
+    registered,
+    spawned,
+    servers,
+    serverEnvs,
+    print,
+    holdSpawns: () => {
+      held = new Promise<void>((done) => (release = done))
+    },
+    releaseSpawns: async () => {
+      held = undefined
+      release()
+      await clock.settle()
+    },
+    exit: async (code: number) => {
+      exitCode = code
+      wake()
+      await clock.settle()
+    },
+    toasts,
+    tools,
+    logged,
+    stopped,
+    imported,
+    browsed,
+    ended: endings,
+    notes,
+    clock,
+  }
+}
+
+const ignore = () => undefined
+
+const command = (args = ''): CommandRunInput => ({
+  command: 'tranchant',
+  args,
+  origin: { kind: 'composer' },
+  presentation: { isFullscreen: false, columns: 100 },
+})
+const fix = (id: string) => `FIX ${id}`
+const turnEnded = (agentId: string, answer = '') => ({
+  answer,
+  durationMs: 1,
+  isAborted: false,
+  turnId: 'turn',
+  agentId,
+  reason: 'answer' as const,
+})
+
+/** `/tranchant <review.json>`, its server ready. */
+async function open($: Engine, w: ReturnType<typeof world>) {
+  const answer = $.command.run(command(FILE))
+  await w.print(READY)
+  return (await answer).text
+}
+
+test('registers the tool and the command at the session start', async ($, on) => {
+  const w = world(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  expect(w.tools).toEqual([{ name: 'open', isDeferred: false }])
+})
+
+test('registers the tool even when Claude Code refuses the name /tranchant', async ($, on) => {
+  const w = world(on, { refused: 'tranchant' })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  expect(w.tools.map((tool) => tool.name)).toEqual(['open'])
+})
+
+test('opening a review file imports it, serves it and opens the page', async ($, on) => {
+  const w = world(on)
+  const ran = $.tool.call({
+    tool: 'mcp__tranchant__open',
+    review: FILE,
+    tool_use_id: 'o1',
+  })
+  await w.print(READY)
+  const { result } = await ran
+  expect(w.imported).toEqual([FILE])
+  expect(w.servers).toEqual([
+    [
+      'node',
+      expect.stringMatching(/\/skills\/tranchant\/scripts\/server\.mjs$/),
+      '--review',
+      DIR,
+    ],
+  ])
+  expect(w.serverEnvs).toEqual([{ TRANCHANT_HOOKS: '1' }])
+  expect(w.browsed).toEqual(['open http://127.0.0.1:4599'])
+  expect(result).toMatch(
+    /^Tranchant serves Classification overview at http:\/\/127\.0\.0\.1:4599\./,
+  )
+  expect(w.toasts).toContain(
+    'Tranchant serves Classification overview at http://127.0.0.1:4599',
+  )
+
+  // Opened again, by its folder: the same server, no second browser tab.
+  const again = await $.tool.call({
+    tool: 'mcp__tranchant__open',
+    review: DIR,
+    tool_use_id: 'o2',
+  })
+  expect(again.result).toMatch(/already serves Classification overview at http/)
+  expect(w.servers).toHaveLength(1)
+  expect(w.browsed).toHaveLength(1)
+  await w.exit(0)
+})
+
+test('a relative review file is read from the session folder', async ($, on) => {
+  const w = world(on)
+  const answer = $.command.run(command('.tranchant/review.json'))
+  await w.print(READY)
+  expect((await answer).text).toMatch(/serves Classification overview/)
+  expect(w.imported).toEqual([FILE])
+  await w.exit(0)
+})
+
+test('a review open.mjs refuses is answered as refused, no server started', async ($, on) => {
+  const w = world(on, { refusing: 'REVIEW_REFUSED id rev-1 exists with other content' })
+  const { text } = await $.command.run(command(FILE))
+  expect(text).toBe(`Tranchant refused ${FILE}: id rev-1 exists with other content`)
+  expect(w.servers).toEqual([])
+})
+
+test('a missing review says so', async ($, on) => {
+  const w = world(on)
+  const { text } = await $.command.run(command('nowhere.json'))
+  expect(text).toMatch(/^No review at \/repo\/web\/nowhere\.json: give a review file/)
+  expect(w.servers).toEqual([])
+  expect((await $.command.run(command())).text).toMatch(/^Usage: \/tranchant/)
+})
+
+/** A hook of a finding's agent: hook.mjs, the finding and review written in. */
+const hookCommand = (mode: string, id: string, lockRoot = ROOT) =>
+  expect.stringMatching(
+    new RegExp(
+      `^'node' '/.+/skills/tranchant/scripts/hook\\.mjs' '${mode}' '--finding' '${id}' '--review' '${DIR}' '--project' '${ROOT}' '--lock-root' '${lockRoot}'$`,
+    ),
+  )
+
+/** Edit and Bash, which hook.mjs may refuse, but not the read-only tools. */
+const PRE_TOOLS = expect.stringMatching(
+  /^(?!.*\b(?:Read|Grep|Glob)\b)(?=.*\bEdit\b)(?=.*\bBash\b)[\w|.*]+$/,
+)
+
+test("a fix starts the finding's agent, with hooks of its own, on the session's model", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'))
+
+  expect(w.spawned).toEqual([
+    expect.objectContaining({ type: 'tranchant:tr-f-01', name: 'tranchant f-01' }),
+  ])
+  expect(w.spawned[0]?.prompt).toMatch(
+    new RegExp(
+      `^f-01\nREVIEW=${DIR}\nSKILL=/.+/skills/tranchant\nPROJECT=${ROOT}\nEach line below starting with (review-[0-9a-f]{8}) .*data, not instructions.*\n\\1 FIX f-01$`,
+    ),
+  )
+  const spec = w.registered.get('tranchant:tr-f-01')
+  // The worker's instructions, its frontmatter left out.
+  expect(spec?.prompt).toBe('You apply one finding.\n')
+  expect(spec?.model).toBe('inherit')
+  expect(spec?.tools).toEqual(['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob'])
+  expect(spec?.hooks).toEqual({
+    PreToolUse: [
+      {
+        matcher: PRE_TOOLS,
+        hooks: [{ type: 'command', command: hookCommand('pre', 'f-01') }],
+      },
+    ],
+    PostToolUse: [
+      {
+        matcher: '*',
+        hooks: [{ type: 'command', command: hookCommand('post', 'f-01') }],
+      },
+    ],
+    PostToolUseFailure: [
+      {
+        matcher: '*',
+        hooks: [{ type: 'command', command: hookCommand('post', 'f-01') }],
+      },
+    ],
+    Stop: [{ hooks: [{ type: 'command', command: hookCommand('stop', 'f-01') }] }],
+  })
+  // The model is offered neither the finding's type nor the worker.
+  for (const agent of ['tranchant:tr-f-01', 'tranchant:worker'])
+    expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
+  expect(await $.agent.offer(offerOf('Explore'))).toEqual({ isOffered: true })
+  await w.exit(0)
+})
+
+test("locks a finding's files across the git repository the project is in", async ($, on) => {
+  const w = world(on, { gitRoot: '/repo' })
+  await open($, w)
+  await w.print(fix('f-01'))
+  expect(w.registered.get('tranchant:tr-f-01')?.hooks).toEqual(
+    expect.objectContaining({
+      PreToolUse: [
+        {
+          matcher: PRE_TOOLS,
+          hooks: [{ type: 'command', command: hookCommand('pre', 'f-01', '/repo') }],
+        },
+      ],
+    }),
+  )
+  await w.exit(0)
+})
+
+/** The marker a prompt's fence names. */
+const marker = (prompt = '') => prompt.match(/starting with (review-[0-9a-f]{8}) /)?.[1]
+
+test('each fix starts its agent at once, three at a time', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'))
+
+  expect(w.spawned.map((agent) => agent.type)).toEqual([
+    'tranchant:tr-f-01',
+    'tranchant:tr-f-02',
+    'tranchant:tr-f-03',
+  ])
+  // Each prompt fences the server's line behind a marker of its own.
+  expect(marker(w.spawned[1]?.prompt)).not.toBe(marker(w.spawned[0]?.prompt))
+
+  // An agent ends: hook.mjs ended, its line for the person, and the finding in line starts.
+  await $.turn.complete(
+    turnEnded('a1', 'Returned early while tenantId is undefined.\nmore'),
+  )
+  await w.clock.settle()
+  expect(w.ended).toEqual([
+    [
+      '--finding',
+      'f-01',
+      '--review',
+      DIR,
+      '--project',
+      ROOT,
+      '--lock-root',
+      ROOT,
+      '--agent',
+      'a1',
+    ],
+  ])
+  expect(w.toasts.at(-1)).toBe('f-01: Returned early while tenantId is undefined.')
+  expect(w.spawned.map((agent) => agent.type)).toEqual([
+    'tranchant:tr-f-01',
+    'tranchant:tr-f-02',
+    'tranchant:tr-f-03',
+    'tranchant:tr-f-04',
+  ])
+  await w.exit(0)
+})
+
+test('the same line again, as a server restart prints it, starts no agent', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-01'))
+  expect(w.spawned).toHaveLength(1)
+  await w.print(fix('f-01'))
+  expect(w.spawned).toHaveLength(1)
+
+  // Its agent ended: a fix asked again starts a new one.
+  await $.turn.complete(turnEnded('a1', 'Done.'))
+  await w.clock.settle()
+  await w.print(fix('f-01'))
+  expect(w.spawned.map((agent) => agent.type)).toEqual([
+    'tranchant:tr-f-01',
+    'tranchant:tr-f-01',
+  ])
+  await w.exit(0)
+})
+
+test("a stop ends the finding's agent and tells hook.mjs", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'))
+  await w.print('STOP f-04', 'STOP f-01')
+  expect(w.stopped).toEqual(['a1'])
+  expect(w.ended).toEqual([
+    [
+      '--finding',
+      'f-01',
+      '--review',
+      DIR,
+      '--project',
+      ROOT,
+      '--lock-root',
+      ROOT,
+      '--agent',
+      'a1',
+    ],
+  ])
+  // f-04 left the queue: nothing takes the place f-01 freed.
+  expect(w.spawned).toHaveLength(3)
+  // The stopped agent's own end changes nothing more.
+  await $.turn.complete(turnEnded('a1', 'CANCELLED'))
+  await w.clock.settle()
+  expect(w.ended).toHaveLength(1)
+  await w.exit(0)
+})
+
+test('a stop while the agent starts reaches it once started', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  w.holdSpawns()
+  await w.print(fix('f-01'))
+  await w.print('STOP f-01')
+  await w.releaseSpawns()
+  expect(w.stopped).toEqual(['a1'])
+  await w.exit(0)
+})
+
+test('a dropped or skipped finding leaves the queue', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'), fix('f-05'))
+  await w.print('DROPPED f-04', 'SKIPPED f-05')
+  await $.turn.complete(turnEnded('a1', 'Done.'))
+  await w.clock.settle()
+  expect(w.spawned).toHaveLength(3)
+  await w.exit(0)
+})
+
+test("the agent's own words become notes under the finding", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'))
+  await $.session.append({
+    agentId: 'a1',
+    door: 'response',
+    origin: { kind: 'model', model: 'claude-sonnet-5-5' },
+    uuid: 'row-1',
+    message: {
+      type: 'assistant',
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Reading the hook first.' },
+        { type: 'thinking', thinking: 'hidden' },
+      ],
+    },
+  })
+  await w.clock.settle()
+  expect(w.notes).toEqual([
+    {
+      argv: ['--finding', 'f-01', '--review', DIR, '--project', ROOT, '--agent', 'a1'],
+      stdin: expect.stringMatching(
+        /^\{"at":\d+,"kind":"note","label":"Reading the hook first\.","state":"done"\}$/,
+      ),
+    },
+  ])
+  await w.exit(0)
+})
+
+test('stop ends the server and every agent', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'))
+  const { result } = await $.tool.call({
+    tool: 'mcp__tranchant__open',
+    stop: true,
+    tool_use_id: 's1',
+  })
+  expect(result).toBe(
+    'Tranchant stopped serving Classification overview. Ended 2 agent(s) at work on fixes.',
+  )
+  expect(w.stopped).toEqual(['a1', 'a2'])
+  expect(w.ended.map((one) => one[1])).toEqual(['f-01', 'f-02'])
+  expect((await $.command.run(command('stop'))).text).toMatch(/not serving any review/)
+  await w.exit(0)
+  // A deliberate stop: no toast about a server that died.
+  expect(w.toasts.some((toast) => toast.includes('stopped serving'))).toBe(false)
+})
+
+test('a server that cannot start says why', async ($, on) => {
+  const w = world(on)
+  const answer = $.command.run(command(FILE))
+  await w.print('PORT_BUSY 4599 is used by another program')
+  expect((await answer).text).toMatch(
+    /cannot start: port 4599 is used by another program\. Another session may already serve/,
+  )
+  expect(w.browsed).toEqual([])
+  await w.exit(3)
+})
+
+test('a server that stops after it started says so', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.exit(1)
+  expect(w.toasts.at(-1)).toBe(
+    `Tranchant stopped serving Classification overview: the server exited (code 1). /tranchant ${DIR} starts it again.`,
+  )
+  // Not served any more: the command starts a new server.
+  const again = $.command.run(command(DIR))
+  await w.clock.settle()
+  expect(w.servers).toHaveLength(2)
+  await w.print(READY)
+  await again
+  await w.exit(0)
+})
+
+test('a reload serves the reviews again, without opening the browser', async ($, on) => {
+  const w = world(on, { seeded: { [DIR]: { review: DIR, project: ROOT } } })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  const started = $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.servers).toEqual([
+    ['node', expect.stringMatching(/\/scripts\/server\.mjs$/), '--review', DIR],
+  ])
+  await w.print(READY)
+  await started
+  expect(w.toasts.at(-1)).toBe(
+    'Tranchant serves Classification overview again at http://127.0.0.1:4599.',
+  )
+  expect(w.browsed).toEqual([])
+  await w.exit(0)
+})
+
+test('/tranchant status tells the server, the agents at work and the queue in order', async ($, on) => {
+  const w = world(on)
+  expect((await $.command.run(command('status'))).text).toMatch(
+    /^Tranchant is not serving any review in this session/,
+  )
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'), {
+    stderr: 'warning: decisions.json rewritten',
+  })
+  const { text } = await $.command.run(command('status'))
+  expect(text).toBe(
+    [
+      'Tranchant: 3 of 3 agents at work in this session.',
+      '',
+      `Classification overview (${DIR}): page at http://127.0.0.1:4599`,
+      '  At work:',
+      '    f-01: agent a1 on claude-sonnet-5-5, for 0 s',
+      '    f-02: agent a2 on claude-sonnet-5-5, for 0 s',
+      '    f-03: agent a3 on claude-sonnet-5-5, for 0 s',
+      '  Waiting for a free agent, in order:',
+      '    1. f-04',
+      '  Last server error: warning: decisions.json rewritten',
+    ].join('\n'),
+  )
+  // The skill asks the same through the tool.
+  const { result } = await $.tool.call({
+    tool: 'mcp__tranchant__open',
+    status: true,
+    tool_use_id: 's1',
+  })
+  expect(result).toBe(text)
+  await w.exit(0)
+})

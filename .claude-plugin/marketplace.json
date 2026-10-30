@@ -1,0 +1,14 @@
+{
+  "name": "tranchant",
+  "description": "Settle a code review, one finding at a time, from a page",
+  "owner": {
+    "name": "Kevin Manson"
+  },
+  "plugins": [
+    {
+      "name": "tranchant",
+      "source": "./",
+      "description": "Settle a code review from a page: fix each finding on your branch with a background agent, or post it on someone else's merge request"
+    }
+  ]
+}
