@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "lenses": [
+    {
+      "name": "correctness",
+      "prompt": "correctness.md",
+      "paths": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.vue", "**/*.svelte"]
+    },
+    {
+      "name": "types",
+      "prompt": "types.md",
+      "paths": ["**/*.ts", "**/*.tsx", "**/*.vue", "**/*.svelte"]
+    },
+    {
+      "name": "accessibility",
+      "prompt": "accessibility.md",
+      "paths": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.vue",
+        "**/*.svelte",
+        "**/*.html",
+        "**/*.css",
+        "**/*.scss"
+      ]
+    },
+    {
+      "name": "performance",
+      "prompt": "performance.md",
+      "paths": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.vue",
+        "**/*.svelte",
+        "**/*.css",
+        "**/*.scss"
+      ]
+    },
+    {
+      "name": "security",
+      "prompt": "security.md",
+      "paths": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.vue",
+        "**/*.svelte",
+        "**/*.html"
+      ]
+    },
+    {
+      "name": "tests",
+      "prompt": "tests.md",
+      "paths": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.vue", "**/*.svelte"]
+    },
+    {
+      "name": "conventions",
+      "prompt": "conventions.md",
+      "paths": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.vue",
+        "**/*.svelte",
+        "**/*.html",
+        "**/*.css",
+        "**/*.scss"
+      ]
+    },
+    {
+      "name": "bugs",
+      "prompt": "bugs.md",
+      "otherwise": true
+    }
+  ]
+}
