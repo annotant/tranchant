@@ -80,6 +80,7 @@ dl { margin: 0; }
 
 .tr-app { display: flex; flex-direction: column; height: 100%; min-width: 800px; }
 .tr-loading { padding: 32px; color: var(--tr-muted); }
+.tr-empty { padding: 24px 16px; }
 .tr-banner {
   padding: 8px 16px; background: var(--tr-danger-bg); color: var(--tr-danger);
   border-bottom: 1px solid var(--tr-border); font-weight: 600;
@@ -111,6 +112,8 @@ dl { margin: 0; }
 .tr-chip--ours, .tr-chip--open { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--theirs { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--warn { background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-chip--live { background: var(--tr-accent-weak); color: var(--tr-accent); gap: 6px; }
+.tr-chip--live .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
 .tr-chip--queued, .tr-chip--working, .tr-chip--asking { background: var(--tr-warn-bg); color: var(--tr-warn); }
 .tr-chip--fixed, .tr-chip--posted { background: var(--tr-auto-bg); color: var(--tr-auto); }
 .tr-chip--failed, .tr-chip--stopped { background: var(--tr-danger-bg); color: var(--tr-danger); }

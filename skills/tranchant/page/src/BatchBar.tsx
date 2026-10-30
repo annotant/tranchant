@@ -6,6 +6,7 @@ import {
   type DecisionInput,
   type Finding,
   idsInBucket,
+  plural,
   type Records,
   type Review,
   stateOf,
@@ -33,9 +34,6 @@ const VERBS: Record<Action, string> = {
   drop: 'Drop',
   skip: 'Skip',
 }
-
-const plural = (count: number, noun: string) =>
-  `${count} ${noun}${count === 1 ? '' : 's'}`
 
 export function BatchBar({
   review,

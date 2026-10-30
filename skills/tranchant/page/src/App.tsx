@@ -7,7 +7,9 @@ import {
   counts,
   type DecisionInput,
   groupFindings,
+  isReviewing,
   orderedFindings,
+  plural,
   type Review,
   stateOf,
 } from './domain'
@@ -85,6 +87,16 @@ function Header({
               title="HEAD is not the commit reviewed; fixes run on the current files"
             >
               checkout moved
+            </span>
+          )}
+          {isReviewing(review) && (
+            <span
+              className="tr-chip tr-chip--live"
+              role="status"
+              aria-label="Review in progress"
+            >
+              <span className="tr-spinner" aria-hidden="true" />
+              review in progress · {plural(review.findings.length, 'finding')} so far
             </span>
           )}
         </div>
@@ -243,6 +255,7 @@ export default function App() {
   const moved =
     payload?.head.current !== null && payload?.head.current !== payload?.head.reviewed
   const current = ordered.find((finding) => finding.id === openId)
+  const reviewing = isReviewing(review)
 
   return (
     <div className="tr-app">
@@ -299,19 +312,29 @@ export default function App() {
       )}
       <div className="tr-main">
         <nav className="tr-list-pane" aria-label="Findings">
-          <FindingList
-            groups={groups}
-            records={records}
-            cursor={cursor}
-            openId={openId}
-            selected={selected}
-            onOpen={open}
-            onToggle={toggle}
-          />
-          <p className="tr-keys tr-muted">
-            j/k move · Enter open · x select · f fix ·{' '}
-            {canPost(review) ? 'p post · ' : ''}d drop · s skip
-          </p>
+          {ordered.length ? (
+            <>
+              <FindingList
+                groups={groups}
+                records={records}
+                cursor={cursor}
+                openId={openId}
+                selected={selected}
+                onOpen={open}
+                onToggle={toggle}
+              />
+              <p className="tr-keys tr-muted">
+                j/k move · Enter open · x select · f fix ·{' '}
+                {canPost(review) ? 'p post · ' : ''}d drop · s skip
+              </p>
+            </>
+          ) : (
+            <p className="tr-empty tr-muted">
+              {reviewing
+                ? 'The review is running: findings appear here as they land.'
+                : 'No findings.'}
+            </p>
+          )}
         </nav>
         <main className="tr-detail-pane">
           {current ? (
@@ -327,7 +350,9 @@ export default function App() {
               onStop={(id) => void stop(id)}
             />
           ) : (
-            <p className="tr-muted">No finding.</p>
+            <p className="tr-muted">
+              {reviewing ? 'Waiting for the first finding…' : 'No finding.'}
+            </p>
           )}
         </main>
       </div>

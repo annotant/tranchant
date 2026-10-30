@@ -4,6 +4,8 @@
 export type Ownership = 'ours' | 'theirs'
 export type Bucket = 'review' | 'auto'
 export type Tag = 'concern' | 'question' | 'suggestion'
+/** `reviewing` while the producer still adds findings; `complete` once done. */
+type Status = 'reviewing' | 'complete'
 
 /** The seven topics, in the order the page lists them within a bucket. */
 const TOPICS = [
@@ -65,6 +67,8 @@ export interface Finding {
   comment?: string
   diagram?: Diagram
   related?: Related[]
+  /** When it joined the review: set by the import, or by add.mjs. */
+  addedAt?: string
 }
 
 interface DiffRefs {
@@ -91,6 +95,8 @@ export interface Review {
   base: string
   headSha: string
   ownership: Ownership
+  /** `complete` when absent: the producer wrote the review whole. */
+  status?: Status
   title: string
   mr?: MergeRequest
   jira?: { key: string; url: string }
@@ -224,6 +230,13 @@ export const STATE_LABELS: Record<State, string> = {
 }
 
 export const tagOf = (finding: Pick<Finding, 'tag'>): Tag => finding.tag ?? 'concern'
+
+/** Whether findings may still land: the page then shows the review in progress. */
+export const isReviewing = (review: Pick<Review, 'status'>) =>
+  review.status === 'reviewing'
+
+export const plural = (count: number, noun: string) =>
+  `${count} ${noun}${count === 1 ? '' : 's'}`
 
 /** Posting needs the author's MR and the diff it was reviewed at. */
 export const canPost = (review: Pick<Review, 'ownership' | 'mr'>) =>
