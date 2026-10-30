@@ -1,0 +1,35 @@
+skills/tranchant/page/test/batch.spec.tsx
+  s_4e6f577b529ff9::t_e3b88aa6377135 12-13
+skills/tranchant/page/src/App.tsx
+  s_4e6f577b529ff9::t_269c522da45d51 2,4-5,21-40,137-172,179,185-212,332-365,420-446,448-470
+skills/tranchant/page/src/DiffView.tsx
+  s_4e6f577b529ff9::t_802f1d97277d00 1-229
+skills/tranchant/page/src/api.ts
+  s_4e6f577b529ff9::t_bd8bbec2c3ed09 10,43-61,171-216
+skills/tranchant/page/src/diff.ts
+  s_4e6f577b529ff9::t_f75eeb12640dcb 1-227
+skills/tranchant/page/src/styles.ts
+  s_4e6f577b529ff9::t_49184138d557d6 164,166-168,191-220,315
+skills/tranchant/page/test/app.spec.tsx
+  s_4e6f577b529ff9::t_7d8b8d21e03a38 5-14,18,23-33,40-41,250-335
+skills/tranchant/page/test/diff.spec.tsx
+  s_4e6f577b529ff9::t_08c90e80b3268a 1-175
+skills/tranchant/page/test/fixture.ts
+  s_4e6f577b529ff9::t_00c2a46fec6df5 3,196-290,390-392,397,427-434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6fb8d844bf20aefcf14cafc9b23ddc9fa9cabafb",
+  "prompts": {},
+  "sessions": {
+    "s_4e6f577b529ff9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "369febc2-8b22-40a4-8070-f2f763bc49ec",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
