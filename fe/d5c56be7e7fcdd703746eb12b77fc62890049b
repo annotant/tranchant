@@ -1,0 +1,42 @@
+skills/tranchant/page/src/App.tsx
+  s_4e6f577b529ff9::t_f65a416db723c9 2-9,11-12,31,36-37,39,41,45,47,49,53-54,147,149,152,154,156,163,176-189,207-208,227-228,365-366,372,416,464,494-499
+  s_4e6f577b529ff9::t_1e9c6f0cd64095 516
+skills/tranchant/page/src/DiffView.tsx
+  s_4e6f577b529ff9::t_b9b189b609fbd8 3-4,7,11,14-39,41-63,117-152,160,170,172,175-179,181,183-184,187-188,204,206-216,218,220-224,226,232-237,244-250,258-260,268-275,281,286-288
+  s_4e6f577b529ff9::t_d0f0371d344824 40,189-193,225
+skills/tranchant/page/test/app.spec.tsx
+  s_4e6f577b529ff9::t_d0f0371d344824 42-51,516,519
+  s_4e6f577b529ff9::t_66d1df0c069c3c 424-515,517-518,520-524
+skills/tranchant/page/src/styles.ts
+  s_4e6f577b529ff9::t_1e9c6f0cd64095 198-199
+skills/tranchant/page/src/diff.ts
+  s_4e6f577b529ff9::t_9ca788418b374d 1,3,36-37,98-129,142,145,159-161,236,239-242
+skills/tranchant/page/src/Excerpt.tsx
+  s_4e6f577b529ff9::t_2a821c2f1f0829 73,99,156-178,190-196
+  s_4e6f577b529ff9::t_d0f0371d344824 93-94,148
+skills/tranchant/page/src/api.ts
+  s_4e6f577b529ff9::t_f05ed9e02ec55c 17-26,31,54,185-186,189-192,194,196,202,206-207,211,215,224,227,230
+  s_4e6f577b529ff9::t_d0f0371d344824 197,200,208,217-218,226,228
+skills/tranchant/page/test/diff.spec.tsx
+  s_4e6f577b529ff9::t_a9d62799b44edf 4,92,94,98-107,109-141,204-206,218-227
+  s_4e6f577b529ff9::t_e89a1b83febfcb 108
+skills/tranchant/page/test/fixture.ts
+  s_4e6f577b529ff9::t_a9d62799b44edf 210-212,389-396,399-402,407,409,439-441,452-453
+  s_4e6f577b529ff9::t_1bfe434756552e 454
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fed5c56be7e7fcdd703746eb12b77fc62890049b",
+  "prompts": {},
+  "sessions": {
+    "s_4e6f577b529ff9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "369febc2-8b22-40a4-8070-f2f763bc49ec",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
