@@ -2,10 +2,20 @@
 // its API on the port it printed.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { appendFile, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
+import { buildPlayground } from './fixtures/playground.mjs'
 import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
 
 const SERVER = path.join(SCRIPTS, 'server.mjs')
@@ -219,6 +229,282 @@ test('answers the review, its decisions, its runs and the heads', async () => {
   assert.deepEqual(body.runs, {})
   assert.equal(body.head.reviewed, main.review.headSha)
   assert.match(body.head.current, /^[0-9a-f]{40}$/)
+})
+
+/**
+ * The lines of file `file` on the new side of a unified diff, by number,
+ * with their sign: what the page shows at each line.
+ * @param {string} diff
+ * @param {string} file
+ */
+function newSide(diff, file) {
+  /** @type {Map<number, string>} */
+  const lines = new Map()
+  const section = diff
+    .split(/^(?=diff --git )/m)
+    .find((part) => part.startsWith(`diff --git a/${file} b/${file}\n`))
+  let next = 0
+  for (const line of (section ?? '').split('\n')) {
+    const header = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line)
+    if (header) next = Number(header[1])
+    else if (next && (line.startsWith('+') || line.startsWith(' ')))
+      lines.set(next++, line)
+  }
+  return lines
+}
+
+/** A playground built for a fixture review, in a folder of its own. */
+const playground = async (
+  /** @type {any} */ t,
+  /** @type {'ours' | 'theirs'} */ name,
+  /** @type {{ folder?: string }} */ options = {},
+) =>
+  buildPlayground(await tempDir(t, 'tranchant-playground-'), await fixture(name), options)
+
+/**
+ * Runs git in `dir`, committing as a test user; throws when it fails.
+ * @param {string} dir
+ * @param {string[]} args
+ */
+async function gitIn(dir, ...args) {
+  const done = await run('git', [
+    '-C',
+    dir,
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@t',
+    '-c',
+    'commit.gpgsign=false',
+    ...args,
+  ])
+  if (done.code !== 0) throw new Error(`git ${args.join(' ')}: ${done.stderr}`)
+  return done.stdout.trim()
+}
+
+/** GET /api/diff on `server`: its status and body. @param {Server} server */
+async function diffOf(server) {
+  const response = await fetch(`${server.base}/api/diff`)
+  return { status: response.status, body: await json(response) }
+}
+
+/** Git's order of paths: by code unit, not by locale. */
+const byBytes = (/** @type {string} */ a, /** @type {string} */ b) =>
+  a < b ? -1 : a > b ? 1 : 0
+
+/** The paths a fixture review names: its findings' and their related ones. */
+const namedPaths = (/** @type {any} */ review) => [
+  ...new Set(
+    review.findings.flatMap((/** @type {any} */ finding) => [
+      finding.path,
+      ...(finding.related ?? []).map((/** @type {any} */ related) => related.path),
+    ]),
+  ),
+]
+
+test('answers the diff of the change, every playground finding on an added line of it', async (t) => {
+  const placed = await playground(t, 'ours')
+  const server = await startServer(t, { name: 'ours', overrides: placed })
+  assert.match(server.first, /^READY /, server.output())
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200)
+  assert.deepEqual(Object.keys(body).toSorted(), ['base', 'diff', 'files', 'head'])
+  assert.equal(body.base, 'main')
+  assert.equal(body.head, placed.headSha)
+  assert.deepEqual(
+    body.files.map((/** @type {any} */ file) => file.path),
+    namedPaths(placed).toSorted(byBytes),
+  )
+  for (const file of body.files) {
+    assert.ok(file.additions > 0 && file.deletions > 0, file.path)
+    assert.equal(file.binary, false)
+  }
+  for (const finding of placed.findings) {
+    const text = finding.excerpt.lines[finding.line - finding.excerpt.startLine]
+    assert.equal(
+      newSide(body.diff, finding.path).get(finding.line),
+      `+${text}`,
+      finding.id,
+    )
+  }
+  // Computed once: the repository gone, the diff still answers.
+  const git = path.join(placed.project, '.git')
+  await rename(git, `${git}.away`)
+  try {
+    assert.deepEqual(await diffOf(server), { status: 200, body })
+  } finally {
+    await rename(`${git}.away`, git)
+  }
+})
+
+test('a diff that failed is computed again on the next request', async (t) => {
+  const placed = await playground(t, 'ours')
+  const git = path.join(placed.project, '.git')
+  await rename(git, `${git}.away`)
+  const server = await startServer(t, { name: 'ours', overrides: placed })
+  assert.deepEqual(await diffOf(server), {
+    status: 409,
+    body: { error: `${placed.project} is not a git repository` },
+  })
+  await rename(`${git}.away`, git)
+  assert.equal((await diffOf(server)).status, 200)
+})
+
+test('with diff refs, the diff is the MR’s own, base sha to head sha', async (t) => {
+  // A base git cannot resolve: only the diff refs can make this answer.
+  const placed = { ...(await playground(t, 'theirs')), base: 'nowhere' }
+  const server = await startServer(t, { name: 'theirs', overrides: placed })
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200, JSON.stringify(body))
+  assert.equal(body.base, placed.mr?.diffRefs?.baseSha)
+  assert.equal(body.head, placed.mr?.diffRefs?.headSha)
+  assert.equal(body.files.length, namedPaths(placed).length)
+  const notes = [...newSide(body.diff, 'src/people/PersonNotes.tsx').values()]
+  const excerpt = placed.findings.find((/** @type {any} */ f) => f.id === 'f-02')?.excerpt
+  assert.deepEqual(
+    notes.filter((line) => line.startsWith('+')),
+    excerpt?.lines.map((/** @type {string} */ line) => `+${line}`),
+  )
+})
+
+test('in a project that is a folder of its repository, paths are the findings’', async (t) => {
+  const placed = await playground(t, 'ours', { folder: 'web' })
+  const root = path.dirname(placed.project)
+  // A change outside the project: not the project's diff.
+  await writeFile(path.join(root, 'outside.txt'), 'elsewhere\n')
+  await gitIn(root, 'add', '-A')
+  await gitIn(root, 'commit', '-q', '-m', 'outside')
+  const headSha = await gitIn(root, 'rev-parse', 'HEAD')
+  const server = await startServer(t, { name: 'ours', overrides: { ...placed, headSha } })
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200, JSON.stringify(body))
+  assert.deepEqual(
+    body.files.map((/** @type {any} */ file) => file.path),
+    namedPaths(placed).toSorted(byBytes),
+  )
+  const finding = placed.findings[0]
+  assert.ok(newSide(body.diff, finding.path).has(finding.line))
+})
+
+test('lists a rename with its old path, a binary with no counts, and a quoted path', async (t) => {
+  const project = await tempDir(t, 'tranchant-files-')
+  await writeFile(
+    path.join(project, 'old.ts'),
+    'export const a = 1\nexport const b = 2\n',
+  )
+  await writeFile(path.join(project, 'logo.png'), Buffer.from([0x89, 0x50, 0, 1]))
+  await gitIn(project, 'init', '-q', '-b', 'main')
+  await gitIn(project, 'add', '-A')
+  await gitIn(project, 'commit', '-q', '-m', 'base')
+  await gitIn(project, 'checkout', '-q', '-b', 'files')
+  await gitIn(project, 'mv', 'old.ts', 'new.ts')
+  await writeFile(
+    path.join(project, 'new.ts'),
+    'export const a = 1\nexport const b = 3\n',
+  )
+  await writeFile(path.join(project, 'logo.png'), Buffer.from([0x89, 0x50, 0, 2]))
+  await writeFile(path.join(project, 'say "hi".ts'), 'export {}\n')
+  await gitIn(project, 'add', '-A')
+  await gitIn(project, 'commit', '-q', '-m', 'head')
+  const headSha = await gitIn(project, 'rev-parse', 'HEAD')
+  const server = await startServer(t, {
+    name: 'ours',
+    overrides: { project, base: 'main', headSha },
+  })
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200, JSON.stringify(body))
+  assert.deepEqual(
+    body.files.toSorted((/** @type {any} */ a, /** @type {any} */ b) =>
+      a.path.localeCompare(b.path),
+    ),
+    [
+      { path: 'logo.png', additions: 0, deletions: 0, binary: true },
+      { path: 'new.ts', oldPath: 'old.ts', additions: 1, deletions: 1, binary: false },
+      { path: 'say "hi".ts', additions: 1, deletions: 0, binary: false },
+    ],
+  )
+  assert.ok(body.diff.includes('diff --git "a/say \\"hi\\".ts" "b/say \\"hi\\".ts"\n'))
+})
+
+test('says why the diff is unavailable', async (t) => {
+  // The main server's checkout holds one empty commit: neither diff ref is there.
+  const refs = main.review.mr.diffRefs
+  assert.deepEqual(await diffOf(main), {
+    status: 409,
+    body: { error: `base ${refs.baseSha} is not in ${main.project}: fetch it first` },
+  })
+  const plain = await startServer(t, { name: 'ours' })
+  assert.deepEqual((await diffOf(plain)).body, {
+    error: `${plain.project} is not a git repository`,
+  })
+  const gone = path.join(await tempDir(t), 'gone')
+  const missing = await startServer(t, { name: 'ours', overrides: { project: gone } })
+  assert.match(
+    (await diffOf(missing)).body.error,
+    /^git cannot read .*gone: cannot change to /,
+  )
+  const placed = await playground(t, 'ours')
+  /** @type {[Record<string, string>, string][]} */
+  const cases = [
+    [{ base: 'nowhere' }, `base nowhere is not in ${placed.project}: fetch it first`],
+    [{ headSha: 'abc1234' }, `head abc1234 is not in ${placed.project}: fetch it first`],
+    [
+      { base: placed.headSha },
+      `the diff of ${placed.headSha}...${placed.headSha} is empty`,
+    ],
+  ]
+  for (const [index, [overrides, error]] of cases.entries()) {
+    const server = await startServer(t, {
+      name: 'ours',
+      overrides: { ...placed, ...overrides, id: `unavailable-${index}` },
+    })
+    assert.deepEqual(await diffOf(server), { status: 409, body: { error } })
+  }
+})
+
+test('a base that reads as a git option is refused, and git writes nothing', async (t) => {
+  const placed = await playground(t, 'ours')
+  const out = await tempDir(t)
+  const base = `--output=${path.join(out, 'x')}`
+  const server = await startServer(t, { name: 'ours', overrides: { ...placed, base } })
+  assert.deepEqual(await diffOf(server), {
+    status: 409,
+    body: { error: `base ${base} is not a revision` },
+  })
+  assert.deepEqual(await readdir(out), [])
+})
+
+test('refuses diff refs of another head than the review’s', async (t) => {
+  const placed = await playground(t, 'theirs')
+  const other = placed.mr?.diffRefs?.baseSha ?? ''
+  const server = await startServer(t, {
+    name: 'theirs',
+    overrides: { ...placed, headSha: other },
+  })
+  assert.deepEqual(await diffOf(server), {
+    status: 409,
+    body: {
+      error: `the MR's diff refs are at ${placed.mr?.diffRefs?.headSha}, the review at ${other}`,
+    },
+  })
+})
+
+test('says when git is missing, or the diff is past the size limit', async (t) => {
+  const placed = await playground(t, 'ours')
+  const nowhere = await startServer(t, {
+    name: 'ours',
+    overrides: placed,
+    env: { PATH: await tempDir(t) },
+  })
+  assert.deepEqual((await diffOf(nowhere)).body, { error: 'git is not installed' })
+  const small = await startServer(t, {
+    name: 'ours',
+    overrides: placed,
+    env: { TRANCHANT_MAX_DIFF_MIB: '0.0001' },
+  })
+  assert.deepEqual((await diffOf(small)).body, {
+    error: `git diff main...${placed.headSha} failed: the diff is larger than 0.0001 MiB`,
+  })
 })
 
 test('applies a batch of decisions in order, and prints a line for each', async () => {

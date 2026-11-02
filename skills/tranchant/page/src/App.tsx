@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { postAnswer, postDecisions, postStop, useReview } from './api'
+import {
+  type DiffState,
+  postAnswer,
+  postDecisions,
+  postStop,
+  useDiff,
+  useReview,
+} from './api'
 import { BatchBar } from './BatchBar'
+import { parseDiff, placeFindings, type Section } from './diff'
+import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView'
 import {
   allows,
   canPost,
@@ -18,22 +27,31 @@ import { FindingList } from './FindingList'
 import { Markdown } from './markdown'
 
 const SUMMARY_KEY = 'tranchant:summary'
+const VIEW_KEY = 'tranchant:view'
+const NO_SECTIONS: readonly Section[] = []
 
-function readSummaryOpen(): boolean {
+/** The main view: the change's diff, or the findings by bucket and topic. */
+type View = 'diff' | 'list'
+
+// A private window or a blocked store throws: the page then keeps its defaults.
+function readStored(key: string): string | null {
   try {
-    return localStorage.getItem(SUMMARY_KEY) !== 'closed'
+    return localStorage.getItem(key)
   } catch {
-    return true
+    return null
   }
 }
 
-function writeSummaryOpen(open: boolean) {
+function writeStored(key: string, value: string) {
   try {
-    localStorage.setItem(SUMMARY_KEY, open ? 'open' : 'closed')
+    localStorage.setItem(key, value)
   } catch {
-    // A private window or a blocked store: the panel just opens next time.
+    // Nothing kept: the default shows next time.
   }
 }
+
+const readView = (): View => (readStored(VIEW_KEY) === 'list' ? 'list' : 'diff')
+const readSummaryOpen = () => readStored(SUMMARY_KEY) !== 'closed'
 
 const isEditing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
@@ -124,18 +142,98 @@ function Header({
   )
 }
 
+function ViewToggle({
+  shown,
+  diff,
+  onChange,
+  onRetry,
+}: {
+  shown: View
+  diff: DiffState
+  onChange: (view: View) => void
+  onRetry: () => void
+}) {
+  const unavailable = diff.status === 'unavailable' ? diff : undefined
+  return (
+    <div className="tr-view" role="group" aria-label="View">
+      <button
+        type="button"
+        className={`tr-btn tr-btn--small ${shown === 'diff' ? 'tr-btn--primary' : ''}`}
+        aria-pressed={shown === 'diff'}
+        disabled={unavailable !== undefined}
+        onClick={() => onChange('diff')}
+      >
+        Diff
+      </button>
+      <button
+        type="button"
+        className={`tr-btn tr-btn--small ${shown === 'list' ? 'tr-btn--primary' : ''}`}
+        aria-pressed={shown === 'list'}
+        onClick={() => onChange('list')}
+      >
+        List
+      </button>
+      {unavailable && (
+        <span className="tr-view-reason tr-muted">
+          Diff unavailable: {unavailable.reason}
+          {unavailable.retrying ? (
+            ' Retrying…'
+          ) : (
+            <>
+              {' '}
+              <button type="button" className="tr-btn tr-btn--link" onClick={onRetry}>
+                retry
+              </button>
+            </>
+          )}
+        </span>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const { payload, reachable, loaded, reload } = useReview()
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [cursorState, setCursor] = useState<string>()
   const [openState, setOpenId] = useState<string>()
   const [summaryOpen, setSummaryOpen] = useState(readSummaryOpen)
+  const [view, setView] = useState<View>(readView)
   const [notice, setNotice] = useState<string>()
 
   const review = payload?.review
   const records = useMemo(() => payload?.findings ?? {}, [payload])
   const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
-  const ordered = useMemo(() => orderedFindings(review?.findings ?? []), [review])
+  const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
+  const [diffPane, setDiffPane] = useState<HTMLElement | null>(null)
+  const files = useMemo(
+    () => (diff.status === 'ready' ? parseDiff(diff.payload.diff) : undefined),
+    [diff],
+  )
+  const stats = useMemo(
+    () =>
+      new Map(
+        (diff.status === 'ready' ? diff.payload.files : []).map((file) => [
+          file.path,
+          file,
+        ]),
+      ),
+    [diff],
+  )
+  const placement = useMemo(
+    () => (files && review ? placeFindings(files, review.findings) : undefined),
+    [files, review],
+  )
+  const reading = useReadingFile(diffPane, placement?.sections ?? NO_SECTIONS)
+  // The diff is the main view; the list replaces it only when the diff is unavailable.
+  const shown: View = view === 'diff' && diff.status !== 'unavailable' ? 'diff' : 'list'
+  const ordered = useMemo(
+    () =>
+      shown === 'diff' && placement
+        ? placement.ordered
+        : orderedFindings(review?.findings ?? []),
+    [shown, placement, review],
+  )
   const disabled = !reachable
   const has = (id: string | undefined) =>
     !!id && ordered.some((finding) => finding.id === id)
@@ -255,7 +353,51 @@ export default function App() {
   const moved =
     payload?.head.current !== null && payload?.head.current !== payload?.head.reviewed
   const current = ordered.find((finding) => finding.id === openId)
+  const keys = (
+    <p className="tr-keys tr-muted">
+      j/k move · Enter open · x select · f fix · {canPost(review) ? 'p post · ' : ''}d
+      drop · s skip
+    </p>
+  )
+  const viewToggle = (
+    <ViewToggle
+      shown={shown}
+      diff={diff}
+      onRetry={retry}
+      onChange={(next) => {
+        // Each view opens its first finding by default: keep the one shown.
+        setOpenId(openId)
+        setCursor(cursor)
+        setView(next)
+        writeStored(VIEW_KEY, next)
+      }}
+    />
+  )
   const reviewing = isReviewing(review)
+  const detail = current ? (
+    <FindingDetail
+      key={current.id}
+      review={review}
+      finding={current}
+      record={records[current.id]}
+      steps={payload?.runs[current.id] ?? []}
+      disabled={disabled}
+      onDecide={(decisions) => void decide(decisions)}
+      onAnswer={(id, text, choices) => void answer(id, text, choices)}
+      onStop={(id) => void stop(id)}
+    />
+  ) : (
+    <p className="tr-muted">
+      {reviewing ? 'Waiting for the first finding…' : 'No finding.'}
+    </p>
+  )
+  const empty = (
+    <p className="tr-empty tr-muted">
+      {reviewing
+        ? 'The review is running: findings appear here as they land.'
+        : 'No findings.'}
+    </p>
+  )
 
   return (
     <div className="tr-app">
@@ -271,7 +413,7 @@ export default function App() {
         onToggle={(event) => {
           const next = event.currentTarget.open
           setSummaryOpen(next)
-          writeSummaryOpen(next)
+          writeStored(SUMMARY_KEY, next ? 'open' : 'closed')
         }}
       >
         <summary>Summary</summary>
@@ -310,50 +452,70 @@ export default function App() {
           </button>
         </p>
       )}
-      <div className="tr-main">
-        <nav className="tr-list-pane" aria-label="Findings">
-          {ordered.length ? (
-            <>
-              <FindingList
-                groups={groups}
+      <div className={`tr-main ${shown === 'diff' ? 'tr-main--diff' : ''}`}>
+        {shown === 'diff' ? (
+          <nav key="files" className="tr-list-pane" aria-label="Files">
+            {viewToggle}
+            {!ordered.length && empty}
+            {placement ? (
+              <FileList
+                sections={placement.sections}
+                stats={stats}
+                reading={reading}
+                onPick={(index) => scrollTo(fileId(index), 'start')}
+              />
+            ) : (
+              <p className="tr-muted tr-pad">Loading the diff…</p>
+            )}
+            {ordered.length > 0 && keys}
+          </nav>
+        ) : (
+          <nav key="findings" className="tr-list-pane" aria-label="Findings">
+            {viewToggle}
+            {ordered.length ? (
+              <>
+                <FindingList
+                  groups={groups}
+                  records={records}
+                  cursor={cursor}
+                  openId={openId}
+                  selected={selected}
+                  onOpen={open}
+                  onToggle={toggle}
+                />
+                {keys}
+              </>
+            ) : (
+              empty
+            )}
+          </nav>
+        )}
+        {shown === 'diff' && (
+          <section
+            key="diff"
+            ref={setDiffPane}
+            className="tr-diff-pane"
+            aria-label="Diff"
+          >
+            {placement ? (
+              <DiffView
+                sections={placement.sections}
+                stats={stats}
                 records={records}
                 cursor={cursor}
-                openId={openId}
+                open={current}
                 selected={selected}
                 onOpen={open}
                 onToggle={toggle}
               />
-              <p className="tr-keys tr-muted">
-                j/k move · Enter open · x select · f fix ·{' '}
-                {canPost(review) ? 'p post · ' : ''}d drop · s skip
-              </p>
-            </>
-          ) : (
-            <p className="tr-empty tr-muted">
-              {reviewing
-                ? 'The review is running: findings appear here as they land.'
-                : 'No findings.'}
-            </p>
-          )}
-        </nav>
-        <main className="tr-detail-pane">
-          {current ? (
-            <FindingDetail
-              key={current.id}
-              review={review}
-              finding={current}
-              record={records[current.id]}
-              steps={payload?.runs[current.id] ?? []}
-              disabled={disabled}
-              onDecide={(decisions) => void decide(decisions)}
-              onAnswer={(id, text, choices) => void answer(id, text, choices)}
-              onStop={(id) => void stop(id)}
-            />
-          ) : (
-            <p className="tr-muted">
-              {reviewing ? 'Waiting for the first finding…' : 'No finding.'}
-            </p>
-          )}
+            ) : (
+              <p className="tr-muted tr-pad">Loading the diff…</p>
+            )}
+          </section>
+        )}
+        {/* Third child in both layouts, the diff's slot empty in the list: its drafts survive. */}
+        <main key="detail" className="tr-detail-pane">
+          {detail}
         </main>
       </div>
     </div>

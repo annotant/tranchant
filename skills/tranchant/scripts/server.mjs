@@ -6,6 +6,7 @@
 // time). It watches the review folder, its findings and its run files, and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
+// It computes the change's diff (/api/diff) once, with git, for the page's main view.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -15,6 +16,7 @@ import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { contentOf, oneLine, statusOf } from './lib/format.mjs'
 import { StoreRefusal, createStore, readProgress } from './lib/store.mjs'
@@ -188,6 +190,203 @@ async function currentHead() {
   }
 }
 
+/** The most MiB of diff the server reads from git and hands the page. */
+const MAX_DIFF_MIB = Number(process.env.TRANCHANT_MAX_DIFF_MIB ?? 32)
+const MAX_DIFF = MAX_DIFF_MIB * 1024 * 1024
+const GIT_TIMEOUT_MS = 30_000
+
+/** A diff the server cannot compute; the reason answers 409, the cause goes to stderr. */
+class DiffUnavailable extends Error {}
+
+/**
+ * One file of the change, as `git diff --numstat` counts it.
+ * @typedef {{ path: string, oldPath?: string, additions: number, deletions: number, binary: boolean }} DiffStat
+ */
+
+/**
+ * What `GET /api/diff` answers.
+ * @typedef {{ base: string, head: string, files: DiffStat[], diff: string }} DiffPayload
+ */
+
+/**
+ * The files of `git diff --numstat -z`: `added`, `deleted` and the path, tab
+ * separated; a rename has an empty path then the old and the new one; `-`
+ * counts a binary.
+ * @param {string} raw
+ * @returns {DiffStat[]}
+ */
+function parseNumstat(raw) {
+  const parts = raw.split('\0')
+  /** @type {DiffStat[]} */
+  const files = []
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i] ?? ''
+    const first = part.indexOf('\t')
+    const second = part.indexOf('\t', first + 1)
+    if (first === -1 || second === -1) continue
+    const added = part.slice(0, first)
+    const deleted = part.slice(first + 1, second)
+    let file = part.slice(second + 1)
+    let oldPath
+    if (file === '') {
+      oldPath = parts[++i]
+      file = parts[++i] ?? ''
+    }
+    const binary = added === '-'
+    files.push({
+      path: file,
+      ...(oldPath !== undefined && { oldPath }),
+      additions: binary ? 0 : Number(added),
+      deletions: binary ? 0 : Number(deleted),
+      binary,
+    })
+  }
+  return files
+}
+
+/** @param {unknown} error */
+const stderrOf = (error) =>
+  error && typeof error === 'object' && 'stderr' in error ? String(error.stderr) : ''
+
+/**
+ * Why git failed, in one line: the size or time limit it hit, else its
+ * `fatal:` or `error:` line (a `warning:` may come first), else its first line.
+ * @param {unknown} error
+ */
+function gitWords(error) {
+  if (errorCode(error) === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    return `the diff is larger than ${MAX_DIFF_MIB} MiB`
+  }
+  if (error && typeof error === 'object' && 'killed' in error && error.killed) {
+    return `git took longer than ${GIT_TIMEOUT_MS / 1000} s`
+  }
+  const lines = stderrOf(error)
+    .split('\n')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+  const line = lines.find((entry) => /^(?:fatal|error): /.test(entry)) ?? lines[0]
+  if (line) return line.replace(/^(?:fatal|error): /, '')
+  return (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? ''
+}
+
+/** Runs git in the project, the diff's size allowed. @param {string[]} args */
+const git = (args) =>
+  gitExec('git', ['-C', project, ...args], {
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: MAX_DIFF,
+  })
+
+/**
+ * The commit `revision` names in the project, or the reason it cannot be had.
+ * @param {string} what `base` or `head`, for the reason.
+ * @param {string} revision
+ */
+async function commitOf(what, revision) {
+  // `base` is the producer's free text: one starting with `-` would be a git option.
+  if (revision.startsWith('-')) {
+    throw new DiffUnavailable(`${what} ${revision} is not a revision`)
+  }
+  try {
+    const { stdout } = await git([
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `${revision}^{commit}`,
+    ])
+    return stdout.trim()
+  } catch (error) {
+    // `--verify --quiet` exits 1, saying nothing, when the commit is not there.
+    const missing =
+      error && typeof error === 'object' && 'code' in error && error.code === 1
+    if (missing && !stderrOf(error).trim()) {
+      throw new DiffUnavailable(
+        `${what} ${revision} is not in ${project}: fetch it first`,
+      )
+    }
+    throw new DiffUnavailable(`git rev-parse ${revision} failed: ${gitWords(error)}`, {
+      cause: error,
+    })
+  }
+}
+
+/**
+ * The unified diff of the change and its files: the MR's own diff refs when
+ * the review has them, else what reached `headSha` since `base`.
+ * @returns {Promise<DiffPayload>}
+ */
+async function computeDiff() {
+  const refs = review.mr?.diffRefs
+  if (
+    refs &&
+    !refs.headSha.startsWith(review.headSha) &&
+    !review.headSha.startsWith(refs.headSha)
+  ) {
+    throw new DiffUnavailable(
+      `the MR's diff refs are at ${refs.headSha}, the review at ${review.headSha}`,
+    )
+  }
+  const base = refs ? refs.baseSha : review.base
+  const head = refs ? refs.headSha : review.headSha
+  try {
+    await git(['rev-parse', '--is-inside-work-tree'])
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') {
+      throw new DiffUnavailable('git is not installed', { cause: error })
+    }
+    const words = gitWords(error)
+    throw new DiffUnavailable(
+      /not a git repository/.test(words)
+        ? `${project} is not a git repository`
+        : `git cannot read ${project}: ${words}`,
+      { cause: error },
+    )
+  }
+  const baseSha = await commitOf('base', base)
+  const headSha = await commitOf('head', head)
+  // Shas only from here: nothing the producer wrote reaches git as an argument.
+  const range = refs ? `${baseSha}..${headSha}` : `${baseSha}...${headSha}`
+  // --relative: the findings' paths are relative to `project`, which may be a
+  // folder of the repository.
+  const flags = ['--no-color', '--no-ext-diff', '--relative']
+  let patch
+  let numstat
+  try {
+    ;[patch, numstat] = await Promise.all([
+      git([
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        ...flags,
+        '--src-prefix=a/',
+        '--dst-prefix=b/',
+        range,
+        '--',
+      ]),
+      git(['diff', ...flags, '--numstat', '-z', range, '--']),
+    ])
+  } catch (error) {
+    throw new DiffUnavailable(`git diff ${base}...${head} failed: ${gitWords(error)}`, {
+      cause: error,
+    })
+  }
+  if (!patch.stdout.trim()) {
+    throw new DiffUnavailable(`the diff of ${base}...${head} is empty`)
+  }
+  return { base, head, files: parseNumstat(numstat.stdout), diff: patch.stdout }
+}
+
+/** @type {Promise<DiffPayload> | undefined} */
+let diff
+
+/** The diff, computed once: the review's head never changes. A failure is tried again. */
+function diffOnce() {
+  diff ??= computeDiff().catch((error) => {
+    diff = undefined
+    throw error
+  })
+  return diff
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`)
   // A page of another site may send a request it cannot read the answer of:
@@ -234,6 +433,20 @@ async function handle(req, res) {
       runs,
       head: { reviewed: latest.headSha, current },
     })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/diff') {
+    try {
+      return send(res, 200, await diffOnce())
+    } catch (error) {
+      if (!(error instanceof DiffUnavailable)) throw error
+      // git's whole stderr, warnings included: the reason keeps one line of it.
+      const detail = stderrOf(error.cause).trim()
+      console.error(
+        `tranchant server: /api/diff: ${error.message}${detail && `\n${detail}`}`,
+      )
+      return send(res, 409, { error: error.message })
+    }
   }
 
   const run = /^\/api\/runs\/([^/]+)$/.exec(url.pathname)?.[1]
