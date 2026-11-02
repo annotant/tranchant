@@ -16,5 +16,5 @@ finish.
   `<Component>Props`, declared in the same file.
 - Styles live in `src/cart/cart.css`, with the colours and spacing of its
   `:root` custom properties; class names are `block__element`.
-- Tests sit next to what they test, as `<name>.test.ts(x)`, and query the
+- Tests sit next to what they test, as `<name>.spec.ts(x)`, and query the
   page by role.

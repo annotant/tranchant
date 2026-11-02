@@ -6,6 +6,9 @@ A small shopping cart (React 19, TypeScript, Vitest), in two trees:
 - `change/`: the files `feature/cart-discounts` adds or changes, copied over
   the base. `diff -r base change` shows the change.
 
+The app's tests are `*.spec.ts(x)`, like the page's: `claude plugin test`
+runs every `*.test.ts(x)` under the plugin as a hooks test.
+
 `node test/fixtures/playground.mjs --front-end` builds the repository and
 writes `.playground/review.json`, the review of the planted defects
 (`test/fixtures/review-front-end.json`, pointed at the playground), and
@@ -26,12 +29,12 @@ its file, its line and its marks.
 | `types-1`         | types         | `src/cart/discount.ts`       | An `any` hiding a bug: `data.percentage` where the response has `percent`                   |
 | `accessibility-1` | accessibility | `src/cart/DiscountForm.tsx`  | An unlabelled control: the code field has a placeholder and no label                        |
 | `security-1`      | security      | `src/cart/DiscountForm.tsx`  | User text through `innerHTML`: the typed (or `?code=`) code set as HTML                     |
-| `tests-1`         | tests         | `src/cart/DiscountForm.test.tsx` | An assertion that cannot fail: `toBeDefined()` on a `queryByText` result               |
+| `tests-1`         | tests         | `src/cart/DiscountForm.spec.tsx` | An assertion that cannot fail: `toBeDefined()` on a `queryByText` result               |
 | `conventions-1`   | conventions   | `src/cart/Cart.tsx`          | A rule of the project's `CLAUDE.md` broken: the discount amount is formatted by hand        |
 
 The other files of the change are clean: `src/api/types.ts`,
 `src/cart/types.ts`, `src/cart/total.ts`, `src/cart/useCart.ts`,
-`src/cart/cart.css` and `src/cart/discount.test.ts`. A finding on one of
+`src/cart/cart.css` and `src/cart/discount.spec.ts`. A finding on one of
 them is a false positive. A lens may add a true finding next to the planted
 ones (the discounted total is untested, for instance): it is not wrong, but
 it is not in the key either.

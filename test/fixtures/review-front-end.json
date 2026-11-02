@@ -8,9 +8,9 @@
   "headSha": "8a1c3d4f2b5e9f6d4c3a4e8bc7d1f0a2e5b6c7d8",
   "ownership": "ours",
   "title": "Discount codes in the cart",
-  "summary": "## Change Map\n\n- `src/cart/discount.ts`: `applyDiscount` posts a code and the subtotal to `/api/discounts`.\n- `src/cart/DiscountForm.tsx`: the form that applies a code, prefilled from `?code=` in the page’s URL.\n- `src/cart/Cart.tsx`: shows the discount line and the discounted total.\n- `src/cart/total.ts`, `src/cart/types.ts`, `src/api/types.ts`: the discount’s type, response type and arithmetic.\n- `src/cart/discount.test.ts`, `src/cart/DiscountForm.test.tsx`: the new tests.\n\n## Summary\n\nThe feature cannot work as shipped: the response field is misread behind an `any`, the memoised total ignores the discount, and a refused code shows nothing, which its test does not catch. The code field lacks a label, and the applied note renders the typed code as HTML.",
+  "summary": "## Change Map\n\n- `src/cart/discount.ts`: `applyDiscount` posts a code and the subtotal to `/api/discounts`.\n- `src/cart/DiscountForm.tsx`: the form that applies a code, prefilled from `?code=` in the page’s URL.\n- `src/cart/Cart.tsx`: shows the discount line and the discounted total.\n- `src/cart/total.ts`, `src/cart/types.ts`, `src/api/types.ts`: the discount’s type, response type and arithmetic.\n- `src/cart/discount.spec.ts`, `src/cart/DiscountForm.spec.tsx`: the new tests.\n\n## Summary\n\nThe feature cannot work as shipped: the response field is misread behind an `any`, the memoised total ignores the discount, and a refused code shows nothing, which its test does not catch. The code field lacks a label, and the applied note renders the typed code as HTML.",
   "strengths": [
-    "`discount.test.ts` covers the request shape and a refused code with `rejects`, the right way.",
+    "`discount.spec.ts` covers the request shape and a refused code with `rejects`, the right way.",
     "Integer cents all the way: `discountAmount` rounds once, in `total.ts`.",
     "`aria-busy` on the form while the code is checked, and a guard against a double submit."
   ],
@@ -232,7 +232,7 @@
       "bucket": "auto",
       "tag": "concern",
       "title": "The refused-code test cannot fail",
-      "path": "src/cart/DiscountForm.test.tsx",
+      "path": "src/cart/DiscountForm.spec.tsx",
       "line": 30,
       "excerpt": {
         "startLine": 25,
