@@ -9,7 +9,9 @@ import {
   counts,
   type DecisionInput,
   groupFindings,
+  isReviewing,
   orderedFindings,
+  plural,
   type Review,
   stateOf,
 } from './domain'
@@ -107,6 +109,16 @@ function Header({
               title="HEAD is not the commit reviewed; fixes run on the current files"
             >
               checkout moved
+            </span>
+          )}
+          {isReviewing(review) && (
+            <span
+              className="tr-chip tr-chip--live"
+              role="status"
+              aria-label="Review in progress"
+            >
+              <span className="tr-spinner" aria-hidden="true" />
+              review in progress · {plural(review.findings.length, 'finding')} so far
             </span>
           )}
         </div>
@@ -348,6 +360,7 @@ export default function App() {
       }}
     />
   )
+  const reviewing = isReviewing(review)
   const detail = current ? (
     <FindingDetail
       key={current.id}
@@ -361,7 +374,16 @@ export default function App() {
       onStop={(id) => void stop(id)}
     />
   ) : (
-    <p className="tr-muted">No finding.</p>
+    <p className="tr-muted">
+      {reviewing ? 'Waiting for the first finding…' : 'No finding.'}
+    </p>
+  )
+  const empty = (
+    <p className="tr-empty tr-muted">
+      {reviewing
+        ? 'The review is running: findings appear here as they land.'
+        : 'No findings.'}
+    </p>
   )
 
   return (
@@ -422,6 +444,7 @@ export default function App() {
         {shown === 'diff' ? (
           <nav key="files" className="tr-list-pane" aria-label="Files">
             {viewToggle}
+            {!ordered.length && empty}
             {placement ? (
               <FileList
                 sections={placement.sections}
@@ -431,21 +454,27 @@ export default function App() {
             ) : (
               <p className="tr-muted tr-pad">Loading the diff…</p>
             )}
-            {keys}
+            {ordered.length > 0 && keys}
           </nav>
         ) : (
           <nav key="findings" className="tr-list-pane" aria-label="Findings">
             {viewToggle}
-            <FindingList
-              groups={groups}
-              records={records}
-              cursor={cursor}
-              openId={openId}
-              selected={selected}
-              onOpen={open}
-              onToggle={toggle}
-            />
-            {keys}
+            {ordered.length ? (
+              <>
+                <FindingList
+                  groups={groups}
+                  records={records}
+                  cursor={cursor}
+                  openId={openId}
+                  selected={selected}
+                  onOpen={open}
+                  onToggle={toggle}
+                />
+                {keys}
+              </>
+            ) : (
+              empty
+            )}
           </nav>
         )}
         {shown === 'diff' && (

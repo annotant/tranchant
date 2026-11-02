@@ -3,10 +3,10 @@
 // Serves the page and its API on a free port of 127.0.0.1, and prints one
 // line per decision the plugin's hooks act on: FIX, STOP, DROPPED, SKIPPED,
 // and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
-// time). It watches the review folder and its run files, and pushes
-// `changed` to the pages on /api/events: they reload only then. It watches
-// the page's bundle too, and pushes `page` when a dev build replaces it. It
-// computes the change's diff (/api/diff) once, with git, for the page's main view.
+// time). It watches the review folder, its findings and its run files, and
+// pushes `changed` to the pages on /api/events: they reload only then. It
+// watches the page's bundle too, and pushes `page` when a dev build replaces it.
+// It computes the change's diff (/api/diff) once, with git, for the page's main view.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -18,7 +18,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
-import { oneLine } from './lib/format.mjs'
+import { contentOf, oneLine, statusOf } from './lib/format.mjs'
 import { StoreRefusal, createStore, readProgress } from './lib/store.mjs'
 
 /** @typedef {import('./lib/format.mjs').Entry} Entry */
@@ -60,6 +60,7 @@ const port = Number(process.env.TRANCHANT_PORT ?? 0)
 const pollMs = Number(process.env.TRANCHANT_POLL_MS ?? 5000)
 const { project } = review
 const runsDir = path.join(dir, 'runs')
+const findingsDir = path.join(dir, 'findings')
 
 /** The server's own origins, once it listens: the page's requests carry one of them. */
 const origins = new Set()
@@ -353,16 +354,17 @@ async function handle(req, res) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
-    const [{ decisions }, runs, current] = await Promise.all([
+    // Read anew: findings land and the status flips while the review runs.
+    const [{ review: latest, decisions }, runs, current] = await Promise.all([
       store.readAll(),
       store.runs(),
       currentHead(),
     ])
     return send(res, 200, {
-      review,
+      review: latest,
       findings: decisions.findings,
       runs,
-      head: { reviewed: review.headSha, current },
+      head: { reviewed: latest.headSha, current },
     })
   }
 
@@ -524,19 +526,29 @@ function listen(req, res) {
 }
 
 /**
- * By finding id, what it was at the last read: its decisions, and the size
- * and time of its run files.
+ * By finding id, what it was at the last read: its content, its decisions,
+ * and the size and time of its run files.
  * @type {Map<string, string>}
  */
 const fingerprints = new Map()
+/** The review's status at the last read. @type {string | undefined} */
+let statusSeen
 
-/** The ids of the findings whose decisions or run files changed since the last read. */
-async function changedIds() {
+/**
+ * The ids of the findings that landed, or whose decisions or run files
+ * changed, since the last read; and whether the review's status did.
+ */
+async function changes() {
   /** @type {Map<string, string>} */
   const next = new Map()
+  const latest = await store.readReview().catch(() => undefined)
+  for (const finding of latest?.findings ?? []) {
+    const hash = createHash('sha1').update(contentOf(finding)).digest('hex')
+    next.set(finding.id, `finding ${hash}`)
+  }
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
-    next.set(id, JSON.stringify(entry))
+    next.set(id, `${next.get(id) ?? ''}\n${JSON.stringify(entry)}`)
   }
   const files = await readdir(runsDir).catch(() => [])
   for (const name of files) {
@@ -554,7 +566,10 @@ async function changedIds() {
   ]
   fingerprints.clear()
   for (const [id, mark] of next) fingerprints.set(id, mark)
-  return ids
+  const status = latest ? statusOf(latest) : statusSeen
+  const statusChanged = status !== statusSeen
+  statusSeen = status
+  return { ids, statusChanged }
 }
 
 /**
@@ -562,8 +577,8 @@ async function changedIds() {
  * @param {boolean} first
  */
 async function refresh(first) {
-  const ids = await changedIds()
-  if (first || !ids.length) return
+  const { ids, statusChanged } = await changes()
+  if (first || (!ids.length && !statusChanged)) return
   const event = `event: changed\ndata: ${JSON.stringify({ ids })}\n\n`
   for (const res of listeners) res.write(event)
 }
@@ -586,6 +601,8 @@ let batch
 function changeSeen() {
   batch ??= setTimeout(() => {
     batch = undefined
+    // A folder made since (findings/ by add.mjs) is watched from now on.
+    watchFolders()
     void refreshNext()
   }, BATCH_MS)
 }
@@ -645,6 +662,7 @@ function watchFolders() {
   const folders = [
     [dir, changeSeen],
     [runsDir, changeSeen],
+    [findingsDir, changeSeen],
     [path.dirname(PAGE), pageChanged],
   ]
   for (const [folder, onChange] of folders) {
@@ -728,8 +746,9 @@ server.listen(port, '127.0.0.1', async () => {
   const listening = typeof address === 'object' && address ? address.port : port
   for (const host of ['127.0.0.1', 'localhost'])
     origins.add(`http://${host}:${listening}`)
-  // Made before the first run: a folder must be there to be watched.
+  // Made before the first run and the first finding: a folder must be there to be watched.
   await mkdir(runsDir, { recursive: true })
+  await mkdir(findingsDir, { recursive: true })
   await refreshNext(true)
   console.log(
     `READY http://127.0.0.1:${listening} review=${review.id} project=${project}`,

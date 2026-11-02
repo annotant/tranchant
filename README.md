@@ -27,7 +27,10 @@ wrong.
   [the review file](docs/review-file.md).
 - **A producer writes the review.** In the Qohash setup, `combined-review
 --tranchant` runs the reviewers, verifies the findings, and hands the
-  result to Tranchant. Any tool that writes the review file works.
+  result to Tranchant. Any tool that writes the review file works. A review
+  can also open before its findings: the producer opens it `reviewing`, the
+  page shows it in progress, and each finding appears as the producer adds
+  it, until it marks the review complete.
 - **Ours or theirs.** On your own branch, a finding is fixed in place, with
   the context you add. On someone else's MR, a finding becomes a comment you
   approve as written or edit first; you can still fix it locally when you

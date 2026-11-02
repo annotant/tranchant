@@ -10,7 +10,7 @@ async function renderApp(data = payload()) {
   render(<App />)
   await screen.findByRole('heading', { name: 'Classification overview page' })
   // The list view, once the page learnt there is no diff.
-  await screen.findByRole('listbox', { name: 'Findings' })
+  await screen.findByRole('navigation', { name: 'Findings' })
   return server
 }
 
