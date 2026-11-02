@@ -1,0 +1,65 @@
+skills/tranchant/page/test/batch.spec.tsx
+  s_4e6f577b529ff9::t_16d987324f1af6 13
+skills/tranchant/scripts/lib/format.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 12-24,185,212,219,559-575,604-606,610,630-632,652-669,674,696,700-756
+  s_4e6f577b529ff9::t_16b6293103969b 757
+skills/tranchant/scripts/open.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 4-10,12,16-24,26-28,74-89,91,93,96,98-100,102-117,120-122
+skills/tranchant/SKILL.md
+  s_4e6f577b529ff9::t_bf267019f073b5 56-61
+skills/tranchant/scripts/lib/store.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 1-9,19,23,25-27,65-74,168-170,172-177,186,188-216,218-277,413,420-463
+  s_4e6f577b529ff9::t_e110da8c2230ac 464
+test/add.test.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 1-149
+skills/tranchant/page/src/styles.ts
+  s_4e6f577b529ff9::t_bf267019f073b5 83,115-116
+README.md
+  s_4e6f577b529ff9::t_bf267019f073b5 30-33
+skills/tranchant/scripts/add.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 1-65
+test/open.test.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 3,7-8,23,29-30,33-49,58-134,173-177
+test/format.test.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 10,12-13,18-20,87-151
+  s_4e6f577b529ff9::t_b0522344418d87 152
+skills/tranchant/page/src/App.tsx
+  s_4e6f577b529ff9::t_bf267019f073b5 12,14,114-123
+  s_4e6f577b529ff9::t_319b7bf0d876cc 363,377-386,447,457,462-477
+docs/review-file.md
+  s_4e6f577b529ff9::t_319b7bf0d876cc 311
+  s_4e6f577b529ff9::t_bf267019f073b5 6-12,29-39,53,71-81,149,283-284,305-310,312-316,326-338
+skills/tranchant/page/src/domain.ts
+  s_4e6f577b529ff9::t_bf267019f073b5 7-8,70-71,98-99,234-239
+  s_4e6f577b529ff9::t_64b3e06ce61abd 240
+skills/tranchant/scripts/server.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 6-8,21,63,357-358,364,367,529-530,534-535,537-541,544-548,551,569-572,580-581,604-605,665,749,751
+  s_4e6f577b529ff9::t_319b7bf0d876cc 9
+skills/tranchant/page/src/BatchBar.tsx
+  s_4e6f577b529ff9::t_bf267019f073b5 9
+skills/tranchant/page/test/app.spec.tsx
+  s_4e6f577b529ff9::t_16d987324f1af6 23
+  s_4e6f577b529ff9::t_bf267019f073b5 240-316
+  s_4e6f577b529ff9::t_1ff0485f1c1dac 317
+skills/tranchant/scripts/complete.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 1-23
+test/server.test.mjs
+  s_4e6f577b529ff9::t_bf267019f073b5 149-150,152,154,161-162,172-173,515-564
+  s_4e6f577b529ff9::t_e10baf1a9a08ff 565-567
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7b7e3e3ccafedad148a9a7da47cb385c635cce9a",
+  "prompts": {},
+  "sessions": {
+    "s_4e6f577b529ff9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "369febc2-8b22-40a4-8070-f2f763bc49ec",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
