@@ -70,7 +70,7 @@ export function segments(text: string, marks: readonly Mark[]): Segment[] {
 
 const isColumnMark = (mark: Mark) => mark.from !== undefined || mark.to !== undefined
 
-const NO_MARKS: readonly Mark[] = []
+export const NO_MARKS: readonly Mark[] = []
 
 // In a hunk every row carries a sign column, so marks keep their columns.
 const signOf = (row: Row) =>
@@ -90,13 +90,13 @@ interface RowsProps {
   anchor?: number | undefined
   /** Whether the rows carry a sign column: a hunk's do. */
   signed: boolean
-  /** What to show under a numbered row: the diff view's markers. */
-  under?: ((line: number) => ReactNode) | undefined
+  /** By new-side line, what to show under its row: the diff view's markers. */
+  under?: ReadonlyMap<number, ReactNode> | undefined
 }
 
 // No syntax highlighting, deliberately: the marks are the only colour the
 // code carries, so the eye lands on them.
-export function CodeRows({ rows, marks = NO_MARKS, anchor, signed, under }: RowsProps) {
+function CodeRows({ rows, marks = NO_MARKS, anchor, signed, under }: RowsProps) {
   return (
     <>
       {rows.map((row, index) => {
@@ -145,11 +145,34 @@ export function CodeRows({ rows, marks = NO_MARKS, anchor, signed, under }: Rows
                   <span className="tr-callout-body">{mark.note}</span>
                 </div>
               ))}
-            {row.number !== undefined && under?.(row.number)}
+            {row.number !== undefined && under?.get(row.number)}
           </div>
         )
       })}
     </>
+  )
+}
+
+type BlockProps = RowsProps & {
+  /** The gutter's width; the rows' own by default, a file's to align its hunks. */
+  digits?: number
+  label?: string | undefined
+}
+
+/** Rows in their frame: `signed` sets the sign column and the gutter together. */
+export function CodeBlock({ rows, signed, digits, label, ...rest }: BlockProps) {
+  return (
+    <div
+      className={`tr-code ${signed ? 'tr-code--hunk' : ''}`}
+      style={{
+        '--tr-digits': `${digits ?? digitsOf(rows)}ch`,
+        '--tr-sign': signed ? '1ch' : '0ch',
+      }}
+      aria-label={label}
+      role="figure"
+    >
+      <CodeRows rows={rows} signed={signed} {...rest} />
+    </div>
   )
 }
 
@@ -163,15 +186,13 @@ interface Props {
 }
 
 export function Excerpt({ excerpt, hunk, marks, anchor, label }: Props) {
-  const rows = hunk ? parseHunk(hunk) : plainRows(excerpt)
   return (
-    <div
-      className={`tr-code ${hunk ? 'tr-code--hunk' : ''}`}
-      style={{ '--tr-digits': `${digitsOf(rows)}ch`, '--tr-sign': hunk ? '1ch' : '0ch' }}
-      aria-label={label}
-      role="figure"
-    >
-      <CodeRows rows={rows} marks={marks} anchor={anchor} signed={!!hunk} />
-    </div>
+    <CodeBlock
+      rows={hunk ? parseHunk(hunk) : plainRows(excerpt)}
+      signed={!!hunk}
+      marks={marks}
+      anchor={anchor}
+      label={label}
+    />
   )
 }

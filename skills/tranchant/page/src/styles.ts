@@ -195,6 +195,8 @@ dl { margin: 0; }
 .tr-files { flex: 1; overflow: auto; margin: 0; padding: 4px 0; list-style: none; }
 .tr-file-item { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 5px 12px; border: 0; background: none; text-align: left; cursor: pointer; }
 .tr-file-item:hover { background: var(--tr-bg-2); }
+.tr-file-item--reading { background: var(--tr-accent-weak); box-shadow: inset 3px 0 0 var(--tr-accent); }
+.tr-file-item--reading .tr-file-base { font-weight: 600; }
 .tr-file-name { display: flex; min-width: 0; font-family: var(--tr-mono); font-size: 12px; }
 .tr-file-dir { color: var(--tr-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-file-base { white-space: nowrap; }

@@ -14,11 +14,21 @@ export const RETRY_MS = 5000
 // The server pushes its changes: this reload only catches what a dropped stream missed.
 const POLL_MS = 30_000
 
+/** A request the server answered with an error status, in its own words. */
+class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (!headers.has('content-type')) headers.set('content-type', 'application/json')
   const response = await fetch(url, { ...init, headers })
-  if (!response.ok) throw new Error(await failure(response))
+  if (!response.ok) throw new HttpError(await failure(response), response.status)
   // The server is ours: its JSON has the shape the caller asks for.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T)
@@ -41,7 +51,7 @@ async function failure(response: Response): Promise<string> {
 const fetchReview = () => request<ReviewPayload>(REVIEW)
 
 /** One file of the change, as `/api/diff` counts it. */
-interface DiffStat {
+export interface DiffStat {
   path: string
   oldPath?: string
   additions: number
@@ -172,45 +182,50 @@ export function useReview() {
 export type DiffState =
   | { status: 'loading' }
   | { status: 'ready'; payload: DiffPayload }
-  | { status: 'unavailable'; reason: string }
+  /** `retrying`: the server did not answer, or failed; else it refused (409) and says why. */
+  | { status: 'unavailable'; reason: string; retrying: boolean }
 
 /**
- * The change's diff at `/api/diff`, read once per head the review shows:
- * `unavailable` with the server's reason (no repository, a commit not
- * fetched) when it answers 409, or when it does not answer, in which case
- * the page asks again once it is reachable.
+ * The change's diff at `/api/diff`, read once per head the review shows. A
+ * refusal (409: no repository, a commit not fetched) is final until `retry`;
+ * any other failure is asked again every RETRY_MS while the server answers,
+ * and once it answers again.
  */
-export function useDiff(head: string | undefined, reachable: boolean): DiffState {
+export function useDiff(head: string | undefined, reachable: boolean) {
   const [state, setState] = useState<DiffState>({ status: 'loading' })
-  const asked = useRef<string>(undefined)
+  // The head the state holds the final word on: its diff, or its refusal.
+  const [settled, setSettled] = useState<string>()
 
   useEffect(() => {
-    if (!head || !reachable || asked.current === head) return undefined
-    asked.current = head
+    if (!head || !reachable || settled === head) return undefined
     let disposed = false
-    let settled = false
+    let again: ReturnType<typeof setTimeout> | undefined
     async function load() {
       try {
         const payload = await fetchDiff()
-        settled = true
-        if (!disposed) setState({ status: 'ready', payload })
-      } catch (error) {
-        settled = true
         if (disposed) return
-        asked.current = undefined
+        setState({ status: 'ready', payload })
+        setSettled(head)
+      } catch (error) {
+        if (disposed) return
+        const refused = error instanceof HttpError && error.status === 409
         setState({
           status: 'unavailable',
           reason: error instanceof Error ? error.message : 'the diff could not be read',
+          retrying: !refused,
         })
+        if (refused) setSettled(head)
+        else again = setTimeout(() => void load(), RETRY_MS)
       }
     }
     void load()
     return () => {
       disposed = true
-      // A request cut short answers nothing: ask again next time.
-      if (!settled) asked.current = undefined
+      clearTimeout(again)
     }
-  }, [head, reachable])
+  }, [head, reachable, settled])
 
-  return state
+  const retry = useCallback(() => setSettled(undefined), [])
+
+  return { diff: state, retry }
 }

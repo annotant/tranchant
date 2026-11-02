@@ -207,8 +207,9 @@ export const STACKED: Finding = {
  * The change's diff, as `/api/diff` hands it: usePeople.ts shows f-01's line
  * with its excerpt text, guard.ts f-02's (and STACKED's), pager.ts f-05's;
  * Drawer.tsx is touched far from f-04's line; usePeople.test.ts (f-03) is not
- * in it at all. Then a rename, a binary and a deleted file. Its first file is
- * not the list's first finding: the two views open on different findings.
+ * in it at all. Then a rename, a binary and a deleted file. Its first file
+ * holds f-01, not the list's first finding (f-02): the two views open on
+ * different findings.
  */
 export const DIFF = `${[
   'diff --git a/src/people/usePeople.ts b/src/people/usePeople.ts',
@@ -385,17 +386,27 @@ export function decisionsOf(post: Post | undefined): DecisionInput[] {
   return Array.isArray(body.decisions) ? body.decisions.filter(isDecision) : []
 }
 
+/** What the fake server answers on `/api/diff`: a diff, or an error status and its words. */
+type DiffAnswer = DiffPayload | { status: number; error: string }
+
+const NOT_A_REPOSITORY: DiffAnswer = {
+  status: 409,
+  error: '/Users/me/dev/dashboard-ui is not a git repository',
+}
+
 /**
  * Stands in for the server: serves `payload`, records each POST, answers
- * `applied` for every decision, and `diff` on `/api/diff` (409, as when the
- * project is no repository, without one). `down()` makes every request fail,
- * as when the session ended; `up()` brings it back.
+ * `applied` for every decision, and on `/api/diff` the `diff` given, or a
+ * 409 "not a git repository" when none is; `answerDiff` changes it.
+ * `down()` makes every request fail, as when the session ended; `up()`
+ * brings it back.
  */
 export function fakeServer(
   initial: ReviewPayload,
   histories: Record<string, Step[]> = {},
-  diff?: DiffPayload,
+  diff: DiffAnswer = NOT_A_REPOSITORY,
 ) {
+  let diffAnswer = diff
   let current = initial
   let down = false
   const posts: Post[] = []
@@ -425,12 +436,9 @@ export function fakeServer(
       return Response.json(histories[decodeURIComponent(url.pathname.slice(10))] ?? [])
     }
     if (url.pathname === '/api/diff') {
-      return diff
-        ? Response.json(diff)
-        : Response.json(
-            { error: '/Users/me/dev/dashboard-ui is not a git repository' },
-            { status: 409 },
-          )
+      return 'diff' in diffAnswer
+        ? Response.json(diffAnswer)
+        : Response.json({ error: diffAnswer.error }, { status: diffAnswer.status })
     }
     return Response.json(current)
   })
@@ -440,6 +448,9 @@ export function fakeServer(
     fetch,
     set(next: ReviewPayload) {
       current = next
+    },
+    answerDiff(next: DiffAnswer) {
+      diffAnswer = next
     },
     down() {
       down = true

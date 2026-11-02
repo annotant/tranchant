@@ -1,9 +1,6 @@
-// The change's diff as the page shows it: parsed into files, hunks and rows,
-// every finding placed on its new-side line, on its file's header when the
-// diff does not show that line, or after the diff when it does not touch
-// the file at all.
+// The change's diff as the page shows it, and each finding's place in it.
 import { type Finding, type Mark, orderedFindings } from './domain'
-import { parseHunk, type Row } from './Excerpt'
+import { NO_MARKS, parseHunk, type Row } from './Excerpt'
 
 type FileStatus = 'added' | 'deleted' | 'modified' | 'renamed'
 
@@ -36,7 +33,8 @@ const ESCAPES: Record<string, string> = {
 
 /**
  * A path as git prints it: quoted, with C escapes and octal bytes, when it
- * holds a quote, a backslash or a control character.
+ * holds a quote, a backslash or a control character, or a non-ASCII byte
+ * unless the server passes `core.quotePath=false`.
  */
 function unquote(raw: string): string {
   if (!raw.startsWith('"') || !raw.endsWith('"') || raw.length < 2) return raw
@@ -97,6 +95,38 @@ function markerPath(rest: string): string | undefined {
   return text === '/dev/null' ? undefined : unquote(text).replace(PREFIX, '')
 }
 
+/** What each line before a file's first hunk says about it, by its prefix. */
+const FILE_LINES: [prefix: string, read: (file: DiffFile, rest: string) => void][] = [
+  // Git's own word: a new or deleted file that is binary or empty has no `---`/`+++`.
+  ['new file mode ', (file) => (file.status = 'added')],
+  ['deleted file mode ', (file) => (file.status = 'deleted')],
+  [
+    '--- ',
+    (file, rest) => {
+      if (markerPath(rest) === undefined) file.status = 'added'
+    },
+  ],
+  [
+    '+++ ',
+    (file, rest) => {
+      const path = markerPath(rest)
+      if (path === undefined) file.status = 'deleted'
+      else file.path = path
+    },
+  ],
+  [
+    'rename from ',
+    (file, rest) => {
+      file.oldPath = unquote(rest)
+      file.status = 'renamed'
+    },
+  ],
+  ['rename to ', (file, rest) => (file.path = unquote(rest))],
+  ['Binary files ', (file) => (file.binary = true)],
+]
+
+const FILE_HEADER = 'diff --git '
+
 /** A unified diff as git prints it, file by file, its hunks numbered on the new side. */
 export function parseDiff(text: string): DiffFile[] {
   const files: DiffFile[] = []
@@ -109,10 +139,10 @@ export function parseDiff(text: string): DiffFile[] {
     hunk = undefined
   }
   for (const line of text.split('\n')) {
-    if (line.startsWith('diff --git ')) {
+    if (line.startsWith(FILE_HEADER)) {
       endHunk()
       file = {
-        path: headerPath(line.slice(11)),
+        path: headerPath(line.slice(FILE_HEADER.length)),
         status: 'modified',
         binary: false,
         hunks: [],
@@ -126,19 +156,9 @@ export function parseDiff(text: string): DiffFile[] {
     } else if (hunk) {
       // A removed line may read `--- a/x`: inside a hunk it is content.
       hunk.push(line)
-    } else if (line.startsWith('--- ')) {
-      if (markerPath(line.slice(4)) === undefined) file.status = 'added'
-    } else if (line.startsWith('+++ ')) {
-      const path = markerPath(line.slice(4))
-      if (path === undefined) file.status = 'deleted'
-      else file.path = path
-    } else if (line.startsWith('rename from ')) {
-      file.oldPath = unquote(line.slice(12))
-      file.status = 'renamed'
-    } else if (line.startsWith('rename to ')) {
-      file.path = unquote(line.slice(10))
-    } else if (line.startsWith('Binary files ')) {
-      file.binary = true
+    } else {
+      const known = FILE_LINES.find(([prefix]) => line.startsWith(prefix))
+      known?.[1](file, line.slice(known[0].length))
     }
   }
   endHunk()
@@ -212,14 +232,14 @@ export function placeFindings(
   }
 }
 
-const NO_MARKS: readonly Mark[] = []
-
 /**
- * The finding's marks, when `rows` show the text its excerpt describes at
+ * The finding's marks, when `file` shows the text its excerpt describes at
  * its line: a review of another head would mark the wrong text.
  */
-export function marksInDiff(finding: Finding, rows: readonly Row[]): readonly Mark[] {
-  const row = rows.find((one) => one.number === finding.line)
+export function marksInDiff(finding: Finding, file: DiffFile): readonly Mark[] {
+  const row = file.hunks
+    .flatMap((hunk) => hunk.rows)
+    .find((one) => one.number === finding.line)
   const text = finding.excerpt.lines[finding.line - finding.excerpt.startLine]
   return row && text !== undefined && row.text === text
     ? (finding.marks ?? NO_MARKS)

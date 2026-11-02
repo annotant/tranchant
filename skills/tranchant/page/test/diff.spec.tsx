@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { marksInDiff, parseDiff, placeFindings } from '../src/diff'
-import { DiffView, FileList } from '../src/DiffView'
+import { DiffView, FileList, readingIndex } from '../src/DiffView'
 import type { Finding } from '../src/domain'
 import { DIFF, DIFF_FILES, FINDINGS, record, STACKED } from './fixture'
 
@@ -89,13 +89,56 @@ test('each finding lands on its line, stacked, or on the header when the diff la
   expect(ids(ordered)).toEqual(['f-01', 'f-02', 'f-06', 'f-05', 'f-04', 'f-03'])
 })
 
-test('marks show in the diff only where its text is the excerpt’s', () => {
+test('marks show in the diff only where its text is the excerpt’s, in any hunk of the file', () => {
   const files = parseDiff(DIFF)
-  const people = files[0]!.hunks[0]!.rows
+  const people = files[0]!
   expect(marksInDiff(FINDINGS[0]!, people)).toBe(FINDINGS[0]!.marks)
   const moved = { ...FINDINGS[0]!, excerpt: { startLine: 42, lines: ['other text'] } }
   expect(marksInDiff(moved, people)).toEqual([])
-  expect(marksInDiff(FINDINGS[0]!, files[1]!.hunks[0]!.rows)).toEqual([])
+  expect(marksInDiff(FINDINGS[0]!, files[1]!)).toEqual([])
+  // Its line in a second hunk of the file: the marks still show.
+  const split = parseDiff(
+    [
+      'diff --git a/src/people/usePeople.ts b/src/people/usePeople.ts',
+      '--- a/src/people/usePeople.ts',
+      '+++ b/src/people/usePeople.ts',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+      '@@ -41,3 +41,3 @@',
+      '   const people = query.data ?? []',
+      '-  const rows = people',
+      '+  const rows = people.filter((p) => p.tenantId === tenantId)',
+      '   if (!rows.length) {',
+    ].join('\n'),
+  )[0]!
+  expect(marksInDiff(FINDINGS[0]!, split)).toBe(FINDINGS[0]!.marks)
+})
+
+test('a new or deleted file with no ---/+++ lines takes its status from git’s mode line', () => {
+  const files = parseDiff(
+    [
+      'diff --git "a/img/say \\"hi\\".png" "b/img/say \\"hi\\".png"',
+      'new file mode 100644',
+      'index 0000000..bdc955b',
+      'Binary files /dev/null and "b/img/say \\"hi\\".png" differ',
+      'diff --git a/empty.txt b/empty.txt',
+      'deleted file mode 100644',
+      'index e69de29..0000000',
+    ].join('\n'),
+  )
+  expect(files.map((file) => [file.path, file.status, file.binary])).toEqual([
+    ['img/say "hi".png', 'added', true],
+    ['empty.txt', 'deleted', false],
+  ])
+})
+
+test('the file being read is the last whose top reached the pane’s, the last one at the end', () => {
+  expect(readingIndex([], 100, false)).toBe(0)
+  expect(readingIndex([100, 600, 1400], 100, false)).toBe(0)
+  expect(readingIndex([-500, 103, 900], 100, false)).toBe(1)
+  expect(readingIndex([-900, -300, 50], 100, false)).toBe(2)
+  expect(readingIndex([-900, -300, 400], 100, true)).toBe(2)
 })
 
 test('the view draws markers under their lines, notes on the header, and the open finding’s marks', () => {
@@ -158,7 +201,9 @@ test('the view draws markers under their lines, notes on the header, and the ope
 test('the file list counts each file’s findings and shows its stats', () => {
   const placement = placeFindings(parseDiff(DIFF), [...FINDINGS, STACKED])
   const onPick = vi.fn()
-  render(<FileList sections={placement.sections} stats={stats} onPick={onPick} />)
+  render(
+    <FileList sections={placement.sections} stats={stats} reading={1} onPick={onPick} />,
+  )
   const items = screen.getAllByRole('button')
   expect(items).toHaveLength(8)
   expect(items[0]?.textContent).toContain('usePeople.ts')
@@ -170,6 +215,16 @@ test('the file list counts each file’s findings and shows its stats', () => {
   expect(items[1]?.textContent).toContain('−1')
   expect(items[5]?.textContent).not.toContain('+')
   expect(items[7]?.textContent).toContain('not in the diff')
+  expect(items.map((item) => item.getAttribute('aria-current'))).toEqual([
+    null,
+    'location',
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+  ])
   fireEvent.click(items[2]!)
   expect(onPick).toHaveBeenCalledWith(2)
 })

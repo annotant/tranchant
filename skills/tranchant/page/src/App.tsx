@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { postAnswer, postDecisions, postStop, useDiff, useReview } from './api'
+import {
+  type DiffState,
+  postAnswer,
+  postDecisions,
+  postStop,
+  useDiff,
+  useReview,
+} from './api'
 import { BatchBar } from './BatchBar'
-import { parseDiff, placeFindings } from './diff'
-import { DiffView, FileList, fileId, scrollTo } from './DiffView'
+import { parseDiff, placeFindings, type Section } from './diff'
+import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView'
 import {
   allows,
   canPost,
@@ -21,41 +28,30 @@ import { Markdown } from './markdown'
 
 const SUMMARY_KEY = 'tranchant:summary'
 const VIEW_KEY = 'tranchant:view'
+const NO_SECTIONS: readonly Section[] = []
 
 /** The main view: the change's diff, or the findings by bucket and topic. */
 type View = 'diff' | 'list'
 
-function readView(): View {
+// A private window or a blocked store throws: the page then keeps its defaults.
+function readStored(key: string): string | null {
   try {
-    return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'diff'
+    return localStorage.getItem(key)
   } catch {
-    return 'diff'
+    return null
   }
 }
 
-function writeView(view: View) {
+function writeStored(key: string, value: string) {
   try {
-    localStorage.setItem(VIEW_KEY, view)
+    localStorage.setItem(key, value)
   } catch {
-    // A private window or a blocked store: the diff shows next time.
+    // Nothing kept: the default shows next time.
   }
 }
 
-function readSummaryOpen(): boolean {
-  try {
-    return localStorage.getItem(SUMMARY_KEY) !== 'closed'
-  } catch {
-    return true
-  }
-}
-
-function writeSummaryOpen(open: boolean) {
-  try {
-    localStorage.setItem(SUMMARY_KEY, open ? 'open' : 'closed')
-  } catch {
-    // A private window or a blocked store: the panel just opens next time.
-  }
-}
+const readView = (): View => (readStored(VIEW_KEY) === 'list' ? 'list' : 'diff')
+const readSummaryOpen = () => readStored(SUMMARY_KEY) !== 'closed'
 
 const isEditing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
@@ -148,21 +144,23 @@ function Header({
 
 function ViewToggle({
   shown,
-  reason,
+  diff,
   onChange,
+  onRetry,
 }: {
   shown: View
-  /** Why the diff is unavailable, when it is. */
-  reason: string | undefined
+  diff: DiffState
   onChange: (view: View) => void
+  onRetry: () => void
 }) {
+  const unavailable = diff.status === 'unavailable' ? diff : undefined
   return (
     <div className="tr-view" role="group" aria-label="View">
       <button
         type="button"
         className={`tr-btn tr-btn--small ${shown === 'diff' ? 'tr-btn--primary' : ''}`}
         aria-pressed={shown === 'diff'}
-        disabled={reason !== undefined}
+        disabled={unavailable !== undefined}
         onClick={() => onChange('diff')}
       >
         Diff
@@ -175,8 +173,20 @@ function ViewToggle({
       >
         List
       </button>
-      {reason && (
-        <span className="tr-view-reason tr-muted">Diff unavailable: {reason}</span>
+      {unavailable && (
+        <span className="tr-view-reason tr-muted">
+          Diff unavailable: {unavailable.reason}
+          {unavailable.retrying ? (
+            ' Retrying…'
+          ) : (
+            <>
+              {' '}
+              <button type="button" className="tr-btn tr-btn--link" onClick={onRetry}>
+                retry
+              </button>
+            </>
+          )}
+        </span>
       )}
     </div>
   )
@@ -194,7 +204,8 @@ export default function App() {
   const review = payload?.review
   const records = useMemo(() => payload?.findings ?? {}, [payload])
   const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
-  const diff = useDiff(payload?.head.reviewed, reachable)
+  const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
+  const [diffPane, setDiffPane] = useState<HTMLElement | null>(null)
   const files = useMemo(
     () => (diff.status === 'ready' ? parseDiff(diff.payload.diff) : undefined),
     [diff],
@@ -213,7 +224,8 @@ export default function App() {
     () => (files && review ? placeFindings(files, review.findings) : undefined),
     [files, review],
   )
-  // The diff is the main view; the list stands in while it loads or when it cannot be had.
+  const reading = useReadingFile(diffPane, placement?.sections ?? NO_SECTIONS)
+  // The diff is the main view; the list replaces it only when the diff is unavailable.
   const shown: View = view === 'diff' && diff.status !== 'unavailable' ? 'diff' : 'list'
   const ordered = useMemo(
     () =>
@@ -350,13 +362,14 @@ export default function App() {
   const viewToggle = (
     <ViewToggle
       shown={shown}
-      reason={diff.status === 'unavailable' ? diff.reason : undefined}
+      diff={diff}
+      onRetry={retry}
       onChange={(next) => {
         // Each view opens its first finding by default: keep the one shown.
         setOpenId(openId)
         setCursor(cursor)
         setView(next)
-        writeView(next)
+        writeStored(VIEW_KEY, next)
       }}
     />
   )
@@ -400,7 +413,7 @@ export default function App() {
         onToggle={(event) => {
           const next = event.currentTarget.open
           setSummaryOpen(next)
-          writeSummaryOpen(next)
+          writeStored(SUMMARY_KEY, next ? 'open' : 'closed')
         }}
       >
         <summary>Summary</summary>
@@ -439,7 +452,6 @@ export default function App() {
           </button>
         </p>
       )}
-      {/* Keyed: the detail panel keeps its drafts when the layout switches. */}
       <div className={`tr-main ${shown === 'diff' ? 'tr-main--diff' : ''}`}>
         {shown === 'diff' ? (
           <nav key="files" className="tr-list-pane" aria-label="Files">
@@ -449,6 +461,7 @@ export default function App() {
               <FileList
                 sections={placement.sections}
                 stats={stats}
+                reading={reading}
                 onPick={(index) => scrollTo(fileId(index), 'start')}
               />
             ) : (
@@ -478,7 +491,12 @@ export default function App() {
           </nav>
         )}
         {shown === 'diff' && (
-          <section key="diff" className="tr-diff-pane" aria-label="Diff">
+          <section
+            key="diff"
+            ref={setDiffPane}
+            className="tr-diff-pane"
+            aria-label="Diff"
+          >
             {placement ? (
               <DiffView
                 sections={placement.sections}
@@ -495,6 +513,7 @@ export default function App() {
             )}
           </section>
         )}
+        {/* Third child in both layouts, the diff's slot empty in the list: its drafts survive. */}
         <main key="detail" className="tr-detail-pane">
           {detail}
         </main>

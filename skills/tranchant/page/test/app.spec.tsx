@@ -39,6 +39,16 @@ const selectedOption = () =>
 
 const focusedMarker = () => document.querySelector('.tr-marker--focused')?.id
 
+/** The file the file list marks as being read. */
+const reading = () =>
+  screen
+    .getAllByRole('button', { current: 'location' })
+    .map((item) => item.getAttribute('title'))
+
+/** The ids of the elements a `scrollIntoView` spy was called on. */
+const scrolledTo = (spy: { mock: { contexts: unknown[] } }) =>
+  spy.mock.contexts.map((element) => (element instanceof Element ? element.id : ''))
+
 test('the header shows the branch, the ownership, Jira, the counts and the version', async () => {
   await renderApp(
     payload({ records: { 'f-01': record('fixed'), 'f-03': record('dropped') } }),
@@ -410,4 +420,105 @@ test('a finding added while the diff is open lands in it', async () => {
   const row = document.querySelector('#tr-file-1 .tr-row[data-line="21"]')
   const stack = [...(row?.parentElement?.querySelectorAll('.tr-marker') ?? [])]
   expect(stack.map((marker) => marker.id)).toEqual(['tr-marker-f-02', 'tr-marker-f-06'])
+})
+
+test('a diff that failed is asked again: every few seconds, and once the server is back', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    const server = fakeServer(payload(), {}, { status: 500, error: 'internal error' })
+    render(<App />)
+    await screen.findByText(/Diff unavailable: internal error/)
+    expect(screen.getByText(/Retrying…/)).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'retry' })).toBeNull()
+    server.down()
+    await vi.advanceTimersByTimeAsync(30_000)
+    await screen.findByRole('alert')
+    server.answerDiff(diffPayload())
+    server.up()
+    await vi.advanceTimersByTimeAsync(RETRY_MS)
+    await screen.findByRole('list', { name: 'Files' })
+    expect(screen.getByRole('button', { name: 'Diff' })).toHaveProperty('disabled', false)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('a refused diff waits for retry, then shows', async () => {
+  const server = await renderApp()
+  expect(screen.queryByText(/Retrying…/)).toBeNull()
+  server.answerDiff(diffPayload())
+  fireEvent.click(screen.getByRole('button', { name: 'retry' }))
+  await screen.findByRole('list', { name: 'Files' })
+  expect(screen.getByRole('region', { name: 'Diff' })).toBeDefined()
+})
+
+test('the diff view of a review opened before its findings waits, then shows the first', async () => {
+  const events = fakeEvents()
+  const server = await renderDiffApp(
+    payload({ review: { status: 'reviewing', findings: [] } }),
+  )
+  expect(
+    screen.getByText('The review is running: findings appear here as they land.'),
+  ).toBeDefined()
+  expect(screen.getByText('Waiting for the first finding…')).toBeDefined()
+  expect(screen.queryByText('Loading the diff…')).toBeNull()
+  server.set(payload({ review: { status: 'reviewing', findings: [FINDINGS[0]!] } }))
+  events.send('changed')
+  await waitFor(() => expect(document.getElementById('tr-marker-f-01')).not.toBeNull())
+  expect(screen.getByRole('article').textContent).toContain(
+    'Null tenantId crashes the loop',
+  )
+})
+
+test('switching from the list to the diff keeps the open finding and its draft', async () => {
+  await renderDiffApp()
+  fireEvent.click(screen.getByRole('button', { name: 'List' }))
+  fireEvent.click(screen.getByRole('button', { name: /Off-by-one in the page count/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Add context for the fix' }))
+  fireEvent.change(screen.getByLabelText('Context for the fix'), {
+    target: { value: 'use Math.ceil' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Diff' }))
+  await screen.findByRole('region', { name: 'Diff' })
+  expect(screen.getByRole('article').textContent).toContain(
+    'Off-by-one in the page count',
+  )
+  expect(screen.getByLabelText('Context for the fix')).toHaveProperty(
+    'value',
+    'use Math.ceil',
+  )
+})
+
+test('the file list follows the file the diff is scrolled to; a file or the cursor scrolls the diff', async () => {
+  let scrolled = 0
+  // happy-dom lays nothing out: the pane sits at 100, its files 500 px apart.
+  const rects = vi
+    .spyOn(Element.prototype, 'getBoundingClientRect')
+    .mockImplementation(function (this: Element) {
+      const file = /^tr-file-(\d+)$/.exec(this.id)?.[1]
+      if (this.classList.contains('tr-diff-pane')) return new DOMRect(0, 100, 800, 600)
+      if (file !== undefined)
+        return new DOMRect(0, 100 + Number(file) * 500 - scrolled, 800, 500)
+      return new DOMRect()
+    })
+  const scrolls = vi.spyOn(Element.prototype, 'scrollIntoView')
+  try {
+    await renderDiffApp()
+    await waitFor(() => expect(reading()).toEqual(['src/people/usePeople.ts']))
+    scrolled = 600
+    fireEvent.scroll(screen.getByRole('region', { name: 'Diff' }))
+    await waitFor(() => expect(reading()).toEqual(['src/api/guard.ts']))
+    scrolled = 1600
+    fireEvent.scroll(screen.getByRole('region', { name: 'Diff' }))
+    await waitFor(() => expect(reading()).toEqual(['src/people/Drawer.tsx']))
+    scrolls.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: /pager\.ts/ }))
+    expect(scrolledTo(scrolls)).toEqual(['tr-file-2'])
+    scrolls.mockClear()
+    fireEvent.keyDown(document, { key: 'j' })
+    expect(scrolledTo(scrolls)).toContain('tr-marker-f-02')
+  } finally {
+    rects.mockRestore()
+    scrolls.mockRestore()
+  }
 })
