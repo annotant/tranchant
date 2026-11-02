@@ -393,8 +393,12 @@ test("a fix starts the finding's agent, with hooks of its own, on the session's 
     ],
     Stop: [{ hooks: [{ type: 'command', command: hookCommand('stop', 'f-01') }] }],
   })
-  // The model is offered neither the finding's type nor the worker.
-  for (const agent of ['tranchant:tr-f-01', 'tranchant:worker'])
+  // The model is offered neither the finding's type, nor the worker, nor a review lens.
+  for (const agent of [
+    'tranchant:tr-f-01',
+    'tranchant:worker',
+    'tranchant:review:correctness',
+  ])
     expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
   expect(await $.agent.offer(offerOf('Explore'))).toEqual({ isOffered: true })
   await w.exit(0)

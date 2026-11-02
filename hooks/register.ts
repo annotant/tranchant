@@ -59,6 +59,8 @@ const handed = atom({ plugin: 'tranchant', key: 'handed' } as const, noHanded)
 const WORKER = 'tranchant:worker'
 /** A finding's agent type: `tr-` and the finding's id. */
 const FINDING_AGENT = /^tranchant:tr-[\w-]+$/
+/** The review's lenses and verifier, agents/review/*.md: the driver's prompts, loaded as types too. */
+const REVIEW_AGENT = /^tranchant:review:[\w-]+$/
 const OPEN_TOOL = 'mcp__tranchant__open'
 const INHERIT = 'inherit'
 const TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']
@@ -912,9 +914,11 @@ export const register: Register = (on) => {
     return next(e)
   })
 
-  // The findings' agents are the hooks' alone: the model is not offered them.
+  // The findings' agents and the review's are the hooks' alone: the model is not offered them.
   on('agent.offer', async ($, e, next) =>
-    e.agent === WORKER || FINDING_AGENT.test(e.agent) ? { isOffered: false } : next(e),
+    e.agent === WORKER || FINDING_AGENT.test(e.agent) || REVIEW_AGENT.test(e.agent)
+      ? { isOffered: false }
+      : next(e),
   )
 
   // What the agent writes between its tool calls, as notes under the finding.
