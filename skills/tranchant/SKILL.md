@@ -53,7 +53,12 @@ only when a flow needs proving. `ownership` is `ours` when the change has no
 MR or the MR's author is the current user, `theirs` otherwise; `theirs` needs
 `mr.diffRefs` (`glab mr view <iid> -F json` → `diff_refs`). Write the file
 outside the reviewed repository, so it can never be committed by mistake:
-`~/.cache/tranchant/inbox/<id>.json` is the convention. Then open it.
+`~/.cache/tranchant/inbox/<id>.json` is the convention. Then open it. To
+show the findings as they land instead, write the envelope with `"status":
+"reviewing"` and `"findings": []`; `node SKILL/scripts/open.mjs <file>`
+prints `REVIEW <dir>`: open that folder with the tool, add each finding with
+`node SKILL/scripts/add.mjs --review <dir> --file <finding.json>`, and end
+with `node SKILL/scripts/complete.mjs --review <dir>`.
 
 ## Rules
 

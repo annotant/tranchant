@@ -6,7 +6,7 @@ import { appendFile, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promi
 import path from 'node:path'
 import { before, test } from 'node:test'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
-import { SCRIPTS, importReview, json, run, tempDir } from './helpers.mjs'
+import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
 
 const SERVER = path.join(SCRIPTS, 'server.mjs')
 const FIRST_LINE = /^(READY|PORT_BUSY|REVIEW_REFUSED|HOOKS_MISSING|PAGE_MISSING)/
@@ -145,19 +145,20 @@ const post = (route, body, headers = {}) =>
 const findings = async () => (await json(await fetch(`${main.base}/api/review`))).findings
 
 /**
- * Listens to the server's events, as the page does.
+ * Listens to a server's events, as the page does.
+ * @param {string} [base]
  */
-async function listen() {
+async function listen(base = main.base) {
   const controller = new AbortController()
-  const response = await fetch(`${main.base}/api/events`, { signal: controller.signal })
+  const response = await fetch(`${base}/api/events`, { signal: controller.signal })
   if (!response.body) throw new Error('no event stream')
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
   let received = ''
   return {
     response,
     /**
-     * The next `changed` event naming finding `id`, within 3 s.
-     * @param {string} id
+     * The next `changed` event naming finding `id` (any one, without), within 3 s.
+     * @param {string} [id]
      */
     async changed(id) {
       const deadline = setTimeout(() => controller.abort(), 3000)
@@ -167,7 +168,8 @@ async function listen() {
           received = events.pop() ?? ''
           for (const event of events) {
             const data = /^event: changed\ndata: (.*)$/m.exec(event)?.[1]
-            if (data && JSON.parse(data).ids.includes(id)) return event
+            if (data && (id === undefined || JSON.parse(data).ids.includes(id)))
+              return event
           }
           const { value, done } = await reader.read()
           if (done) throw new Error(`no changed event for ${id}`)
@@ -415,6 +417,59 @@ test('a post glab refuses fails the finding with glab’s first line', async () 
     )
   } finally {
     await rm(path.join(glabDir, 'fail'), { force: true })
+  }
+})
+
+test('a review opened before its findings grows as they land, then completes', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, {
+    id: 'live-server-1',
+    status: 'reviewing',
+    findings: [],
+  })
+  const server = await startServer(t, { dir: imported.dir })
+  assert.match(server.first, /^READY /, server.output())
+  const initial = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(initial.review.status, 'reviewing')
+  assert.deepEqual(initial.review.findings, [])
+  const events = await listen(server.base)
+  try {
+    const { findings: landing } = await fixture('ours')
+    // f-02 lands before f-01: the order they landed, not the ids'.
+    for (const finding of [landing[1], landing[0]]) {
+      const added = await run(
+        process.execPath,
+        [path.join(SCRIPTS, 'add.mjs'), '--review', imported.dir],
+        { input: JSON.stringify(finding) },
+      )
+      assert.equal(added.stdout, `ADDED ${finding.id}\n`, added.stderr)
+      await events.changed(finding.id)
+    }
+    const grown = await json(await fetch(`${server.base}/api/review`))
+    assert.deepEqual(
+      grown.review.findings.map((finding) => finding.id),
+      ['f-02', 'f-01'],
+    )
+    assert.equal(grown.review.status, 'reviewing')
+    // A finding that just landed takes decisions like any other.
+    const decided = await fetch(`${server.base}/api/decisions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decisions: [{ id: 'f-02', action: 'skip' }] }),
+    })
+    assert.deepEqual((await json(decided)).applied, ['f-02'])
+    await events.changed('f-02')
+    const done = await run(process.execPath, [
+      path.join(SCRIPTS, 'complete.mjs'),
+      '--review',
+      imported.dir,
+    ])
+    assert.equal(done.stdout, 'COMPLETE\n', done.stderr)
+    assert.match(await events.changed(), /"ids":\[\]/)
+    const completed = await json(await fetch(`${server.base}/api/review`))
+    assert.equal(completed.review.status, 'complete')
+    assert.equal(completed.findings['f-02'].state, 'skipped')
+  } finally {
+    events.close()
   }
 })
 

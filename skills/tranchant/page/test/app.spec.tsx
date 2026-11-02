@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { expect, test, vi } from 'vitest'
 import { RETRY_MS } from '../src/api'
 import App from '../src/App'
-import { fakeEvents, fakeServer, ORDER, payload, record } from './fixture'
+import { fakeEvents, fakeServer, FINDINGS, ORDER, payload, record } from './fixture'
 
 const TITLE = 'Classification overview page'
 
@@ -212,6 +212,84 @@ test('the page says when the server is gone, disables actions and retries', asyn
   } finally {
     vi.useRealTimers()
   }
+})
+
+test('a review in progress shows its indicator with the count so far; complete, it does not', async () => {
+  await renderApp(payload({ review: { status: 'reviewing' } }))
+  expect(
+    screen.getByRole('status', { name: 'Review in progress' }).textContent,
+  ).toContain('5 findings so far')
+  cleanup()
+  fakeServer(payload({ review: { status: 'complete' } }))
+  render(<App />)
+  await screen.findByRole('heading', { name: TITLE })
+  expect(screen.queryByRole('status', { name: 'Review in progress' })).toBeNull()
+})
+
+test('a review opened before its findings shows an empty state, then the first one as it lands', async () => {
+  const events = fakeEvents()
+  const server = await renderApp(
+    payload({ review: { status: 'reviewing', findings: [] } }),
+  )
+  expect(
+    screen.getByText('The review is running: findings appear here as they land.'),
+  ).toBeDefined()
+  expect(screen.getByText('Waiting for the first finding…')).toBeDefined()
+  expect(screen.queryAllByRole('option')).toHaveLength(0)
+  expect(
+    screen.getByRole('status', { name: 'Review in progress' }).textContent,
+  ).toContain('0 findings so far')
+  server.set(payload({ review: { status: 'reviewing', findings: [FINDINGS[0]!] } }))
+  events.send('changed')
+  await screen.findByRole('option')
+  expect(screen.getByRole('article').textContent).toContain(
+    'Null tenantId crashes the loop',
+  )
+  expect(
+    screen.getByRole('status', { name: 'Review in progress' }).textContent,
+  ).toContain('1 finding so far')
+})
+
+test('a finding landing keeps the open detail, its draft context and the selection', async () => {
+  const events = fakeEvents()
+  const two = [FINDINGS[0]!, FINDINGS[1]!]
+  const server = await renderApp(
+    payload({ review: { status: 'reviewing', findings: two } }),
+  )
+  fireEvent.click(screen.getByRole('button', { name: /Null tenantId crashes the loop/ }))
+  fireEvent.click(
+    screen.getByRole('checkbox', { name: 'Select Null tenantId crashes the loop' }),
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Add context for the fix' }))
+  fireEvent.change(screen.getByLabelText('Context for the fix'), {
+    target: { value: 'keep the early return' },
+  })
+  const three = [...two, FINDINGS[4]!]
+  server.set(payload({ review: { status: 'reviewing', findings: three } }))
+  events.send('changed')
+  await screen.findByRole('button', { name: /Off-by-one in the page count/ })
+  expect(screen.getAllByRole('option')).toHaveLength(3)
+  expect(screen.getByRole('article').textContent).toContain(
+    'Null tenantId crashes the loop',
+  )
+  expect(screen.getByLabelText('Context for the fix')).toHaveProperty(
+    'value',
+    'keep the early return',
+  )
+  expect(screen.getByText('1 finding selected')).toBeDefined()
+  expect(
+    screen.getByRole('status', { name: 'Review in progress' }).textContent,
+  ).toContain('3 findings so far')
+  // The batch counts follow: the one that landed is auto-addressable and open.
+  expect(
+    screen.getByRole('button', { name: /^Fix all auto-addressable/ }).textContent,
+  ).toContain('1')
+  server.set(payload({ review: { status: 'complete', findings: three } }))
+  events.send('changed')
+  await waitFor(() =>
+    expect(screen.queryByRole('status', { name: 'Review in progress' })).toBeNull(),
+  )
+  expect(screen.getAllByRole('option')).toHaveLength(3)
 })
 
 test('a refusal from the server is shown', async () => {
