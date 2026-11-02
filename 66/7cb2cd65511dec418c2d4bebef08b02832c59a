@@ -1,0 +1,21 @@
+test/fixtures/front-end/README.md
+  s_bc2462413ee2a6::t_53765155d853a3 42-44,62-66
+test/fixtures/playground.mjs
+  s_bc2462413ee2a6::t_2d8d5c7987860b 174-175,177,182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "667cb2cd65511dec418c2d4bebef08b02832c59a",
+  "prompts": {},
+  "sessions": {
+    "s_bc2462413ee2a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a49408b3-1500-46cd-b249-d09ecccff78e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
