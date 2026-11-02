@@ -1,0 +1,24 @@
+test/fixtures/front-end/README.md
+  s_bc2462413ee2a6::t_97cb00fea3b82c 32,37
+  s_bc2462413ee2a6::t_455bb0918f99c9 9-11
+test/fixtures/front-end/base/CLAUDE.md
+  s_bc2462413ee2a6::t_97cb00fea3b82c 19
+test/fixtures/review-front-end.json
+  s_bc2462413ee2a6::t_97cb00fea3b82c 11,13,235
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "944c59157517570674ea32cf1a09117f8ed4d6ea",
+  "prompts": {},
+  "sessions": {
+    "s_bc2462413ee2a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a49408b3-1500-46cd-b249-d09ecccff78e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
