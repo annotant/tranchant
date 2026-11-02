@@ -21,10 +21,12 @@ import {
   plural,
   type Review,
   stateOf,
+  unverifiedIds,
 } from './domain'
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
 import { Markdown } from './markdown'
+import { ReviewAgents } from './ReviewAgents'
 
 const SUMMARY_KEY = 'tranchant:summary'
 const VIEW_KEY = 'tranchant:view'
@@ -204,6 +206,10 @@ export default function App() {
   const review = payload?.review
   const records = useMemo(() => payload?.findings ?? {}, [payload])
   const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
+  const unverified = useMemo(
+    () => (review ? unverifiedIds(review) : new Set<string>()),
+    [review],
+  )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
   const [diffPane, setDiffPane] = useState<HTMLElement | null>(null)
   const files = useMemo(
@@ -381,6 +387,7 @@ export default function App() {
       finding={current}
       record={records[current.id]}
       steps={payload?.runs[current.id] ?? []}
+      unverified={unverified.has(current.id)}
       disabled={disabled}
       onDecide={(decisions) => void decide(decisions)}
       onAnswer={(id, text, choices) => void answer(id, text, choices)}
@@ -407,6 +414,7 @@ export default function App() {
         </div>
       )}
       <Header review={review} tally={tally} moved={moved} />
+      <ReviewAgents agents={payload?.reviewers ?? []} />
       <details
         className="tr-summary"
         open={summaryOpen}
@@ -480,6 +488,7 @@ export default function App() {
                   cursor={cursor}
                   openId={openId}
                   selected={selected}
+                  unverified={unverified}
                   onOpen={open}
                   onToggle={toggle}
                 />
@@ -505,6 +514,7 @@ export default function App() {
                 cursor={cursor}
                 open={current}
                 selected={selected}
+                unverified={unverified}
                 onOpen={open}
                 onToggle={toggle}
               />

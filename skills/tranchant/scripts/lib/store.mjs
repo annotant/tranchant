@@ -7,6 +7,7 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
 import { withFileLock } from './filelock.mjs'
@@ -68,26 +69,28 @@ export const findingPath = (/** @type {string} */ dir, /** @type {string} */ id)
 
 /** The files of `findings/` that hold a finding: `<id>.json`, nothing else. */
 const FINDING_FILE = /^([\w-]{1,64})\.json$/
+/** The run file of a review agent: `reviewers/<name>.jsonl`. */
+const AGENT_FILE = /^([\w-]{1,80})\.jsonl$/
+
+/** The run file of review agent `name`. */
+export const reviewAgentPath = (/** @type {string} */ dir, /** @type {string} */ name) =>
+  path.join(dir, 'reviewers', `${name}.jsonl`)
 
 /** Oldest first; two added the same millisecond by id. @type {(a: Finding, b: Finding) => number} */
 const byArrival = (a, b) =>
   (a.addedAt ?? '').localeCompare(b.addedAt ?? '') || a.id.localeCompare(b.id)
 
 /**
- * The finding's steps, oldest first: those of its run in progress, or with
- * `history`, of every run that ended. A tool writes one line when it starts
- * and one when it ends or fails, both with its tool_use_id: they merge into
- * one step, where it started. Sorted by time.
- * @param {string} dir The review folder.
- * @param {string} id
+ * The steps of a run file, oldest first. A tool writes one line when it
+ * starts and one when it ends or fails, both with its tool_use_id: they merge
+ * into one step, where it started. Sorted by time.
+ * @param {string} file
  * @param {number} [limit] The last ones.
- * @param {{ history?: boolean }} [options]
  * @returns {Promise<Step[]>}
  */
-export async function readProgress(dir, id, limit, { history = false } = {}) {
+async function readSteps(file, limit) {
   let lines
   try {
-    const file = history ? historyPath(dir, id) : progressPath(dir, id)
     lines = (await readFile(file, 'utf8')).trim().split('\n')
   } catch {
     return []
@@ -114,6 +117,52 @@ export async function readProgress(dir, id, limit, { history = false } = {}) {
   // writes its tools, and either may land first.
   steps.sort((a, b) => (a.at ?? 0) - (b.at ?? 0))
   return limit ? steps.slice(-limit) : steps
+}
+
+/**
+ * The finding's steps, oldest first: those of its run in progress, or with
+ * `history`, of every run that ended.
+ * @param {string} dir The review folder.
+ * @param {string} id
+ * @param {number} [limit] The last ones.
+ * @param {{ history?: boolean }} [options]
+ * @returns {Promise<Step[]>}
+ */
+export const readProgress = (dir, id, limit, { history = false } = {}) =>
+  readSteps(history ? historyPath(dir, id) : progressPath(dir, id), limit)
+
+/**
+ * One review agent, a lens's reviewer (`rv-<lens>`) or a finding's verifier
+ * (`vf-<id>`), as its run file tells it: running until its `end` step.
+ * @typedef {{ name: string, running: boolean, outcome?: 'done' | 'failed', steps: Step[] }} ReviewAgent
+ */
+
+/**
+ * The review agents of the review, in the order they started.
+ * @param {string} dir The review folder.
+ * @param {number} [limit] The last steps of each.
+ * @returns {Promise<ReviewAgent[]>}
+ */
+export async function readReviewAgents(dir, limit = PROGRESS_SHOWN) {
+  const names = await readdir(path.join(dir, 'reviewers')).catch(() => [])
+  /** @type {(ReviewAgent & { since: number })[]} */
+  const agents = []
+  for (const file of names) {
+    const name = AGENT_FILE.exec(file)?.[1]
+    if (!name) continue
+    const all = await readSteps(reviewAgentPath(dir, name))
+    const end = all.findLast((step) => step.kind === 'end')
+    agents.push({
+      name,
+      since: all[0]?.at ?? 0,
+      running: !end,
+      ...(end && { outcome: end.state === 'failed' ? 'failed' : 'done' }),
+      steps: all.slice(-limit),
+    })
+  }
+  return agents
+    .toSorted((a, b) => a.since - b.since || a.name.localeCompare(b.name))
+    .map(({ since: _since, ...agent }) => agent)
 }
 
 /**
@@ -407,6 +456,18 @@ export function createStore(dir) {
     }
   }
 
+  /**
+   * Refuses `what` on finding `id` once the reviewer moved it from `open`.
+   * @param {string} id
+   * @param {string} what
+   */
+  async function refuseDecided(id, what) {
+    const state = (await readDecisions()).findings[id]?.state ?? 'open'
+    if (state !== 'open') {
+      throw new StoreRefusal(`${what} refused: finding ${id} is ${stateWords(state)}`)
+    }
+  }
+
   return {
     readReview,
     readDecisions,
@@ -442,7 +503,9 @@ export function createStore(dir) {
         if (statusOf(review) === 'complete') {
           throw new StoreRefusal('the review is complete: nothing can be added')
         }
-        await writeFinding({ ...finding, addedAt: new Date().toISOString() })
+        // Only a verifier verifies: a finding lands unverified, whatever it says.
+        const { verified: _verified, ...landed } = finding
+        await writeFinding({ ...landed, addedAt: new Date().toISOString() })
         return { id: finding.id, added: true }
       })
     },
@@ -459,6 +522,60 @@ export function createStore(dir) {
           throw new StoreRefusal('the review is complete already')
         }
         await writeEnvelope({ ...envelope, status: 'complete' })
+      })
+    },
+
+    /**
+     * A verifier confirms finding `id` (`verified: true`), or replaces it with
+     * `amended`, the same id, confirmed. Amending is refused once the reviewer
+     * decided on it.
+     * @param {string} id
+     * @param {any} [amended]
+     * @returns {Promise<void>}
+     */
+    verify(id, amended) {
+      return withFileLock(reviewFile, async () => {
+        const review = await readReview()
+        const known = review.findings.find((one) => one.id === id)
+        if (!known) throw new StoreRefusal(`no finding ${id} in the review`)
+        if (amended === undefined) {
+          await writeFinding({ ...known, verified: true })
+          return
+        }
+        if (amended?.id !== id) {
+          throw new StoreRefusal(`the amended finding's id is not ${id}`)
+        }
+        const problems = validateFinding(amended, {
+          theirs: review.ownership === 'theirs',
+        })
+        if (problems.length) throw new StoreRefusal(problemsText(problems))
+        // Under the decisions' lock: no decision lands between the check and the write.
+        await exclusive(async () => {
+          await refuseDecided(id, 'amend')
+          await writeFinding({ ...amended, addedAt: known.addedAt, verified: true })
+        })
+      })
+    },
+
+    /**
+     * A verifier removes finding `id`: wrong, or a duplicate of one that landed
+     * before it. Refused once the reviewer decided on it.
+     * @param {string} id
+     * @returns {Promise<void>}
+     */
+    remove(id) {
+      return withFileLock(reviewFile, async () => {
+        const review = await readReview()
+        if (!review.findings.some((one) => one.id === id)) {
+          throw new StoreRefusal(`no finding ${id} in the review`)
+        }
+        if (!existsSync(findingPath(dir, id))) {
+          throw new StoreRefusal(`finding ${id} is inline in review.json: it stays`)
+        }
+        await exclusive(async () => {
+          await refuseDecided(id, 'remove')
+          await rm(findingPath(dir, id), { force: true })
+        })
       })
     },
 

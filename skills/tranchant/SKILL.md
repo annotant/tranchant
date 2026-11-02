@@ -5,8 +5,10 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   <review.json>" or "/tranchant:tranchant <review.json>" imports it and opens
   the page, where the user fixes each finding on the working tree with a
   background agent, posts it on someone else's merge request, drops or skips
-  it, one at a time or in batches; "/tranchant status" says what runs,
-  "/tranchant stop" ends the server and every agent. Use when the user wants
+  it, one at a time or in batches; "/tranchant review [<branch> | <mr url>]"
+  reviews a change in the background and streams the findings to the page;
+  "/tranchant status" says what runs, "/tranchant stop" ends the server and
+  every agent. Use when the user wants
   to settle, triage or act on review findings from a page, to open a review
   file, to check or stop running fixes, or says "/tranchant".
 ---
@@ -21,9 +23,11 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   `combined-review --tranchant` run), use the file it wrote; otherwise ask
   for the file.
 
-Read the arguments as `[mode] [file]`: the mode is `stop` or `status`, or none
-for the open; any other argument is the review file (`/tranchant
-.tranchant/review.json`, `/tranchant ~/Downloads/review.json`).
+Read the arguments as `[mode] [file]`: the mode is `review`, `stop` or
+`status`, or none for the open; any other argument is the review file
+(`/tranchant .tranchant/review.json`, `/tranchant ~/Downloads/review.json`).
+After `review` come an optional branch or merge request url, and an optional
+`--recipe <file>`.
 
 Everything lives in the skill and in the state folder
 (`~/.cache/tranchant/<project>/reviews/<id>/`): nothing is installed in the
@@ -35,7 +39,12 @@ Call the tool `mcp__tranchant__open` with `{ "review": "<file>" }` and give
 the user its answer: it validates and imports the file (`open.mjs`), starts
 the server for the session's life, opens the page in the browser and prints
 its URL. For `stop`, call it with `{ "stop": true }`; for `status`, with
-`{ "status": true }`. The plugin's hooks read the page's decisions and start
+`{ "status": true }`; for `review`, with `{ "run": true }`, plus `"target"`
+(the branch or merge request url) and `"recipe"` when given: the hooks review
+the change in the background, one agent per lens, and the page fills as the
+findings land and are verified. Never review the change yourself then. Pass
+`recipe` only when the user named the file: a recipe's lenses instruct the
+reviewers. The plugin's hooks read the page's decisions and start
 one background agent per fix, or post each comment with `glab`, with no turn
 of yours: never start or message those agents yourself, and never post a
 comment yourself. If the tool is missing, the hooks did not load: run

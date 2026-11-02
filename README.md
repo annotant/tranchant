@@ -25,9 +25,11 @@ wrong.
   `~/.cache/tranchant/<project>/reviews/<id>/`: the review file its producer
   wrote, your decisions, and the agents' steps. See
   [the review file](docs/review-file.md).
-- **A producer writes the review.** In the Qohash setup, `combined-review
---tranchant` runs the reviewers, verifies the findings, and hands the
-  result to Tranchant. Any tool that writes the review file works. A review
+- **Tranchant reviews, or a producer does.** `/tranchant review` opens the
+  page at once and runs the reviewers in the background: one agent per lens
+  of a recipe, then a verifier on each finding as it lands, which confirms,
+  corrects or removes it. Unverified findings show dimmed. A producer of
+  your own works too: any tool that writes the review file. A review
   can also open before its findings: the producer opens it `reviewing`, the
   page shows it in progress, and each finding appears as the producer adds
   it, until it marks the review complete.
@@ -99,13 +101,32 @@ run script.
 ## Use
 
 ```
-/tranchant <review.json>     # import a review and open its page
-/tranchant status            # what is running
-/tranchant stop              # stop the server and every agent
+/tranchant review                     # review the current branch, findings streamed to the page
+/tranchant review feature/cart        # another branch, against the default branch
+/tranchant review <merge request url> # someone else's MR, read with glab
+/tranchant <review.json>              # import a review and open its page
+/tranchant status                     # what is running
+/tranchant stop                       # stop the server and every agent
 ```
 
-With the Qohash skills, `/combined-review --tranchant` writes the review and
-opens the page itself.
+`/tranchant review` takes `--recipe <file>` to use your own lenses instead of
+the plugin's default one, which ships a single generic `bugs` lens. A recipe
+is a JSON file:
+
+```json
+{
+  "version": 1,
+  "lenses": [
+    { "name": "bugs", "prompt": "lenses/bugs.md", "paths": ["**"] },
+    { "name": "react", "prompt": "lenses/react.md", "paths": ["src/**/*.tsx"] }
+  ]
+}
+```
+
+Each lens names its instructions (a Markdown file, relative to the recipe)
+and the path globs it applies to; a lens whose globs the change does not
+touch is skipped. Three review agents run at a time; nothing is written in
+the reviewed repository.
 
 In the page:
 

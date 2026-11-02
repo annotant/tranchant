@@ -69,6 +69,7 @@ interface MarkerProps {
   focused: boolean
   open: boolean
   checked: boolean
+  unverified: boolean
   /** Why the finding sits on the header rather than on its line. */
   note?: string | undefined
   onOpen: (id: string) => void
@@ -82,6 +83,7 @@ function Marker({
   focused,
   open,
   checked,
+  unverified,
   note,
   onOpen,
   onToggle,
@@ -90,7 +92,7 @@ function Marker({
   return (
     <div
       id={markerId(finding.id)}
-      className={`tr-marker ${focused ? 'tr-marker--focused' : ''} ${open ? 'tr-marker--open' : ''}`}
+      className={`tr-marker ${focused ? 'tr-marker--focused' : ''} ${open ? 'tr-marker--open' : ''} ${unverified ? 'tr-unverified' : ''}`}
     >
       <input
         type="checkbox"
@@ -107,6 +109,7 @@ function Marker({
       >
         <span className={`tr-chip tr-chip--${state}`}>{STATE_LABELS[state]}</span>
         <span className="tr-chip">{finding.topic}</span>
+        {unverified && <span className="tr-chip">unverified</span>}
         <span className="tr-marker-title">{finding.title}</span>
         {note && <span className="tr-marker-note">{note}</span>}
       </button>
@@ -122,6 +125,8 @@ interface MarkerState {
   /** The finding the detail shows: its row is set apart, with its marks. */
   open: Finding | undefined
   selected: ReadonlySet<string>
+  /** The findings no verifier confirmed yet: dimmed. */
+  unverified?: ReadonlySet<string> | undefined
   onOpen: (id: string) => void
   onToggle: (id: string) => void
 }
@@ -132,7 +137,15 @@ type MarkersProps = MarkerState & {
 }
 
 /** The findings stacked at one place: a line, or a file's header. */
-function Markers({ findings, note, cursor, open, selected, ...shared }: MarkersProps) {
+function Markers({
+  findings,
+  note,
+  cursor,
+  open,
+  selected,
+  unverified,
+  ...shared
+}: MarkersProps) {
   return (
     <div className="tr-markers">
       {findings.map((finding) => (
@@ -143,6 +156,7 @@ function Markers({ findings, note, cursor, open, selected, ...shared }: MarkersP
           focused={cursor === finding.id}
           open={open?.id === finding.id}
           checked={selected.has(finding.id)}
+          unverified={unverified?.has(finding.id) ?? false}
           note={note?.(finding)}
         />
       ))}

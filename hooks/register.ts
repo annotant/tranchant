@@ -10,22 +10,34 @@
 // hooks run scripts/hook.mjs around each of its tools with the finding written
 // in: file locks, refused Bash writes, and the steps the page shows.
 //
-// The workers, the reviews served and the fixes handed over live in $.state,
-// so they survive a reload of the module and vanish with the session, like
-// the agents themselves.
+// `/tranchant review` writes a review's envelope, opens it the same way, then
+// starts one reviewer per lens of a recipe and, as each finding lands, a
+// verifier on it, three at a time, each a type of its own (`tranchant:rv-<lens>`,
+// `tranchant:vf-<id>`) whose hooks record its steps for the page. Once every
+// one ended, the review completes.
+//
+// The workers, the reviews served and run, the review agents and the fixes
+// handed over live in $.state, so they survive a reload of the module and
+// vanish with the session, like the agents themselves.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Served, Worker } from '../types'
+import type { Lens, ReviewAgent, ReviewJob, ReviewRun, Served, Worker } from '../types'
 
 type $ = EngineInterface
-/** `lockRoot`: the git repository the project is in, else the project. */
+/**
+ * `lockRoot`: the git repository the project is in, else the project.
+ * `range`: the change, as git reads it.
+ */
 type Review = {
   dir: string
   id: string
   title: string
   project: string
   lockRoot: string
+  headSha: string
+  range: string
+  ownership: string
 }
 type Step = Record<string, unknown>
 /** A finding waiting for a free agent, with the server's line about it. */
@@ -54,13 +66,24 @@ const noHanded: Record<string, string> = {}
 const workers = atom({ plugin: 'tranchant', key: 'workers' } as const, noWorkers)
 const serving = atom({ plugin: 'tranchant', key: 'serving' } as const, noServing)
 const handed = atom({ plugin: 'tranchant', key: 'handed' } as const, noHanded)
+const noReviewRuns: Record<string, ReviewRun> = {}
+const noReviewAgents: Record<string, ReviewAgent> = {}
+const reviewRuns = atom({ plugin: 'tranchant', key: 'reviewRuns' } as const, noReviewRuns)
+const reviewAgents = atom(
+  { plugin: 'tranchant', key: 'reviewAgents' } as const,
+  noReviewAgents,
+)
 
 /** The plugin's agent file, whose instructions every finding's agent gets. */
 const WORKER = 'tranchant:worker'
 /** A finding's agent type: `tr-` and the finding's id. */
 const FINDING_AGENT = /^tranchant:tr-[\w-]+$/
-/** The review's lenses and verifier, agents/review/*.md: the driver's prompts, loaded as types too. */
-const REVIEW_AGENT = /^tranchant:review:[\w-]+$/
+/** The review's lenses and verifier, agents/review/*.md: loaded as the plugin's agents too. */
+const REVIEW_FILE_AGENT = /^tranchant:review:[\w-]+$/
+/** The plugin's agent files of the review agents, and their types: `rv-<lens>`, `vf-<id>`. */
+const REVIEW_PROMPTS = new Set(['tranchant:reviewer', 'tranchant:verifier'])
+const REVIEW_AGENT = /^tranchant:(?:rv|vf)-[\w-]+$/
+const REVIEW_TOOLS = ['Read', 'Bash', 'Grep', 'Glob']
 const OPEN_TOOL = 'mcp__tranchant__open'
 const INHERIT = 'inherit'
 const TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']
@@ -136,14 +159,26 @@ async function gitTop($: $, dir: string) {
 const reviews = new Map<string, Promise<Review>>()
 
 async function loadReviewOnce($: $, dir: string): Promise<Review> {
-  const file: { id?: unknown; title?: unknown; project?: unknown } = JSON.parse(
-    await $.fs.read(`${dir}/review.json`),
-  )
+  const file: {
+    id?: unknown
+    title?: unknown
+    project?: unknown
+    base?: unknown
+    headSha?: unknown
+    ownership?: unknown
+    mr?: { diffRefs?: unknown }
+  } = JSON.parse(await $.fs.read(`${dir}/review.json`))
   if (typeof file.project !== 'string' || !file.project.startsWith('/'))
     throw new Error('its project is not an absolute path')
   const project = normalize(file.project)
   const top = await gitTop($, project)
+  const base = typeof file.base === 'string' ? file.base : ''
+  const headSha = typeof file.headSha === 'string' ? file.headSha : ''
   return {
+    headSha,
+    // As the server reads it: the MR's own refs, else what reached the head since the base.
+    range: file.mr?.diffRefs ? `${base}..${headSha}` : `${base}...${headSha}`,
+    ownership: file.ownership === 'theirs' ? 'theirs' : 'ours',
     dir,
     id: typeof file.id === 'string' && file.id ? file.id : basename(dir),
     title:
@@ -165,16 +200,22 @@ function loadReview($: $, dir: string): Promise<Review> {
   return found
 }
 
-let workerPrompt: Promise<string> | undefined
+const agentPrompts = new Map<string, Promise<string>>()
 
-/** agents/worker.md's instructions, its frontmatter left out. */
-function readWorkerPrompt($: $) {
-  workerPrompt ??= $.fs
-    .read(`${$.plugin.root}/agents/worker.md`)
-    .then((text) => text.replace(/^---\n[\s\S]*?\n---\n+/, ''))
-  workerPrompt.catch(() => (workerPrompt = undefined))
-  return workerPrompt
+/** agents/<name>.md's instructions, its frontmatter left out. */
+function readAgentPrompt($: $, name: string) {
+  let prompt = agentPrompts.get(name)
+  if (!prompt) {
+    prompt = $.fs
+      .read(`${$.plugin.root}/agents/${name}.md`)
+      .then((text) => text.replace(/^---\n[\s\S]*?\n---\n+/, ''))
+    prompt.catch(() => agentPrompts.delete(name))
+    agentPrompts.set(name, prompt)
+  }
+  return prompt
 }
+
+const readWorkerPrompt = ($: $) => readAgentPrompt($, 'worker')
 
 const hookArgv = ($: $, mode: string, id: string, review: Review) => [
   'node',
@@ -286,8 +327,12 @@ let dispatching: Promise<void> = Promise.resolve()
 async function showStatus($: $) {
   const count = Object.values(await read($, workers)).filter((one) => one.running).length
   const queued = [...watches.values()].reduce((sum, one) => sum + one.queue.length, 0)
+  const reviewing = Object.values(await read($, reviewAgents)).filter(
+    (one) => one.running,
+  ).length
   const parts = [
     ...(watches.size ? [`serving ${[...watches.values()].map(titleOf).join(', ')}`] : []),
+    ...(reviewing ? [`${reviewing} agent(s) reviewing`] : []),
     ...(count ? [`${count} agent(s) on fixes`] : []),
     ...(queued ? [`${queued} queued`] : []),
   ]
@@ -518,6 +563,8 @@ async function onLine(
     case 'SKIPPED':
       watched.queue = watched.queue.filter((one) => one.id !== id)
       return
+    case 'LANDED':
+      return verifyLanded($, watched.dir, id)
     default:
       // POSTED, POST_FAILED, AGENT_ENDED: the server's own doing.
       return debug($, `${tag(id)}: ${kind}`)
@@ -704,13 +751,15 @@ async function stopServing($: $) {
   watches.clear()
   for (const pending of starting.values()) pending.stop = true
   await update($, serving, () => noServing)
+  const reviewing = await stopReviewing($)
   const running = Object.entries(await read($, workers)).filter(([, one]) => one.running)
   for (const [id, worker] of running) await endWorker($, id, worker, '/tranchant stop')
   await showStatus($)
-  if (!titles.length && !running.length)
+  if (!titles.length && !running.length && !reviewing)
     return 'Tranchant is not serving any review in this session.'
   return [
     ...(titles.length ? [`Tranchant stopped serving ${titles.join(', ')}.`] : []),
+    ...(reviewing ? [`Ended ${reviewing} agent(s) reviewing.`] : []),
     ...(running.length ? [`Ended ${running.length} agent(s) at work on fixes.`] : []),
   ].join(' ')
 }
@@ -751,9 +800,14 @@ async function statusText($: $) {
     ...endedWatches.keys(),
     ...running.map(([, worker]) => worker.review),
     ...[...starting.values()].map((one) => one.dir),
+    ...Object.keys(await read($, reviewRuns)),
+    ...Object.values(await read($, reviewAgents))
+      .filter((one) => one.running)
+      .map((one) => one.review),
+    ...[...startingReview.values()].map((one) => one.dir),
   ])
   if (!dirs.size)
-    return 'Tranchant is not serving any review in this session: /tranchant <review.json> starts it.'
+    return 'Tranchant is not serving any review in this session: /tranchant <review.json> or /tranchant review starts it.'
   const lines = [
     `Tranchant: ${running.length + starting.size} of ${MAX_RUNNING} agents at work in this session.`,
   ]
@@ -778,6 +832,7 @@ async function statusText($: $) {
     lines.push(
       '',
       `${review?.title ?? basename(dir)} (${dir}): ${serverState(dir)}`,
+      ...(await reviewStatus($, dir)),
       ...(working.length
         ? ['  At work:', ...working.map((one) => `    ${one}`)]
         : ['  No agent at work.']),
@@ -801,12 +856,18 @@ async function registerCommand($: $, command: Parameters<$['command']['register'
     )
 }
 
-/** `/tranchant <review.json> | status | stop`: the answer the person reads. */
+/** `/tranchant <review.json> | review [<target>] | status | stop`: the answer the person reads. */
 async function openCommand($: $, args: string) {
   const word = args.trim()
   if (word === 'stop') return stopServing($)
   if (word === 'status') return statusText($)
-  if (!word) return 'Usage: /tranchant <review.json> | status | stop'
+  const [first, ...rest] = word.split(/\s+/)
+  if (first === 'review') {
+    const parsed = reviewArgs(rest)
+    return 'error' in parsed ? parsed.error : startReview($, parsed.target, parsed.recipe)
+  }
+  if (!word)
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url>] [--recipe <file>] | status | stop'
   return openReview($, word)
 }
 
@@ -852,6 +913,492 @@ async function workerDone($: $, agent: string, answer: string) {
   void pump($)
 }
 
+// ---------------------------------------------------------------------------
+// `/tranchant review`: the review written and served first, then one reviewer
+// per lens and one verifier per finding that lands, three at a time, started
+// with no model turn; once every one ended, the review completes.
+
+/** Review agents starting, by key: their review folder, and whether a stop came meanwhile. */
+const startingReview = new Map<string, { dir: string; since: number; stop: boolean }>()
+let reviewDispatching: Promise<void> = Promise.resolve()
+let completing: Promise<void> = Promise.resolve()
+
+const MAX_REVIEWING = 3
+const REVIEW_USAGE =
+  'Usage: /tranchant review [<branch> | <merge request url>] [--recipe <recipe.json>]'
+
+/** A review agent's name: `rv-<lens>` or `vf-<finding id>`. */
+// Lens names and finding ids are `[\w-]`, 40 and 64 at most: whole, two never meet.
+const reviewAgentName = (job: ReviewJob) =>
+  `${job.kind === 'reviewer' ? 'rv' : 'vf'}-${job.kind === 'reviewer' ? job.lens.name : job.id}`
+/**
+ * A review agent's type: its name and its review's id, since two reviews may
+ * run at once and an agent's hooks come from its type, registered again per review.
+ */
+const reviewAgentType = (name: string, review: Review) =>
+  `${name}-${review.id.replace(/[^\w-]/g, '').slice(0, 8)}`
+/** Its key in `reviewAgents`: names repeat across reviews. */
+const agentKey = (name: string, dir: string) => `${name}@${dir}`
+
+async function setReviewAgent($: $, key: string, agent: ReviewAgent) {
+  await update($, reviewAgents, (all) => ({ ...all, [key]: agent }))
+  await showStatus($)
+}
+
+async function reviewAgentOf($: $, agent: string) {
+  const found = Object.entries(await read($, reviewAgents)).find(
+    ([, one]) => one.agent === agent,
+  )
+  return found && { key: found[0], one: found[1] }
+}
+
+/** The hook.mjs command of a review agent, its name and review written in. */
+const reviewHookArgv = (
+  $: $,
+  mode: string,
+  name: string,
+  dir: string,
+  project: string,
+) => [
+  'node',
+  `${skillDir($)}/scripts/hook.mjs`,
+  mode,
+  '--reviewer',
+  name,
+  '--review',
+  dir,
+  '--project',
+  project,
+]
+
+/** Steps into a review agent's run file, through hook.mjs: its start, its notes, its end. */
+async function reviewNote(
+  $: $,
+  one: Pick<ReviewAgent, 'name' | 'review' | 'project'>,
+  agent: string,
+  steps: Step[],
+) {
+  if (!steps.length) return
+  const ran = await $.process
+    .run(
+      [...reviewHookArgv($, 'note', one.name, one.review, one.project), '--agent', agent],
+      {
+        stdin: steps.map((step) => JSON.stringify(step)).join('\n'),
+      },
+    )
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  if (ran.exitCode !== 0)
+    await debug(
+      $,
+      `${tag(one.name)}: its steps were not recorded: ${short(ran.stderr.trim(), 160)}`,
+    )
+}
+
+/**
+ * The agent type of one review agent: the reviewer's or the verifier's
+ * instructions on the session's model, read-only tools, and hook.mjs around
+ * them, recording its steps.
+ */
+async function registerReviewAgent(
+  $: $,
+  review: Review,
+  name: string,
+  kind: ReviewAgent['kind'],
+) {
+  const run = (mode: string) => [
+    {
+      type: 'command',
+      command: reviewHookArgv($, mode, name, review.dir, review.project)
+        .map(shellQuote)
+        .join(' '),
+    },
+  ]
+  const { agent } = await $.agent.register({
+    name: reviewAgentType(name, review),
+    description: `Tranchant: ${kind} ${tag(name)}. Only the plugin's hooks start it.`,
+    prompt: await readAgentPrompt($, kind),
+    model: INHERIT,
+    tools: REVIEW_TOOLS,
+    hooks: {
+      PreToolUse: [{ matcher: 'Bash', hooks: run('pre') }],
+      PostToolUse: [{ matcher: '*', hooks: run('post') }],
+      PostToolUseFailure: [{ matcher: '*', hooks: run('post') }],
+    },
+  })
+  return agent
+}
+
+/** What a review agent's prompt says: who it is, where, and for a reviewer, its lens. */
+async function reviewPrompt($: $, review: Review, job: ReviewJob) {
+  const paths = [
+    `REVIEW=${review.dir}`,
+    `SKILL=${skillDir($)}`,
+    `PROJECT=${review.project}`,
+    `HEAD=${review.headSha}`,
+    `RANGE=${review.range}`,
+    `OWNERSHIP=${review.ownership}`,
+  ]
+  if (job.kind === 'verifier') return [job.id, ...paths].join('\n')
+  // The recipe's own words: the lens's instructions, which the person chose.
+  const instructions = await $.fs.read(job.lens.prompt)
+  return [
+    job.lens.name,
+    ...paths,
+    `PATHS=${job.lens.paths.join(' ')}`,
+    '',
+    "The lens's instructions:",
+    '',
+    instructions.trim(),
+  ].join('\n')
+}
+
+/** Review agents at work and starting, the three the cap counts. */
+async function busyReviewing($: $) {
+  const all = Object.values(await read($, reviewAgents))
+  return all.filter((one) => one.running).length + startingReview.size
+}
+
+async function startReviewQueued($: $) {
+  while ((await busyReviewing($)) < MAX_REVIEWING) {
+    let next: { dir: string; job: ReviewJob } | undefined
+    await update($, reviewRuns, (all) => {
+      const dir = Object.keys(all).find((one) => all[one]?.queue.length)
+      const run = dir === undefined ? undefined : all[dir]
+      if (dir === undefined || !run) return all
+      const [job, ...queue] = run.queue
+      if (job) next = { dir, job }
+      return { ...all, [dir]: { ...run, queue } }
+    })
+    if (!next) return
+    await startReviewAgent($, next.dir, next.job)
+  }
+}
+
+/** Starts the review agents the queues hold, three at a time, one start at a time. */
+function pumpReviews($: $) {
+  reviewDispatching = reviewDispatching.then(() => startReviewQueued($)).catch(ignore)
+  return reviewDispatching
+}
+
+async function startReviewAgent($: $, dir: string, job: ReviewJob) {
+  const loaded = await loadReview($, dir).catch((error: unknown) => message(error))
+  if (typeof loaded === 'string') {
+    $.ui.toast(
+      `Tranchant could not start the ${job.kind} ${reviewAgentName(job)}: ${dir}/review.json: ${loaded}`,
+    )
+    void checkComplete($, dir)
+    return
+  }
+  const review = loaded
+  const name = reviewAgentName(job)
+  const key = agentKey(name, dir)
+  const kind = job.kind
+  startingReview.set(key, { dir, since: Date.now(), stop: false })
+  const label = `tranchant ${name}`
+  const started = await (async () =>
+    $.agent.spawn({
+      subagentType: await registerReviewAgent($, review, name, kind),
+      name: label,
+      description: `Tranchant ${kind} ${tag(name)}`,
+      prompt: await reviewPrompt($, review, job),
+    }))().catch((error: unknown) => ({
+    deny: message(error),
+    agentId: undefined,
+    teammateId: undefined,
+    model: undefined,
+  }))
+  const agent =
+    started.agentId ??
+    (started.deny === undefined
+      ? (await $.agent.list().catch(() => [])).findLast((one) => one.name === label)?.id
+      : undefined)
+  const meanwhile = startingReview.get(key)
+  startingReview.delete(key)
+  if (!agent) {
+    const why = started.deny ?? 'no agent started'
+    $.ui.toast(`Tranchant could not start the ${kind} ${tag(name)}: ${why}`)
+    await debug($, `${tag(name)}: could not start: ${short(why, 160)}`)
+    void checkComplete($, dir)
+    return
+  }
+  const model =
+    started.model && started.model !== INHERIT
+      ? started.model
+      : await $.session.model().catch(() => INHERIT)
+  const one: ReviewAgent = {
+    agent,
+    name,
+    kind,
+    review: dir,
+    project: review.project,
+    running: true,
+    since: meanwhile?.since ?? Date.now(),
+    model,
+  }
+  await setReviewAgent($, key, one)
+  await reviewNote($, one, agent, [
+    {
+      at: Date.now(),
+      kind: 'start',
+      label:
+        job.kind === 'reviewer' ? `Reviewing: ${job.lens.name}` : `Verifying ${job.id}`,
+      state: 'done',
+      model,
+    },
+  ])
+  await debug($, `${tag(name)}: agent ${agent} started`)
+  if (meanwhile?.stop) await endReviewAgent($, key, one, 'stopped', 'Stopped')
+}
+
+/** A review agent ended, or was ended: its last step, and what comes next. */
+async function endReviewAgent(
+  $: $,
+  key: string,
+  one: ReviewAgent,
+  how: 'ended' | 'stopped',
+  label: string,
+) {
+  if (how === 'stopped')
+    await $.tool.call({ tool: 'TaskStop', task_id: one.agent }).catch(ignore)
+  await setReviewAgent($, key, { ...one, running: false })
+  await reviewNote($, one, one.agent, [
+    { at: Date.now(), kind: 'end', label, state: how === 'stopped' ? 'failed' : 'done' },
+  ])
+  await debug($, `${tag(one.name)}: agent ${one.agent} ${how}`)
+}
+
+/** A finding landed: its verifier, once, while the review runs. */
+async function verifyLanded($: $, dir: string, id: string) {
+  let queued = false
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run || run.verifying.includes(id)) return all
+    queued = true
+    return {
+      ...all,
+      [dir]: {
+        queue: [...run.queue, { kind: 'verifier', id }],
+        verifying: [...run.verifying, id],
+      },
+    }
+  })
+  if (queued) await pumpReviews($)
+}
+
+/** Lines `verify.mjs --pending` prints: the findings no verifier confirmed. */
+async function unverified($: $, dir: string) {
+  const ran = await $.process
+    .run(['node', `${skillDir($)}/scripts/verify.mjs`, '--pending', '--review', dir])
+    .catch(() => undefined)
+  if (ran?.exitCode !== 0) return undefined
+  return ran.stdout
+    .split('\n')
+    .map((line) => /^UNVERIFIED ([\w-]+)$/.exec(line.trim())?.[1])
+    .filter((id): id is string => id !== undefined)
+}
+
+/**
+ * Completes the review once no agent of it runs, starts or waits: first a
+ * verifier for each finding that landed with none, as LANDED may come late.
+ */
+async function completeIfDone($: $, dir: string) {
+  const run = (await read($, reviewRuns))[dir]
+  if (!run || run.queue.length) return
+  if ([...startingReview.values()].some((one) => one.dir === dir)) return
+  const agents = Object.values(await read($, reviewAgents))
+  if (agents.some((one) => one.review === dir && one.running)) return
+  const left = await unverified($, dir)
+  const missed = (left ?? []).filter((id) => !run.verifying.includes(id))
+  if (missed.length) {
+    for (const id of missed) await verifyLanded($, dir, id)
+    return
+  }
+  await finishReview($, dir, 'every reviewer and verifier ended')
+  // Verifiers that ended without a verdict: their findings stay dimmed, and said so.
+  if (left === undefined)
+    $.ui.toast(
+      'Tranchant could not tell which findings are still unverified: verify.mjs --pending failed.',
+    )
+  else if (left.length)
+    $.ui.toast(
+      `${left.length} finding(s) stay unverified: ${left.slice(0, 5).join(', ')}.`,
+    )
+}
+
+/** Ends review `dir`'s run: complete.mjs, and the toast; `stopped` by /tranchant stop. */
+async function finishReview($: $, dir: string, why: string, stopped = false) {
+  await update($, reviewRuns, (all) => {
+    if (!(dir in all)) return all
+    const { [dir]: _, ...rest } = all
+    return rest
+  })
+  const ran = await $.process
+    .run(['node', `${skillDir($)}/scripts/complete.mjs`, '--review', dir])
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  await showStatus($)
+  const review = await loadReview($, dir).catch(() => undefined)
+  const title = review?.title ?? basename(dir)
+  await debug(
+    $,
+    `${title}: ${why}; complete.mjs ${ran.exitCode === 0 ? 'ran' : `failed: ${short(ran.stdout.trim() || ran.stderr.trim(), 160)}`}`,
+  )
+  if (ran.exitCode !== 0)
+    $.ui.toast(
+      `Tranchant could not mark ${title} complete: ${short(ran.stdout.trim() || ran.stderr.trim() || `complete.mjs exited ${ran.exitCode}`, 200)}. node ${skillDir($)}/scripts/complete.mjs --review ${dir} does it.`,
+    )
+  else
+    $.ui.toast(
+      `Tranchant ${stopped ? 'stopped reviewing' : 'finished reviewing'} ${title}.`,
+    )
+}
+
+function checkComplete($: $, dir: string) {
+  completing = completing.then(() => completeIfDone($, dir)).catch(ignore)
+  return completing
+}
+
+/** A review agent ended its turn: its last step, its one line, and what comes next. */
+async function reviewAgentDone($: $, agent: string, answer: string) {
+  const found = await reviewAgentOf($, agent)
+  if (!found?.one.running) return
+  await endReviewAgent($, found.key, found.one, 'ended', 'Ended')
+  const said = answer.trim().split('\n')[0] ?? ''
+  if (said) $.ui.toast(`${tag(found.one.name)}: ${short(said, 200)}`)
+  await pumpReviews($)
+  await checkComplete($, found.one.review)
+}
+
+/** Ends every review agent and empties the queues: `/tranchant stop`. */
+async function stopReviewing($: $) {
+  for (const pending of startingReview.values()) pending.stop = true
+  const runs = Object.keys(await read($, reviewRuns))
+  await update($, reviewRuns, (all) =>
+    Object.fromEntries(
+      Object.entries(all).map(([dir, run]) => [dir, { ...run, queue: [] }]),
+    ),
+  )
+  const running = Object.entries(await read($, reviewAgents)).filter(
+    ([, one]) => one.running,
+  )
+  for (const [key, one] of running)
+    await endReviewAgent($, key, one, 'stopped', 'Stopped')
+  // Nothing more lands: the page stops showing the review in progress.
+  for (const dir of runs) await finishReview($, dir, '/tranchant stop', true)
+  return running.length
+}
+
+/** After a reload, the review agents at work get their hooks back. */
+async function registerReviewAgentsAgain($: $) {
+  for (const one of Object.values(await read($, reviewAgents))) {
+    if (!one.running) continue
+    const review = await loadReview($, one.review).catch(() => undefined)
+    if (review)
+      await registerReviewAgent($, review, one.name, one.kind).catch((error: unknown) =>
+        debug(
+          $,
+          `${tag(one.name)}: could not register its agent type: ${message(error)}`,
+        ),
+      )
+  }
+}
+
+/** The words of `/tranchant review`: its target and `--recipe <file>`, or what is wrong. */
+function reviewArgs(words: string[]) {
+  const at = words.indexOf('--recipe')
+  const recipe = at === -1 ? undefined : words[at + 1]
+  if (at !== -1 && !recipe) return { error: REVIEW_USAGE }
+  const rest = at === -1 ? words : words.filter((_, i) => i !== at && i !== at + 1)
+  if (rest.length > 1) return { error: REVIEW_USAGE }
+  return { target: rest[0], recipe }
+}
+
+/**
+ * `/tranchant review`: prepare.mjs writes the envelope, it opens through the
+ * same path as a review file, so the server and the page start first; then
+ * the reviewers queue, one per lens.
+ */
+async function startReview($: $, target: string | undefined, recipe: string | undefined) {
+  const cwd = normalize(await $.session.cwd())
+  const ran = await $.process
+    .run(
+      [
+        'node',
+        `${skillDir($)}/scripts/prepare.mjs`,
+        ...(target ? [target] : []),
+        ...(recipe ? ['--recipe', recipe] : []),
+      ],
+      { cwd },
+    )
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const lines = ran.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const refused = lines.find((line) => line.startsWith('REVIEW_REFUSED '))
+  if (refused)
+    return `Tranchant cannot review: ${refused.slice('REVIEW_REFUSED '.length)}`
+  const inbox = lines.find((line) => line.startsWith('INBOX '))?.slice('INBOX '.length)
+  const lenses = lines.flatMap((line): Lens[] => {
+    if (!line.startsWith('LENS ')) return []
+    try {
+      const lens: Lens = JSON.parse(line.slice('LENS '.length))
+      return [lens]
+    } catch {
+      return []
+    }
+  })
+  if (!inbox || !lenses.length)
+    return `Tranchant could not prepare the review: ${short(ran.stderr.trim() || `prepare.mjs exited ${ran.exitCode}`, 300)}`
+  const found = await reviewDir($, inbox)
+  if ('error' in found) return found.error
+  const { dir } = found
+  const served = await startServing($, dir)
+  const first = watches.get(dir)?.first
+  // A server that could not start: no page to stream to.
+  if (first !== undefined && !first.startsWith('READY')) return served
+  await update($, reviewRuns, (all) => ({
+    ...all,
+    [dir]: {
+      queue: lenses.map((lens): ReviewJob => ({ kind: 'reviewer', lens })),
+      verifying: [],
+    },
+  }))
+  await pumpReviews($)
+  return [
+    `Reviewing with ${lenses.length} lens(es): ${lenses.map((lens) => lens.name).join(', ')}. Findings land on the page as the reviewers find them, each verified in turn.`,
+    served,
+  ].join('\n')
+}
+
+/** `/tranchant status`'s lines about the review agents of review `dir`. */
+async function reviewStatus($: $, dir: string) {
+  const run = (await read($, reviewRuns))[dir]
+  const agents = Object.values(await read($, reviewAgents)).filter(
+    (one) => one.review === dir && one.running,
+  )
+  const pending = [...startingReview].filter(([, one]) => one.dir === dir)
+  if (!run && !agents.length && !pending.length) return []
+  const lines = [
+    ...pending.map(
+      ([key, one]) => `${tag(key.split('@')[0] ?? key)}: starting, for ${ago(one.since)}`,
+    ),
+    ...agents.map(
+      (one) =>
+        `${one.name}: agent ${one.agent} on ${one.model ?? "the session's model"}, for ${ago(one.since)}`,
+    ),
+  ]
+  const queue = (run?.queue ?? []).map(
+    (job, index) => `${index + 1}. ${reviewAgentName(job)}`,
+  )
+  return [
+    `  Reviewing${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${MAX_REVIEWING} review agents at work.`,
+    ...lines.map((line) => `    ${line}`),
+    ...(queue.length
+      ? ['  Review agents waiting, in order:', ...queue.map((one) => `    ${one}`)]
+      : []),
+  ]
+}
+
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     // The skill's way in. First, so a command Claude Code refuses cannot
@@ -859,7 +1406,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: 'open',
       description:
-        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
+        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -878,6 +1425,21 @@ export const register: Register = (on) => {
             type: 'boolean',
             description: 'true answers what runs instead; review is then left out.',
           },
+          run: {
+            type: 'boolean',
+            description:
+              'true reviews target in the background instead: the page opens at once, and fills as findings land; review is then left out.',
+          },
+          target: {
+            type: 'string',
+            description:
+              'With run: the branch or the merge request url to review; absent, the current branch.',
+          },
+          recipe: {
+            type: 'string',
+            description:
+              "With run: a recipe file to use instead of the plugin's default one.",
+          },
         },
       },
     })
@@ -886,11 +1448,14 @@ export const register: Register = (on) => {
     await registerCommand($, {
       name: 'tranchant',
       description:
-        'Tranchant: settle a code review from a page, one background agent per fix (a review file, status, or stop)',
-      argumentHint: '<review.json> | status | stop',
+        'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, status, or stop)',
+      argumentHint: '<review.json> | review [<branch> | <mr url>] | status | stop',
       immediate: true,
     })
     await registerRunning($)
+    await registerReviewAgentsAgain($)
+    // The review agents queued before a reload start once places free.
+    void pumpReviews($)
     await rearm($)
     return next(e)
   })
@@ -902,6 +1467,13 @@ export const register: Register = (on) => {
   on('tool.call', { tool: OPEN_TOOL }, async ($, e) => {
     if (e.stop === true) return { result: await stopServing($) }
     if (e.status === true) return { result: await statusText($) }
+    if (e.run === true) {
+      const target =
+        typeof e.target === 'string' && e.target.trim() ? e.target.trim() : undefined
+      const recipe =
+        typeof e.recipe === 'string' && e.recipe.trim() ? e.recipe.trim() : undefined
+      return { result: await startReview($, target, recipe) }
+    }
     const { review } = e
     if (typeof review !== 'string' || !review.trim())
       return { deny: 'Give the review file to open, or a review folder.' }
@@ -916,7 +1488,11 @@ export const register: Register = (on) => {
 
   // The findings' agents and the review's are the hooks' alone: the model is not offered them.
   on('agent.offer', async ($, e, next) =>
-    e.agent === WORKER || FINDING_AGENT.test(e.agent) || REVIEW_AGENT.test(e.agent)
+    e.agent === WORKER ||
+    FINDING_AGENT.test(e.agent) ||
+    REVIEW_FILE_AGENT.test(e.agent) ||
+    REVIEW_PROMPTS.has(e.agent) ||
+    REVIEW_AGENT.test(e.agent)
       ? { isOffered: false }
       : next(e),
   )
@@ -926,7 +1502,8 @@ export const register: Register = (on) => {
     const stored = await next(e)
     if (!e.agentId || e.message.type !== 'assistant') return stored
     const worker = await workerOf($, e.agentId)
-    if (!worker) return stored
+    const reviewing = worker ? undefined : await reviewAgentOf($, e.agentId)
+    if (!worker && !reviewing) return stored
     const content: { type?: string; text?: string }[] = Array.isArray(e.message.content)
       ? e.message.content
       : []
@@ -942,14 +1519,21 @@ export const register: Register = (on) => {
     // Not waited for: each note is a Node start. Its steps carry their time,
     // which orders them among the tools' steps.
     const agent = e.agentId
-    noting = noting.then(() => note($, agent, worker.id, worker.worker, steps))
+    noting = noting.then(() =>
+      worker
+        ? note($, agent, worker.id, worker.worker, steps)
+        : reviewing && reviewNote($, reviewing.one, agent, steps),
+    )
     return stored
   })
 
   // A finding's agent ended its turn. Its Stop hook released its locks.
   on('turn.complete', async ($, e, next) => {
     void rearm($)
-    if (e.agentId) await workerDone($, e.agentId, e.answer)
+    if (e.agentId) {
+      await workerDone($, e.agentId, e.answer)
+      await reviewAgentDone($, e.agentId, e.answer)
+    }
     return next(e)
   })
 }

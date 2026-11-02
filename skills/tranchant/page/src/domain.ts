@@ -69,6 +69,8 @@ export interface Finding {
   related?: Related[]
   /** When it joined the review: set by the import, or by add.mjs. */
   addedAt?: string
+  /** A verifier confirmed it; read only when the review's `verify` is true. */
+  verified?: boolean
 }
 
 interface DiffRefs {
@@ -104,6 +106,8 @@ export interface Review {
   summary: string
   strengths?: string[]
   sources?: { codeReview?: number; reviewPr?: number; both?: number }
+  /** Findings land unverified and a verifier confirms each: `/tranchant review` sets it. */
+  verify?: boolean
   findings: Finding[]
 }
 
@@ -188,7 +192,7 @@ export interface FindingRecord {
 /** One line of a run file: a tool the agent's hooks recorded. */
 export interface Step {
   at: number
-  /** `start`, `read`, `edit`, `write`, `bash`, `search`, `note` or `tool`. */
+  /** `start`, `read`, `edit`, `write`, `bash`, `search`, `note` or `tool`; a review agent's last is `end`. */
   kind: string
   label: string
   state: 'running' | 'done' | 'failed'
@@ -197,12 +201,23 @@ export interface Step {
   model?: string
 }
 
+/** An agent of `/tranchant review`: a lens's reviewer (`rv-…`) or a finding's verifier (`vf-…`). */
+export interface ReviewAgent {
+  name: string
+  running: boolean
+  outcome?: 'done' | 'failed'
+  /** Its last 50 steps. */
+  steps: Step[]
+}
+
 /** What `GET /api/review` answers. */
 export interface ReviewPayload {
   review: Review
   findings: Record<string, FindingRecord>
   /** By finding id: the last 50 steps of its run in progress. */
   runs: Record<string, Step[]>
+  /** The review's agents, in the order they started; absent from older servers. */
+  reviewers?: ReviewAgent[]
   head: { reviewed: string; current: string | null }
 }
 
@@ -230,6 +245,14 @@ export const STATE_LABELS: Record<State, string> = {
 }
 
 export const tagOf = (finding: Pick<Finding, 'tag'>): Tag => finding.tag ?? 'concern'
+
+/** The findings no verifier confirmed yet, in a review whose findings are verified. */
+export const unverifiedIds = (review: Pick<Review, 'verify' | 'findings'>) =>
+  new Set(
+    review.verify
+      ? review.findings.filter((one) => one.verified !== true).map((one) => one.id)
+      : [],
+  )
 
 /** Whether findings may still land: the page then shows the review in progress. */
 export const isReviewing = (review: Pick<Review, 'status'>) =>

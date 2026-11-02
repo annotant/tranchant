@@ -522,3 +522,37 @@ test('the file list follows the file the diff is scrolled to; a file or the curs
     scrolls.mockRestore()
   }
 })
+
+test('a verified review dims the findings no verifier confirmed, and shows its agents', async () => {
+  const [first, second] = FINDINGS
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'reviewing',
+        verify: true,
+        findings: [{ ...first!, verified: true }, second!],
+      },
+    }),
+    reviewers: [
+      {
+        name: 'rv-bugs',
+        running: true,
+        steps: [{ at: 1, kind: 'read', label: 'src/cart.js', state: 'running' }],
+      },
+      {
+        name: 'vf-f-01',
+        running: false,
+        outcome: 'done',
+        steps: [{ at: 2, kind: 'end', label: 'Ended', state: 'done' }],
+      },
+    ],
+  })
+  const options = screen.getAllByRole('option')
+  const dimmed = options.filter((option) => option.className.includes('tr-unverified'))
+  expect(dimmed.map((option) => option.id)).toEqual([`tr-option-${second!.id}`])
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('Reviewer · bugs')
+  expect(agents.textContent).toContain('Reading src/cart.js')
+  expect(agents.textContent).toContain('Verifier · f-01')
+  expect(agents.textContent).toContain('Ended')
+})

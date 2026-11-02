@@ -19,10 +19,16 @@ pattern, read how annotant does it.
   mod's hooks for an agent the plugin starts: each fix's agent is registered
   as a type of its own (`tranchant:tr-<id>`) whose settings hooks run
   `skills/tranchant/scripts/hook.mjs` (file locks, steps) around its tools.
+  `/tranchant review` starts the review agents the same way: one reviewer per
+  lens (`tranchant:rv-<lens>-<review>`), one verifier per finding
+  (`tranchant:vf-<id>-<review>`).
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
-  start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`. Hidden
+  start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
+  `agents/reviewer.md` and `agents/verifier.md`, the review agents'. Hidden
   from the model.
+- `skills/tranchant/recipes/`: the default recipe of `/tranchant review` and
+  its lenses' instructions.
 - `skills/tranchant/SKILL.md`: the skill itself, a prompt. Keep it short:
   every line is read in every user's session.
 - `skills/tranchant/scripts/`: Node.js ES modules with JSDoc types, no

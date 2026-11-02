@@ -114,6 +114,16 @@ dl { margin: 0; }
 .tr-chip--warn { background: var(--tr-warn-bg); color: var(--tr-warn); }
 .tr-chip--live { background: var(--tr-accent-weak); color: var(--tr-accent); gap: 6px; }
 .tr-chip--live .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
+.tr-unverified { opacity: 0.55; }
+.tr-agents { margin: 0 0 12px; font-size: 12.5px; }
+.tr-agents ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tr-agent { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tr-agent--ended { color: var(--tr-muted); }
+.tr-agent .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
+.tr-agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tr-muted); flex: none; }
+.tr-agent-dot--failed { background: var(--tr-danger); }
+.tr-agent-name { font-weight: 500; white-space: nowrap; }
+.tr-agent-step { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tr-muted); }
 .tr-chip--queued, .tr-chip--working, .tr-chip--asking { background: var(--tr-warn-bg); color: var(--tr-warn); }
 .tr-chip--fixed, .tr-chip--posted { background: var(--tr-auto-bg); color: var(--tr-auto); }
 .tr-chip--failed, .tr-chip--stopped { background: var(--tr-danger-bg); color: var(--tr-danger); }

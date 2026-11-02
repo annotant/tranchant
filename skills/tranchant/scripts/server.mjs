@@ -3,7 +3,9 @@
 // Serves the page and its API on a free port of 127.0.0.1, and prints one
 // line per decision the plugin's hooks act on: FIX, STOP, DROPPED, SKIPPED,
 // and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
-// time). It watches the review folder, its findings and its run files, and
+// time); LANDED for each finding a verifier must check, while a review whose
+// findings are verified (`verify`) runs. It watches the review folder, its
+// findings, its run files and its review agents' (reviewers/), and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
 // It computes the change's diff (/api/diff) once, with git, for the page's main view.
@@ -18,8 +20,13 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
-import { contentOf, oneLine, statusOf } from './lib/format.mjs'
-import { StoreRefusal, createStore, readProgress } from './lib/store.mjs'
+import { oneLine, statusOf } from './lib/format.mjs'
+import {
+  StoreRefusal,
+  createStore,
+  readProgress,
+  readReviewAgents,
+} from './lib/store.mjs'
 
 /** @typedef {import('./lib/format.mjs').Entry} Entry */
 
@@ -61,6 +68,7 @@ const pollMs = Number(process.env.TRANCHANT_POLL_MS ?? 5000)
 const { project } = review
 const runsDir = path.join(dir, 'runs')
 const findingsDir = path.join(dir, 'findings')
+const agentsDir = path.join(dir, 'reviewers')
 
 /** The server's own origins, once it listens: the page's requests carry one of them. */
 const origins = new Set()
@@ -422,15 +430,17 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
     // Read anew: findings land and the status flips while the review runs.
-    const [{ review: latest, decisions }, runs, current] = await Promise.all([
+    const [{ review: latest, decisions }, runs, reviewers, current] = await Promise.all([
       store.readAll(),
       store.runs(),
+      readReviewAgents(dir),
       currentHead(),
     ])
     return send(res, 200, {
       review: latest,
       findings: decisions.findings,
       runs,
+      reviewers,
       head: { reviewed: latest.headSha, current },
     })
   }
@@ -604,17 +614,21 @@ function listen(req, res) {
 const fingerprints = new Map()
 /** The review's status at the last read. @type {string | undefined} */
 let statusSeen
+/** The review agents' run files at the last read: their names, sizes and times. */
+let agentsSeen = ''
 
 /**
  * The ids of the findings that landed, or whose decisions or run files
- * changed, since the last read; and whether the review's status did.
+ * changed, since the last read; whether the review's status or its review
+ * agents did; and the review as read.
  */
 async function changes() {
   /** @type {Map<string, string>} */
   const next = new Map()
   const latest = await store.readReview().catch(() => undefined)
   for (const finding of latest?.findings ?? []) {
-    const hash = createHash('sha1').update(contentOf(finding)).digest('hex')
+    // The whole file: a verifier's `verified` changes what the page shows.
+    const hash = createHash('sha1').update(JSON.stringify(finding)).digest('hex')
     next.set(finding.id, `finding ${hash}`)
   }
   const decisions = await store.readDecisions().catch(() => undefined)
@@ -638,9 +652,40 @@ async function changes() {
   fingerprints.clear()
   for (const [id, mark] of next) fingerprints.set(id, mark)
   const status = latest ? statusOf(latest) : statusSeen
-  const statusChanged = status !== statusSeen
+  const agents = []
+  for (const name of (await readdir(agentsDir).catch(() => [])).toSorted((a, b) =>
+    a.localeCompare(b),
+  )) {
+    const file = await stat(path.join(agentsDir, name)).then(
+      (one) => `${one.size} ${one.mtimeMs}`,
+      () => '',
+    )
+    agents.push(`${name} ${file}`)
+  }
+  const agentsNow = agents.join('\n')
+  const statusChanged = status !== statusSeen || agentsNow !== agentsSeen
   statusSeen = status
-  return { ids, statusChanged }
+  agentsSeen = agentsNow
+  return { ids, statusChanged, latest }
+}
+
+/** Whether READY was printed: the hooks read it first, LANDED only after. */
+let ready = false
+/** The findings LANDED was printed for, once each. @type {Set<string>} */
+const landed = new Set()
+
+/**
+ * LANDED for each finding not verified yet, while a review whose findings
+ * are verified runs: the hooks start a verifier on it.
+ * @param {import('./lib/format.mjs').Review | undefined} latest
+ */
+function announceLanded(latest) {
+  if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing') return
+  for (const finding of latest.findings) {
+    if (finding.verified === true || landed.has(finding.id)) continue
+    landed.add(finding.id)
+    print(`LANDED ${finding.id}`)
+  }
 }
 
 /**
@@ -648,7 +693,8 @@ async function changes() {
  * @param {boolean} first
  */
 async function refresh(first) {
-  const { ids, statusChanged } = await changes()
+  const { ids, statusChanged, latest } = await changes()
+  announceLanded(latest)
   if (first || (!ids.length && !statusChanged)) return
   const event = `event: changed\ndata: ${JSON.stringify({ ids })}\n\n`
   for (const res of listeners) res.write(event)
@@ -734,6 +780,7 @@ function watchFolders() {
     [dir, changeSeen],
     [runsDir, changeSeen],
     [findingsDir, changeSeen],
+    [agentsDir, changeSeen],
     [path.dirname(PAGE), pageChanged],
   ]
   for (const [folder, onChange] of folders) {
@@ -820,12 +867,15 @@ server.listen(port, '127.0.0.1', async () => {
   // Made before the first run and the first finding: a folder must be there to be watched.
   await mkdir(runsDir, { recursive: true })
   await mkdir(findingsDir, { recursive: true })
+  await mkdir(agentsDir, { recursive: true })
   await refreshNext(true)
   console.log(
     `READY http://127.0.0.1:${listening} review=${review.id} project=${project}`,
   )
+  ready = true
   watchFolders()
   await resumeQueued()
+  await refreshNext()
   setInterval(() => {
     watchFolders()
     void refreshNext()

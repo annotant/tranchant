@@ -16,6 +16,8 @@ interface Props {
   /** The finding the detail shows. */
   openId: string | undefined
   selected: ReadonlySet<string>
+  /** The findings no verifier confirmed yet: dimmed. */
+  unverified?: ReadonlySet<string>
   onOpen: (id: string) => void
   onToggle: (id: string) => void
 }
@@ -28,6 +30,7 @@ function Row({
   focused,
   open,
   checked,
+  unverified,
   onOpen,
   onToggle,
 }: {
@@ -36,6 +39,7 @@ function Row({
   focused: boolean
   open: boolean
   checked: boolean
+  unverified: boolean
   onOpen: () => void
   onToggle: () => void
 }) {
@@ -47,7 +51,7 @@ function Row({
       role="option"
       aria-selected={focused}
       aria-current={open ? 'true' : undefined}
-      className={`tr-item ${focused ? 'tr-item--focused' : ''} ${open ? 'tr-item--open' : ''}`}
+      className={`tr-item ${focused ? 'tr-item--focused' : ''} ${open ? 'tr-item--open' : ''} ${unverified ? 'tr-unverified' : ''}`}
     >
       <input
         type="checkbox"
@@ -62,6 +66,7 @@ function Row({
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}
+          {unverified && <span className="tr-chip">unverified</span>}
           <span className="tr-item-title">{finding.title}</span>
         </span>
         <span className="tr-item-anchor">
@@ -78,6 +83,7 @@ export function FindingList({
   cursor,
   openId,
   selected,
+  unverified,
   onOpen,
   onToggle,
 }: Props) {
@@ -126,6 +132,7 @@ export function FindingList({
                   focused={cursor === finding.id}
                   open={openId === finding.id}
                   checked={selected.has(finding.id)}
+                  unverified={unverified?.has(finding.id) ?? false}
                   onOpen={() => onOpen(finding.id)}
                   onToggle={() => onToggle(finding.id)}
                 />

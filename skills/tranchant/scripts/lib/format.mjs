@@ -183,6 +183,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Diagram} [diagram]
  * @property {Related[]} [related] Up to 4.
  * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
+ * @property {boolean} [verified] Set by verify.mjs once a verifier confirmed it; read only when the review's `verify` is true.
  */
 
 /**
@@ -216,6 +217,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} summary Markdown, shown above the findings.
  * @property {string[]} strengths
  * @property {Record<string, number>} [sources]
+ * @property {boolean} [verify] Findings land unverified and a verifier confirms each: `/tranchant review` sets it.
  * @property {Finding[]} findings At least one, unless `status` is `reviewing`.
  */
 
@@ -318,7 +320,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * readers merge them into one step.
  * @typedef {object} Step
  * @property {number} at Milliseconds since the epoch.
- * @property {string} kind `start`, `read`, `edit`, `write`, `bash`, `search`, `note` or `tool`.
+ * @property {string} kind `start`, `read`, `edit`, `write`, `bash`, `search`, `note` or `tool`; a review agent's last step is `end`.
  * @property {string} label
  * @property {string} [id] Tools only: Claude Code's tool_use_id.
  * @property {'running' | 'done' | 'failed'} [state]
@@ -559,6 +561,9 @@ function checkFinding(finding, where, theirs, problems) {
   if (finding.addedAt !== undefined && !isText(finding.addedAt, 100)) {
     problems.push(`${where}.addedAt: a date is required`)
   }
+  if (finding.verified !== undefined && typeof finding.verified !== 'boolean') {
+    problems.push(`${where}.verified: true or false`)
+  }
 }
 
 /**
@@ -648,6 +653,9 @@ export function validateEnvelope(review) {
   }
   if (review.sources !== undefined && !isObject(review.sources)) {
     problems.push('sources: an object is required')
+  }
+  if (review.verify !== undefined && typeof review.verify !== 'boolean') {
+    problems.push('verify: true or false')
   }
   return problems
 }
@@ -746,12 +754,12 @@ export function identityOf(review) {
 }
 
 /**
- * A finding's content as JSON, `addedAt` left out: the same finding added
- * again agrees with its file.
- * @param {{ addedAt?: unknown }} finding
+ * A finding's content as JSON, `addedAt` and `verified` left out: the same
+ * finding added again agrees with its file, verified or not.
+ * @param {{ addedAt?: unknown, verified?: unknown }} finding
  */
 export function contentOf(finding) {
-  const { addedAt: _addedAt, ...content } = finding
+  const { addedAt: _addedAt, verified: _verified, ...content } = finding
   return JSON.stringify(canonical(content))
 }
 
