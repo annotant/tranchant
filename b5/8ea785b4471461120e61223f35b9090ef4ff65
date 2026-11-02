@@ -1,0 +1,21 @@
+hooks/register.ts
+  s_bc2462413ee2a6::t_4a25064bda1bda 62-63,917,919-921
+test/hooks.test.ts
+  s_bc2462413ee2a6::t_4a25064bda1bda 396-401
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b58ea785b4471461120e61223f35b9090ef4ff65",
+  "prompts": {},
+  "sessions": {
+    "s_bc2462413ee2a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a49408b3-1500-46cd-b249-d09ecccff78e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
