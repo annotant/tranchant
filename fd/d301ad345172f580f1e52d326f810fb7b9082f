@@ -1,0 +1,54 @@
+agents/review/tests.md
+  s_bc2462413ee2a6::t_52b45132a30246 96-100
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-92,95,101-182
+  s_bc2462413ee2a6::t_28fcef9b2fd488 93-94
+agents/review/types.md
+  s_bc2462413ee2a6::t_28fcef9b2fd488 92-93
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-91,94,100-181
+  s_bc2462413ee2a6::t_52b45132a30246 95-99
+agents/review/performance.md
+  s_bc2462413ee2a6::t_52b45132a30246 101-105
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-97,100,106-188
+  s_bc2462413ee2a6::t_28fcef9b2fd488 98-99
+agents/review/accessibility.md
+  s_bc2462413ee2a6::t_52b45132a30246 98-103
+  s_bc2462413ee2a6::t_28fcef9b2fd488 95-96
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-94,97,104-185
+agents/review/correctness.md
+  s_bc2462413ee2a6::t_28fcef9b2fd488 100-101
+  s_bc2462413ee2a6::t_52b45132a30246 103-107
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-99,102,108-189
+agents/review/conventions.md
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-92,95,101-180
+  s_bc2462413ee2a6::t_28fcef9b2fd488 93-94
+  s_bc2462413ee2a6::t_52b45132a30246 96-100
+agents/review/bugs.md
+  s_bc2462413ee2a6::t_28fcef9b2fd488 90-91
+  s_bc2462413ee2a6::t_52b45132a30246 93-98
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-89,92,99-180
+agents/review/security.md
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-95,98,104-185
+  s_bc2462413ee2a6::t_28fcef9b2fd488 96-97
+  s_bc2462413ee2a6::t_52b45132a30246 99-103
+agents/review/recipe.json
+  s_bc2462413ee2a6::t_28fcef9b2fd488 7,12,59
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-6,8-11,13-58,60-82
+agents/review/verifier.md
+  s_bc2462413ee2a6::t_cec152a6902c3f 1-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fdd301ad345172f580f1e52d326f810fb7b9082f",
+  "prompts": {},
+  "sessions": {
+    "s_bc2462413ee2a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a49408b3-1500-46cd-b249-d09ecccff78e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}

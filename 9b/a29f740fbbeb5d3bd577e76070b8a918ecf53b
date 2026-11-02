@@ -1,0 +1,37 @@
+agents/review/types.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+agents/review/verifier.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+agents/review/correctness.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+agents/review/security.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+agents/review/tests.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+test/review.test.mjs
+  s_bc2462413ee2a6::t_2e5a6617ee0970 23
+agents/review/accessibility.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+agents/review/performance.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+agents/review/conventions.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+agents/review/bugs.md
+  s_bc2462413ee2a6::t_f98d7b95abb636 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ba29f740fbbeb5d3bd577e76070b8a918ecf53b",
+  "prompts": {},
+  "sessions": {
+    "s_bc2462413ee2a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a49408b3-1500-46cd-b249-d09ecccff78e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "neolitec <kev.manson@gmail.com>"
+    }
+  }
+}
