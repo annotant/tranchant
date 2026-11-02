@@ -60,14 +60,16 @@ function linesOf(excerpts, changed) {
  * Builds in `dir`, an empty folder, a git repository for `review`: on `main`,
  * every file the review names made of placeholder lines; on the review's
  * branch, one commit putting the excerpt lines at their line numbers, so each
- * finding's line is an added line of `git diff main...HEAD`. Returns the
+ * finding's line is an added line of `git diff main...HEAD`. With `folder`,
+ * the files and `project` lie in that folder of the repository. Returns the
  * review pointed at it: `project`, `base`, `headSha` and, when the review has
  * them, `mr.diffRefs`.
  * @param {string} dir
  * @param {Review} review
+ * @param {{ folder?: string }} [options]
  * @returns {Review}
  */
-export function buildPlayground(dir, review) {
+export function buildPlayground(dir, review, { folder = '' } = {}) {
   const git = (/** @type {string[]} */ ...args) =>
     execFileSync(
       'git',
@@ -82,17 +84,18 @@ export function buildPlayground(dir, review) {
       ],
       { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
     ).trim()
+  const project = path.join(dir, folder)
   const excerpts = excerptsByFile(review)
   const write = (/** @type {boolean} */ changed) => {
     for (const [file, list] of excerpts) {
-      const target = path.join(dir, file)
+      const target = path.join(project, file)
       mkdirSync(path.dirname(target), { recursive: true })
       writeFileSync(target, `${linesOf(list, changed).join('\n')}\n`)
     }
   }
-  mkdirSync(dir, { recursive: true })
+  mkdirSync(project, { recursive: true })
   writeFileSync(
-    path.join(dir, 'CLAUDE.md'),
+    path.join(project, 'CLAUDE.md'),
     [
       '# Playground',
       '',
@@ -114,7 +117,7 @@ export function buildPlayground(dir, review) {
   const headSha = git('rev-parse', 'HEAD')
   return {
     ...review,
-    project: dir,
+    project,
     base: 'main',
     headSha,
     ...(review.mr?.diffRefs && {
