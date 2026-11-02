@@ -171,15 +171,15 @@ export const inProgress = (review) => ({
 })
 
 if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
-  const argv = process.argv.slice(2)
-  const variant = argv.includes('--theirs')
+  const flags = new Set(process.argv.slice(2))
+  const variant = flags.has('--theirs')
     ? 'theirs'
-    : argv.includes('--front-end')
+    : flags.has('--front-end')
       ? 'front-end'
       : 'ours'
   const fixture = path.join(ROOT, 'test/fixtures', `review-${variant}.json`)
   if (existsSync(PLAYGROUND)) {
-    if (!argv.includes('--fresh')) {
+    if (!flags.has('--fresh')) {
       console.error(`${PLAYGROUND} exists: pass --fresh to replace it`)
       process.exit(2)
     }

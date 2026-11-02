@@ -39,10 +39,9 @@ it is not in the key either.
 ## Running a lens by hand
 
 The lenses can be tried before the review driver exists, one agent at a
-time. Build the playground, import the live envelope (this needs the
-streaming contract's `open.mjs`, which accepts a `reviewing` review with no
-finding), then start Claude Code at the repository root and give an agent a
-lens's prompt with the inputs the driver would:
+time. Build the playground, import the live envelope (a `reviewing` review
+with no finding yet), then start Claude Code at the repository root and give
+an agent a lens's prompt with the inputs the driver would:
 
 ```sh
 node test/fixtures/playground.mjs --front-end --fresh
@@ -60,10 +59,11 @@ BASE=main
 HEAD=feature/cart-discounts
 ```
 
-The agent's `add.mjs` calls write `findings/<id>.json` in the review folder;
-compare them with the key. Until `add.mjs` exists, tell the agent to print
-each finding's JSON in its reply instead of calling it. The verifier is tried
-the same way, with a finding's id as the prompt's first line.
+The agent's `add.mjs` calls write `findings/<id>.json` in the review folder,
+and the page, served on that folder, shows them as they land; compare them
+with the key, then `complete.mjs --review <dir>` ends the review. The
+verifier is tried the same way, with a finding's id as the prompt's first
+line.
 
 The expected outcome of a full run: the seven planted defects, each as one
 finding of its lens, nothing on the clean files, and the verifier keeping all
