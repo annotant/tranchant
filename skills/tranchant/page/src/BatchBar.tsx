@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useAccount } from './api'
 import {
   type Action,
   applicable,
@@ -46,6 +47,8 @@ export function BatchBar({
 }: Props) {
   const [pending, setPending] = useState<Pending>()
   const posting = canPost(review)
+  const account = useAccount(posting)
+  const byId = new Map(ordered.map((finding) => [finding.id, finding]))
   // In the list's order: the batch runs top to bottom.
   const open = ordered
     .filter((finding) => stateOf(records, finding.id) === 'open')
@@ -150,14 +153,23 @@ export function BatchBar({
       </div>
       {pending && (
         <div className="tr-confirm" role="alertdialog" aria-label="Confirm the batch">
-          <span>
-            {VERBS[pending.action]}{' '}
-            {plural(
-              pending.ids.length,
-              pending.action === 'post' ? 'comment' : 'finding',
-            )}
-            ?
-          </span>
+          {pending.action === 'post' ? (
+            <div className="tr-confirm-post">
+              <span>
+                Post {plural(pending.ids.length, 'comment')} on !{review.mr?.iid} as{' '}
+                {account ?? 'your glab account'}?
+              </span>
+              <ul aria-label="Comments to post">
+                {pending.ids.map((id) => (
+                  <li key={id}>{byId.get(id)?.title ?? id}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <span>
+              {VERBS[pending.action]} {plural(pending.ids.length, 'finding')}?
+            </span>
+          )}
           <button
             type="button"
             className="tr-btn tr-btn--small tr-btn--primary"

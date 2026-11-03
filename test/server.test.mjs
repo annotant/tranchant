@@ -9,6 +9,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -27,7 +28,11 @@ const FIRST_LINE = /^(READY|PORT_BUSY|REVIEW_REFUSED|HOOKS_MISSING|PAGE_MISSING)
 let stateDir
 /** A stand-in for the built bundle. */
 let page = ''
-/** The fake glab: records its call, answers a discussion, or fails when `glabDir/fail` exists. */
+/**
+ * The fake glab: answers `api user` with its account (its working folder
+ * in `user.txt`, a line per call), else records its call, answers a discussion, or fails when
+ * `glabDir/fail` exists.
+ */
 let glab = ''
 let glabDir = ''
 
@@ -41,6 +46,7 @@ before(async (t) => {
     glab,
     [
       '#!/bin/sh',
+      `if [ "$1 $2" = "api user" ]; then pwd -P >> "${glabDir}/user.txt"; printf '%s' '{"id":7,"username":"reviewer-bot"}'; exit 0; fi`,
       `printf '%s\\n' "$@" > "${glabDir}/args.txt"`,
       `cat > "${glabDir}/stdin.txt"`,
       `if [ -f "${glabDir}/fail" ]; then echo "glab: 400 Bad Request: line not in diff" >&2; exit 1; fi`,
@@ -871,6 +877,37 @@ test('posts a comment with glab itself, and records where it landed', async () =
       new_line: 27,
     },
   })
+})
+
+test('names the account glab posts as, read once', async () => {
+  for (let ask = 0; ask < 2; ask++) {
+    const response = await fetch(`${main.base}/api/account`)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await json(response), { username: 'reviewer-bot' })
+  }
+  // One call, from the project: glab takes the host it posts to from there.
+  const calls = (await readFile(path.join(glabDir, 'user.txt'), 'utf8'))
+    .trim()
+    .split('\n')
+  assert.deepEqual(calls, [await realpath(main.review.project)])
+})
+
+test('an account glab cannot read answers null, without failing', async (t) => {
+  const server = await startServer(t, {
+    env: { TRANCHANT_GLAB: path.join(glabDir, 'no-such-glab') },
+  })
+  const response = await fetch(`${server.base}/api/account`)
+  assert.equal(response.status, 200)
+  assert.deepEqual(await json(response), { username: null })
+})
+
+test('a glab answering no username answers null', async (t) => {
+  const odd = path.join(await tempDir(t), 'glab')
+  await writeFile(odd, `#!/bin/sh\nprintf '%s' '{"message":"401 Unauthorized"}'\n`)
+  await chmod(odd, 0o755)
+  const server = await startServer(t, { env: { TRANCHANT_GLAB: odd } })
+  const response = await fetch(`${server.base}/api/account`)
+  assert.deepEqual(await json(response), { username: null })
 })
 
 test('a post glab refuses fails the finding with glab’s first line', async () => {
