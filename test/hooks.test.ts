@@ -741,7 +741,7 @@ test('review writes the envelope and opens the page first, then one reviewer per
   const w = world(on)
   const text = await review($, w, 'review feature/cart-discounts --recipe my.json')
   expect(w.prepared).toEqual([
-    { argv: ['feature/cart-discounts', '--recipe', 'my.json'], cwd: ROOT },
+    { argv: ['feature/cart-discounts', '--recipe', '/repo/web/my.json'], cwd: ROOT },
   ])
   // The envelope prepare.mjs wrote opens through the same path as a review file.
   expect(w.imported).toEqual([INBOX])
@@ -799,6 +799,22 @@ test('review writes the envelope and opens the page first, then one reviewer per
     expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
   expect(w.completed).toEqual([])
   await w.exit(0)
+})
+
+test('review of a folder runs prepare.mjs in it, a recipe resolved from the session', async ($, on) => {
+  const w = world(on, { gitRoot: '/repo/elsewhere' })
+  await review($, w, 'review ../elsewhere --recipe my.json')
+  expect(w.prepared).toEqual([
+    { argv: ['--recipe', '/repo/web/my.json'], cwd: '/repo/elsewhere' },
+  ])
+  await w.exit(0)
+})
+
+test('review of a folder outside any repository is refused, nothing prepared', async ($, on) => {
+  const w = world(on)
+  const { text } = await $.command.run(command('review /tmp/nothing'))
+  expect(text).toBe('Tranchant cannot review: /tmp/nothing is not in a git repository')
+  expect(w.prepared).toEqual([])
 })
 
 test('a review prepare.mjs refuses is answered as refused, no server started', async ($, on) => {

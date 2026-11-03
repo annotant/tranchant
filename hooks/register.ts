@@ -900,7 +900,7 @@ async function openCommand($: $, args: string) {
     return 'error' in parsed ? parsed.error : startReview($, parsed.target, parsed.recipe)
   }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url>] [--recipe <file>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] | status | stop'
   return openReview($, word)
 }
 
@@ -1006,7 +1006,7 @@ let completing: Promise<void> = Promise.resolve()
 
 const MAX_REVIEWING = 3
 const REVIEW_USAGE =
-  'Usage: /tranchant review [<branch> | <merge request url>] [--recipe <recipe.json>]'
+  'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]'
 
 /** A review agent's name: `rv-<lens>` or `vf-<finding id>`. */
 // Lens names and finding ids are `[\w-]`, 40 and 64 at most: whole, two never meet.
@@ -1413,15 +1413,19 @@ function reviewArgs(words: string[]) {
  */
 async function startReview($: $, target: string | undefined, recipe: string | undefined) {
   const cwd = normalize(await $.session.cwd())
+  // A path names another repository, its current branch: no branch starts with `.` or `/`.
+  const folder = target && /^[./]/.test(target) ? resolve(cwd, target) : undefined
+  if (folder && !(await gitTop($, folder)))
+    return `Tranchant cannot review: ${folder} is not in a git repository`
   const ran = await $.process
     .run(
       [
         'node',
         `${skillDir($)}/scripts/prepare.mjs`,
-        ...(target ? [target] : []),
-        ...(recipe ? ['--recipe', recipe] : []),
+        ...(target && !folder ? [target] : []),
+        ...(recipe ? ['--recipe', resolve(cwd, recipe)] : []),
       ],
-      { cwd },
+      { cwd: folder ?? cwd },
     )
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
   const lines = ran.stdout
@@ -1533,7 +1537,7 @@ export const register: Register = (on) => {
           target: {
             type: 'string',
             description:
-              'With run: the branch or the merge request url to review; absent, the current branch.',
+              'With run: the branch, the merge request url or the folder (another repository, its current branch) to review; absent, the current branch.',
           },
           recipe: {
             type: 'string',

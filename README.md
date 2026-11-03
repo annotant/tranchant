@@ -104,6 +104,7 @@ run script.
 /tranchant review                     # review the current branch, findings streamed to the page
 /tranchant review feature/cart        # another branch, against the default branch
 /tranchant review <merge request url> # someone else's MR, read with glab
+/tranchant review ../other-repo       # another repository, at its current branch
 /tranchant <review.json>              # import a review and open its page
 /tranchant status                     # what is running
 /tranchant stop                       # stop the server and every agent

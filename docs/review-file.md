@@ -289,10 +289,12 @@ keeps showing running.
 
 ## `/tranchant review`
 
-`/tranchant review [<branch> | <merge request url>] [--recipe <recipe.json>]`
+`/tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]`
 reviews a change with no producer of your own:
 
-1. `prepare.mjs` finds the change: the current branch, or `<branch>`, against
+1. `prepare.mjs` runs in the session's folder, or in `<folder>` (a path
+   starting with `.` or `/`, another repository), and finds the change: the
+   current branch, or `<branch>`, against
    the repository's default branch (`origin/HEAD`, else the first of
    `origin/main`, `origin/master`, `main`, `master` that exists),
    `ownership: "ours"`; or a merge request read with `glab mr view <url> -F

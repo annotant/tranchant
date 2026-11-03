@@ -64,8 +64,9 @@ declare module 'claude-code' {
     /**
      * The skill's way in: `review` is a review file to import and open, or a
      * review folder already imported; `stop` ends the server and every agent;
-     * `status` says what runs; `run` reviews `target` (a branch or a merge
-     * request url, the current branch when absent) with `recipe`.
+     * `status` says what runs; `run` reviews `target` (a branch, a merge
+     * request url, or a folder starting with `.` or `/`, another repository
+     * at its current branch; the current branch when absent) with `recipe`.
      */
     mcp__tranchant__open: {
       review?: string
