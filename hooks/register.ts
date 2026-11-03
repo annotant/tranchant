@@ -135,6 +135,9 @@ const skillDir = ($: $) => `${$.plugin.root}/skills/tranchant`
 const tag = (id: string) => short(id, 16)
 /** A finding's agent's name; `tranchant:` before it makes its type. */
 const agentName = (id: string) => `tr-${id.replace(/[^\w-]/g, '-').slice(0, 32)}`
+/** The name an agent is spawned under: Claude Code refuses a space, a dot or past 64 characters. */
+const spawnName = (name: string) =>
+  `tranchant-${name.replace(/[^\w-]/g, '-')}`.slice(0, 64)
 
 let debugOnce: Promise<boolean> | undefined
 
@@ -457,7 +460,7 @@ async function spawnWorker($: $, review: Review, id: string, name: string, line:
 async function startWorker($: $, watched: Watch, { id, line }: Queued) {
   const review = watched.review
   if (!review) return
-  const name = `tranchant ${tag(id)}`
+  const name = spawnName(id)
   starting.set(id, { dir: watched.dir, since: Date.now(), stop: false })
   const started = await spawnWorker($, review, id, name, line).catch(
     (error: unknown) => ({
@@ -900,6 +903,14 @@ async function rearm($: $) {
   }
 }
 
+/** The names the hooks spawned their agents under, the fixes' and the review's. */
+async function spawnedNames($: $) {
+  return new Set([
+    ...Object.keys(await read($, workers)).map(spawnName),
+    ...Object.values(await read($, reviewAgents)).map((one) => spawnName(one.name)),
+  ])
+}
+
 /** A finding's agent ended its run: its one line for the person, and the next in line. */
 async function workerDone($: $, agent: string, answer: string) {
   const done = await workerOf($, agent)
@@ -1094,7 +1105,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
   const key = agentKey(name, dir)
   const kind = job.kind
   startingReview.set(key, { dir, since: Date.now(), stop: false })
-  const label = `tranchant ${name}`
+  const label = spawnName(name)
   const started = await (async () =>
     $.agent.spawn({
       subagentType: await registerReviewAgent($, review, name, kind),
@@ -1353,9 +1364,10 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   if ('error' in found) return found.error
   const { dir } = found
   const served = await startServing($, dir)
-  const first = watches.get(dir)?.first
-  // A server that could not start: no page to stream to.
-  if (first !== undefined && !first.startsWith('READY')) return served
+  const watched = watches.get(dir)
+  // A server that could not start, its watch gone already: no page to stream to.
+  if (!watched || (watched.first !== undefined && !watched.first.startsWith('READY')))
+    return served
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
@@ -1525,6 +1537,17 @@ export const register: Register = (on) => {
         : reviewing && reviewNote($, reviewing.one, agent, steps),
     )
     return stored
+  })
+
+  // An agent's report comes back to the conversation; the page has it already.
+  on('session.receive', async ($, e, next) => {
+    if (e.agentId !== undefined || e.origin.kind !== 'peer') return next(e)
+    const from =
+      'teammate' in e.origin
+        ? e.origin.teammate
+        : /^\s*<agent-message from="([\w-]+)">/.exec(e.text)?.[1]
+    if (from === undefined || !(await spawnedNames($)).has(from)) return next(e)
+    return { consumed: `${from}'s report: the page and its toast have it` }
   })
 
   // A finding's agent ended its turn. Its Stop hook released its locks.

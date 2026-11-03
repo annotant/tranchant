@@ -168,6 +168,75 @@ async function debug(agent, finding, message) {
 const mayWorkOn = (/** @type {Entry | undefined} */ entry) =>
   entry?.state === 'queued' || entry?.state === 'working'
 
+const SUBSTITUTION = 'a redirection, a substitution or an unquoted heredoc'
+
+/**
+ * A command's words, by segment, split on `;`, `|`, `&` and newlines outside
+ * quotes; or why it is refused: a `<`, `>` outside quotes, a substitution
+ * outside single quotes. A `<<WORD` heredoc marker is no word.
+ * @param {string} text
+ * @returns {{ segments: string[][] } | { refusal: string }}
+ */
+function shellWords(text) {
+  /** @type {string[][]} */
+  const segments = [[]]
+  let word = ''
+  // `""` is a word: whether one is under way.
+  let started = false
+  let quote = ''
+  const end = () => {
+    if (started) segments.at(-1)?.push(word)
+    word = ''
+    started = false
+  }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] ?? ''
+    if (quote === "'") {
+      if (c === "'") quote = ''
+      else word += c
+      continue
+    }
+    if (c === '\\' && i + 1 < text.length) {
+      const escaped = text[++i] ?? ''
+      // Within double quotes, a backslash escapes these alone.
+      word += quote === '"' && !/[$`"\\\n]/.test(escaped) ? `\\${escaped}` : escaped
+      started = true
+      continue
+    }
+    if (c === '`' || (c === '$' && text[i + 1] === '(')) return { refusal: SUBSTITUTION }
+    if (quote === '"') {
+      if (c === '"') quote = ''
+      else word += c
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      started = true
+      continue
+    }
+    const heredoc = /^<<-?[\w-]+/.exec(text.slice(i))
+    if (heredoc) {
+      end()
+      i += heredoc[0].length - 1
+      continue
+    }
+    if (c === '<' || c === '>') return { refusal: SUBSTITUTION }
+    if (/[;|&\n]/.test(c)) {
+      end()
+      segments.push([])
+      continue
+    }
+    if (/\s/.test(c)) end()
+    else {
+      word += c
+      started = true
+    }
+  }
+  if (quote) return { refusal: 'an unclosed quote' }
+  end()
+  return { segments }
+}
+
 /**
  * Why review agent `name` may not run `command`, or undefined when it may: a
  * chain of reading commands, and the agent's own script (a reviewer's
@@ -179,11 +248,9 @@ function reviewerRefusal(name, command) {
   const text = command
     .replace(QUOTED_HEREDOC, '<<$2$3')
     .replace(/\s\d?>&\d|\s\d?>\s*\/dev\/null/g, ' ')
-  if (/[<>`]|\$\(/.test(text.replace(/<<[\w-]+/g, '')))
-    return 'a redirection, a substitution or an unquoted heredoc'
-  for (const segment of text.split(/&&|\|\||[;|&\n]/)) {
-    const words = segment.trim().split(/\s+/).filter(Boolean).map(unquote)
-    const [program, ...args] = words
+  const parsed = shellWords(text)
+  if ('refusal' in parsed) return parsed.refusal
+  for (const [program, ...args] of parsed.segments) {
     if (!program) continue
     if (program === 'node') {
       const script = REVIEW_SCRIPT.exec(args[0] ?? '')?.[1]

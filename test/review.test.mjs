@@ -363,6 +363,20 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
   assert.equal(await hook('pre', { ...bash(add), tool_use_id: 't2' }), undefined)
   const read = `git -C ${project} diff main...HEAD -- ':(glob)src/**' | head -50 2>&1`
   assert.equal(await hook('pre', { ...bash(read), tool_use_id: 't4' }), undefined)
+  // Within quotes, a pipe, a semicolon, an arrow or a backtick are a pattern's.
+  for (const quoted of [
+    `grep -n "readReview\\|writeFinding" src/cart.js`,
+    `grep -rn '=> {' src | grep -v ';'`,
+    "git diff main | grep -n '`[a-z]*`'",
+  ])
+    assert.equal(
+      await hook('pre', { ...bash(quoted), tool_use_id: 't5' }),
+      undefined,
+      quoted,
+    )
+  // A substitution in double quotes still runs; an unclosed quote is refused.
+  for (const command of [`grep "$(rm -rf src)" src`, 'grep "a\\`rm`" src', `grep 'x src`])
+    assert.match(await hook('pre', bash(command)), /^Refused: /, command)
   await hook('post', {
     tool_name: 'Read',
     tool_input: { file_path: path.join(project, 'src/cart.js') },
@@ -377,8 +391,9 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
     [
       // The sed, then the seven refused commands.
       ...Array.from({ length: 8 }, () => ['bash', 'failed', 'a1']),
-      ['bash', 'running', 'a1'],
-      ['bash', 'running', 'a1'],
+      // Its own script, the git read and the three quoted patterns.
+      ...Array.from({ length: 5 }, () => ['bash', 'running', 'a1']),
+      ...Array.from({ length: 3 }, () => ['bash', 'failed', 'a1']),
       ['read', 'done', 'a1'],
     ],
   )

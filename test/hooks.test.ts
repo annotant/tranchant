@@ -44,6 +44,7 @@ const ok = (stdout: string, exitCode = 0) => ({
 /** `refusing`: what open.mjs prints instead of `REVIEW <dir>`. */
 /** `preparing`: what prepare.mjs prints; `pending`: what each `verify.mjs --pending` prints, in turn. */
 /** `spawnRefused`: why every spawn is refused; `completeSays`: complete.mjs's refusal, exit 2. */
+/** `unreadable`: the review's review.json, which the hooks cannot load. */
 function world(
   on: On,
   {
@@ -55,9 +56,11 @@ function world(
     pending = [],
     spawnRefused,
     completeSays,
+    unreadable,
   }: {
     spawnRefused?: string
     completeSays?: string
+    unreadable?: string
     gitRoot?: string
     refused?: string
     seeded?: Record<string, Served>
@@ -85,6 +88,7 @@ function world(
     ['/lenses/bugs.md', 'Look for bugs.\n'],
     ['/lenses/style.md', 'Look at the style.\n'],
   ])
+  if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
   // What the hooks did, in order: the import, the server, the page, the agents.
   const order: string[] = []
   on('fs.read', (_$, e) => {
@@ -187,6 +191,7 @@ function world(
   // Claude Code offers the model every agent type no hook keeps from it.
   on('agent.offer', () => ({ isOffered: true }))
   on('turn.complete', () => ({ text: '' }))
+  on('session.receive', (_$, e) => ({ text: e.text }))
   // The agent types the plugin defines, by full name.
   const registered = new Map<string, AgentSpec>()
   on('agent.register', (_$, e) => {
@@ -210,6 +215,9 @@ function world(
   let release: () => void = ignore
   on('agent.spawn', async (_$, e) => {
     if (spawnRefused !== undefined) return { deny: spawnRefused }
+    // Claude Code's own check of an agent's name.
+    if (e.name !== undefined && !/^[A-Za-z0-9][\w-]{0,63}$/.test(e.name))
+      return { deny: `InputValidationError: name ${e.name}` }
     await held
     const input: Record<string, unknown> = { ...e }
     const type = String(input.subagent_type ?? e.subagentType)
@@ -415,7 +423,7 @@ test("a fix starts the finding's agent, with hooks of its own, on the session's 
   await w.print(fix('f-01'))
 
   expect(w.spawned).toEqual([
-    expect.objectContaining({ type: 'tranchant:tr-f-01', name: 'tranchant f-01' }),
+    expect.objectContaining({ type: 'tranchant:tr-f-01', name: 'tranchant-f-01' }),
   ])
   expect(w.spawned[0]?.prompt).toMatch(
     new RegExp(
@@ -804,6 +812,15 @@ test('a review prepare.mjs refuses is answered as refused, no server started', a
   )
 })
 
+test('a review whose server could not start starts no reviewer', async ($, on) => {
+  // The server's watch is gone by the time the review reads its first line.
+  const w = world(on, { unreadable: '{"version":1,"project":"relative"}' })
+  const { text } = await $.command.run(command('review'))
+  expect(text).toMatch(/its project is not an absolute path/)
+  await w.clock.settle()
+  expect(w.spawned).toEqual([])
+})
+
 test('each finding that lands gets its verifier, once, three agents at a time', async ($, on) => {
   const w = world(on)
   await review($, w)
@@ -904,6 +921,23 @@ test("a reviewer's own words become notes in its run file", async ($, on) => {
     argv: ['--reviewer', 'rv-bugs', '--review', DIR, '--project', ROOT, '--agent', 'a1'],
     stdin: expect.stringMatching(/"kind":"note","label":"Reading the cart first\."/),
   })
+  await w.exit(0)
+})
+
+test("a review agent's report is kept from the conversation; another session's is not", async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  const report = (from: string) =>
+    $.session.receive({
+      origin: { kind: 'peer' },
+      text: `<agent-message from="${from}">\nAdded 2 findings.\n</agent-message>`,
+    })
+  expect(await report('tranchant-rv-bugs')).toEqual({
+    consumed: expect.stringContaining('tranchant-rv-bugs'),
+  })
+  expect(await report('someone-else')).toEqual(
+    expect.objectContaining({ text: expect.stringContaining('someone-else') }),
+  )
   await w.exit(0)
 })
 
