@@ -44,6 +44,8 @@ export type ReviewAgent = {
   /** `rv-<lens>` or `vf-<id>`: its run file's name, and its agent type's with the review's id. */
   name: string
   kind: 'reviewer' | 'verifier'
+  /** Its instructions file, absolute: its lens's, or agents/review/verifier.md. */
+  prompt: string
   review: string
   project: string
   running: boolean

@@ -26,10 +26,9 @@ pattern, read how annotant does it.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
-  `agents/reviewer.md` and `agents/verifier.md`, the review agents'. Hidden
+  `agents/review/`, the default recipe of `/tranchant review`, its lenses'
+  prompts (each a reviewer's whole instructions) and the verifier's. Hidden
   from the model.
-- `skills/tranchant/recipes/`: the default recipe of `/tranchant review` and
-  its lenses' instructions.
 - `skills/tranchant/SKILL.md`: the skill itself, a prompt. Keep it short:
   every line is read in every user's session.
 - `skills/tranchant/scripts/`: Node.js ES modules with JSDoc types, no

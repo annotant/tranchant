@@ -45,7 +45,10 @@ claude
 planted defects (see [the fixture](test/fixtures/front-end/README.md)), its
 `review.json` the review of those defects, so you can fix real bugs in a real
 project. It also writes `.playground/review-live.json`, the same review in
-progress, for a lens run by hand to fill.
+progress, for a lens run by hand to fill. To run the lenses themselves, start
+Claude Code in the playground, `cd .playground && claude --plugin-dir ..`,
+then `/tranchant review feature/cart-discounts`: the findings the lenses land
+can be held against the fixture's.
 
 ```
 /tranchant .playground/review.json

@@ -37,6 +37,8 @@ type Review = {
   project: string
   lockRoot: string
   headSha: string
+  /** The commit the change lies after: an MR's base sha, else the review's base. */
+  base: string
   range: string
   ownership: string
 }
@@ -81,8 +83,7 @@ const WORKER = 'tranchant:worker'
 const FINDING_AGENT = /^tranchant:tr-[\w-]+$/
 /** The review's lenses and verifier, agents/review/*.md: loaded as the plugin's agents too. */
 const REVIEW_FILE_AGENT = /^tranchant:review:[\w-]+$/
-/** The plugin's agent files of the review agents, and their types: `rv-<lens>`, `vf-<id>`. */
-const REVIEW_PROMPTS = new Set(['tranchant:reviewer', 'tranchant:verifier'])
+/** The review agents' types: `rv-<lens>`, `vf-<id>`, with the review's id. */
 const REVIEW_AGENT = /^tranchant:(?:rv|vf)-[\w-]+$/
 const REVIEW_TOOLS = ['Read', 'Bash', 'Grep', 'Glob']
 const OPEN_TOOL = 'mcp__tranchant__open'
@@ -200,6 +201,7 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
     typeof refs?.baseSha === 'string' && refs.baseSha ? refs.baseSha : undefined
   return {
     headSha,
+    base: mrBase ?? base,
     // As the server reads it: the MR's own base sha, else what reached the head since the base.
     range: mrBase ? `${mrBase}..${headSha}` : `${base}...${headSha}`,
     ownership: file.ownership === 'theirs' ? 'theirs' : 'ours',
@@ -225,6 +227,7 @@ function loadReview($: $, dir: string): Promise<Review> {
 }
 
 const agentPrompts = new Map<string, Promise<string>>()
+const FRONTMATTER = /^---\n[\s\S]*?\n---\n+/
 
 /** agents/<name>.md's instructions, its frontmatter left out. */
 function readAgentPrompt($: $, name: string) {
@@ -232,7 +235,7 @@ function readAgentPrompt($: $, name: string) {
   if (!prompt) {
     prompt = $.fs
       .read(`${$.plugin.root}/agents/${name}.md`)
-      .then((text) => text.replace(/^---\n[\s\S]*?\n---\n+/, ''))
+      .then((text) => text.replace(FRONTMATTER, ''))
     prompt.catch(() => agentPrompts.delete(name))
     agentPrompts.set(name, prompt)
   }
@@ -1076,15 +1079,16 @@ async function reviewNote(
 }
 
 /**
- * The agent type of one review agent: the reviewer's or the verifier's
- * instructions on the session's model, read-only tools, and hook.mjs around
- * them, recording its steps.
+ * The agent type of one review agent: its instructions, `prompt` (a lens's
+ * file, or the verifier's), on the session's model, read-only tools, and
+ * hook.mjs around them, recording its steps.
  */
 async function registerReviewAgent(
   $: $,
   review: Review,
   name: string,
   kind: ReviewAgent['kind'],
+  prompt: string,
 ) {
   const run = (mode: string) => [
     {
@@ -1097,7 +1101,7 @@ async function registerReviewAgent(
   const { agent } = await $.agent.register({
     name: reviewAgentType(name, review),
     description: `Tranchant: ${kind} ${tag(name)}. Only the plugin's hooks start it.`,
-    prompt: await readAgentPrompt($, kind),
+    prompt: (await $.fs.read(prompt)).replace(FRONTMATTER, ''),
     model: INHERIT,
     tools: REVIEW_TOOLS,
     hooks: {
@@ -1109,29 +1113,29 @@ async function registerReviewAgent(
   return agent
 }
 
-/** What a review agent's prompt says: who it is, where, and for a reviewer, its lens. */
-async function reviewPrompt($: $, review: Review, job: ReviewJob) {
+/**
+ * What a review agent's prompt says, its instructions being its type's: where
+ * the review and the change are, and for a verifier, its finding first.
+ */
+function reviewPrompt($: $, review: Review, job: ReviewJob) {
   const paths = [
     `REVIEW=${review.dir}`,
     `SKILL=${skillDir($)}`,
     `PROJECT=${review.project}`,
+    `BASE=${review.base}`,
     `HEAD=${review.headSha}`,
     `RANGE=${review.range}`,
     `OWNERSHIP=${review.ownership}`,
   ]
   if (job.kind === 'verifier') return [job.id, ...paths].join('\n')
-  // The recipe's own words: the lens's instructions, which the person chose.
-  const instructions = await $.fs.read(job.lens.prompt)
-  return [
-    job.lens.name,
-    ...paths,
-    `PATHS=${job.lens.paths.join(' ')}`,
-    '',
-    "The lens's instructions:",
-    '',
-    instructions.trim(),
-  ].join('\n')
+  return [`LENS=${job.lens.name}`, ...paths, `PATHS=${job.lens.paths.join(' ')}`].join(
+    '\n',
+  )
 }
+
+/** A review agent's instructions file: its lens's, or the plugin's verifier. */
+const reviewInstructions = ($: $, job: ReviewJob) =>
+  job.kind === 'reviewer' ? job.lens.prompt : `${$.plugin.root}/agents/review/verifier.md`
 
 /** Review agents at work and starting, the three the cap counts. */
 async function busyReviewing($: $) {
@@ -1178,14 +1182,15 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
   const name = reviewAgentName(job)
   const key = agentKey(name, dir)
   const kind = job.kind
+  const instructions = reviewInstructions($, job)
   startingReview.set(key, { dir, since: Date.now(), stop: false })
   const label = spawnName(name, dir)
   const started = await (async () =>
     $.agent.spawn({
-      subagentType: await registerReviewAgent($, review, name, kind),
+      subagentType: await registerReviewAgent($, review, name, kind, instructions),
       name: label,
       description: `Tranchant ${kind} ${tag(name)}`,
-      prompt: await reviewPrompt($, review, job),
+      prompt: reviewPrompt($, review, job),
     }))().catch((error: unknown) => ({
     deny: message(error),
     agentId: undefined,
@@ -1214,6 +1219,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     agent,
     name,
     kind,
+    prompt: instructions,
     review: dir,
     project: review.project,
     running: true,
@@ -1380,11 +1386,12 @@ async function registerReviewAgentsAgain($: $) {
     if (!one.running) continue
     const review = await loadReview($, one.review).catch(() => undefined)
     if (review)
-      await registerReviewAgent($, review, one.name, one.kind).catch((error: unknown) =>
-        debug(
-          $,
-          `${tag(one.name)}: could not register its agent type: ${message(error)}`,
-        ),
+      await registerReviewAgent($, review, one.name, one.kind, one.prompt).catch(
+        (error: unknown) =>
+          debug(
+            $,
+            `${tag(one.name)}: could not register its agent type: ${message(error)}`,
+          ),
       )
   }
 }
@@ -1584,7 +1591,6 @@ export const register: Register = (on) => {
     e.agent === WORKER ||
     FINDING_AGENT.test(e.agent) ||
     REVIEW_FILE_AGENT.test(e.agent) ||
-    REVIEW_PROMPTS.has(e.agent) ||
     REVIEW_AGENT.test(e.agent)
       ? { isOffered: false }
       : next(e),

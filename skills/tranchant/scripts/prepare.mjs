@@ -3,11 +3,12 @@
 // What `/tranchant review` runs first, from the session's folder: finds the
 // change (the current branch, or <branch>, against the repository's default
 // branch, `ours`; a merge request read with `glab mr view`, `theirs`), reads
-// the recipe (the plugin's default one unless --recipe), writes the review's
-// envelope, `reviewing` with no finding yet, to <state>/inbox/<id>.json and
-// prints `INBOX <file>`, then one `LENS <json>` per lens whose paths the
-// change touches: `{ name, prompt, paths }`, `prompt` the lens's instructions
-// file, absolute. Any refusal prints `REVIEW_REFUSED <reason>` and exits 2.
+// the recipe (the plugin's agents/review/recipe.json unless --recipe), writes
+// the review's envelope, `reviewing` with no finding yet, to
+// <state>/inbox/<id>.json and prints `INBOX <file>`, then one `LENS <json>`
+// per lens whose paths the change touches: `{ name, prompt, paths }`, `prompt`
+// the lens's instructions file, absolute; the `otherwise` lens's paths are the
+// changed files no other lens's globs match, when there are any. Any refusal prints `REVIEW_REFUSED <reason>` and exits 2.
 // Nothing is written in the reviewed working tree; an MR's head is fetched.
 // TRANCHANT_GLAB names another glab executable (the tests' fake one).
 import { execFile } from 'node:child_process'
@@ -19,9 +20,9 @@ import { parseArgs, promisify } from 'node:util'
 import { REVIEW_VERSION, oneLine } from './lib/format.mjs'
 import { SKILL_DIR, STATE_ROOT } from './lib/project.mjs'
 
-/** @typedef {{ name: string, prompt: string, paths: string[] }} Lens */
+/** @typedef {{ name: string, prompt: string, paths: string[], otherwise?: boolean }} Lens */
 
-const DEFAULT_RECIPE = path.join(SKILL_DIR, 'recipes', 'default.json')
+const DEFAULT_RECIPE = path.join(SKILL_DIR, '..', '..', 'agents', 'review', 'recipe.json')
 const LENS_NAME = /^[\w-]{1,40}$/
 const MAX_LENSES = 12
 const run = promisify(execFile)
@@ -87,6 +88,7 @@ async function readRecipe(file) {
     return refuse(`recipe ${file}: ${MAX_LENSES} lenses at most`)
   }
   const names = new Set()
+  let otherwise = false
   return lenses.map((lens, i) => {
     const where = `recipe ${file}: lenses[${i}]`
     if (typeof lens?.name !== 'string' || !LENS_NAME.test(lens.name))
@@ -97,6 +99,12 @@ async function readRecipe(file) {
       refuse(`${where}.prompt: the lens's instructions file is required`)
     const prompt = path.resolve(path.dirname(file), lens.prompt)
     if (!existsSync(prompt)) refuse(`${where}.prompt: no file ${prompt}`)
+    if (lens.otherwise === true) {
+      if (lens.paths !== undefined) refuse(`${where}: an otherwise lens has no paths`)
+      if (otherwise) refuse(`${where}: one otherwise lens at most`)
+      otherwise = true
+      return { name: lens.name, prompt, paths: [], otherwise: true }
+    }
     const paths = lens.paths ?? ['**']
     if (
       !Array.isArray(paths) ||
@@ -232,7 +240,10 @@ const range = theirs
   ? `${change.base}..${change.headSha}`
   : `${change.base}...${change.headSha}`
 
-/** @param {string[]} paths */
+/**
+ * The changed files that match `paths`, git's `:(glob)` pathspecs.
+ * @param {string[]} paths
+ */
 const touched = async (paths) =>
   (
     await git(project, [
@@ -242,13 +253,31 @@ const touched = async (paths) =>
       '--',
       ...paths.map((one) => `:(glob)${one}`),
     ]).catch((error) => refuse(`git diff ${range} failed: ${firstWords(error)}`))
-  ).length > 0
+  )
+    .split('\n')
+    .filter(Boolean)
 
-if (!(await touched(['**'])))
-  refuse(`${change.branch} has no change against ${change.base}`)
+const changed = await touched(['**'])
+if (!changed.length) refuse(`${change.branch} has no change against ${change.base}`)
+const covered = new Set()
+/** @type {Map<Lens, string[]>} */
+const matched = new Map()
+for (const lens of lenses) {
+  if (lens.otherwise) continue
+  const files = await touched(lens.paths)
+  for (const file of files) covered.add(file)
+  if (files.length) matched.set(lens, lens.paths)
+}
+const uncovered = changed.filter((file) => !covered.has(file))
 /** @type {Lens[]} */
-const applied = []
-for (const lens of lenses) if (await touched(lens.paths)) applied.push(lens)
+const applied = lenses.flatMap((lens) => {
+  if (lens.otherwise)
+    return uncovered.length
+      ? [{ name: lens.name, prompt: lens.prompt, paths: uncovered }]
+      : []
+  const paths = matched.get(lens)
+  return paths ? [{ name: lens.name, prompt: lens.prompt, paths }] : []
+})
 if (!applied.length) refuse("no lens of the recipe applies to the change's files")
 
 const id = randomUUID()

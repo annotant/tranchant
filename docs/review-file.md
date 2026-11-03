@@ -301,11 +301,12 @@ reviews a change with no producer of your own:
    `verify: true`, no finding, to `<state>/inbox/<id>.json`.
 2. The hooks open it as any review file: the server starts and the page
    opens before any agent does.
-3. One reviewer per lens whose path globs the change touches
-   (`tranchant:rv-<lens>-<review>`, `<review>` the review id's first 8 characters, `agents/reviewer.md`, the lens's instructions in
-   its prompt) reads the diff and the files and calls `add.mjs` once per
-   finding. As each finding lands, the server prints `LANDED <id>` and a
-   verifier (`tranchant:vf-<id>-<review>`, `agents/verifier.md`) re-reads the code,
+3. One reviewer per lens the change touches (`tranchant:rv-<lens>-<review>`,
+   `<review>` the review id's first 8 characters, the lens's prompt its
+   instructions; see [the recipe](#the-recipe)) reads the diff and the files
+   and calls `add.mjs` once per finding. As each finding lands, the server
+   prints `LANDED <id>` and a verifier (`tranchant:vf-<id>-<review>`,
+   `agents/review/verifier.md`) re-reads the code,
    then confirms it (`verify.mjs`), amends it (`verify.mjs --amend`) or
    removes it (`remove.mjs`), a duplicate of a finding that landed before it
    included. Three review agents run at a time, in the order they queued.
@@ -314,11 +315,6 @@ reviews a change with no producer of your own:
    `complete.mjs`. `/tranchant stop` ends the review agents and completes the
    review too.
 
-A recipe is `{ "version": 1, "lenses": [ { "name", "prompt", "paths"? } ] }`:
-`name` matches `[\w-]{1,40}` and is unique; `prompt` is the lens's
-instructions file, relative to the recipe; `paths` the path globs it applies
-to (git's `:(glob)` pathspecs), `["**"]` when absent. The plugin's default
-recipe, `skills/tranchant/recipes/default.json`, has one generic `bugs` lens.
 Nothing is written in the reviewed working tree; a merge request's head is
 fetched into its `.git` when the checkout lacks it.
 
@@ -401,20 +397,25 @@ file; the plugin's default is
   "version": 1,
   "lenses": [
     {
-      "name": "correctness", // [\w-]{1,64}; the agents' finding ids start with it
+      "name": "correctness", // [\w-]{1,40}, unique; the agents' finding ids start with it
       "prompt": "correctness.md", // the lens's prompt, relative to the recipe file
-      "paths": ["**/*.ts", "**/*.tsx"], // the lens runs when a changed file matches one
+      "paths": ["**/*.ts", "**/*.tsx"], // the lens runs when a changed file matches one; ["**"] when absent
     },
     { "name": "bugs", "prompt": "bugs.md", "otherwise": true }, // the files no other lens matched
   ],
 }
 ```
 
-A glob is matched against each changed file's path, relative to the project,
-with `**` crossing folders and `*` staying within a name. A lens runs once
-per review, when at least one changed file matches one of its globs; the
-lens with `otherwise` (one at most, no `paths`) runs when a changed file
-matches no other lens's globs. Each lens's agent gets `REVIEW`, `SKILL`,
-`PROJECT`, the base and the head, and the prompt's body as its instructions;
-it adds its findings with `add.mjs`, their ids `<name>-<n>`. The verifier
-(`agents/review/verifier.md`) runs once per finding as they land.
+A glob is a git `:(glob)` pathspec, matched against each changed file's path
+relative to the repository, with `**` crossing folders and `*` staying within
+a name. A lens runs once per review, when at least one changed file matches
+one of its globs; the lens with `otherwise` (one at most, no `paths`) runs
+when a changed file matches no other lens's globs, its `PATHS` those files.
+A recipe has 12 lenses at most. The lens's prompt, its frontmatter left out,
+is its agent's instructions, whole: it says how to read the change, anchor,
+word and report a finding. The agent's prompt gives `LENS`, `REVIEW`,
+`SKILL`, `PROJECT`, `BASE`, `HEAD`, `RANGE` (the git range of the change),
+`OWNERSHIP` and `PATHS`; it adds its findings with `add.mjs`, their ids
+`<name>-<n>`. The verifier (`agents/review/verifier.md`) gets the finding's
+id on its first line, then the same but `LENS` and `PATHS`, and runs once per
+finding as they land.

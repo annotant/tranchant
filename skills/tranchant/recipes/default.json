@@ -1,4 +1,0 @@
-{
-  "version": 1,
-  "lenses": [{ "name": "bugs", "prompt": "lenses/bugs.md", "paths": ["**"] }]
-}

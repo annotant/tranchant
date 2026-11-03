@@ -81,6 +81,11 @@ async function prepared(stdout) {
 
 test('prepare.mjs writes the current branch against the default one, reviewing, outside the repository', async (t) => {
   const { dir, git } = await repository(t)
+  // A file no front-end lens claims: the bugs lens takes it, and it alone.
+  await mkdir(path.join(dir, 'scripts'), { recursive: true })
+  await writeFile(path.join(dir, 'scripts', 'release.sh'), 'npm publish\n')
+  await git('add', 'scripts/release.sh')
+  await git('commit', '-q', '-m', 'release script')
   const ran = await prepare(dir)
   assert.equal(ran.code, 0, ran.stdout + ran.stderr)
   const { inbox, envelope, lenses } = await prepared(ran.stdout)
@@ -105,15 +110,29 @@ test('prepare.mjs writes the current branch against the default one, reviewing, 
       status: 'reviewing',
       verify: true,
       title: 'feature/cart',
-      summary: 'Reviewed by Tranchant, lens by lens: bugs.',
+      summary:
+        'Reviewed by Tranchant, lens by lens: correctness, accessibility, performance, security, tests, conventions, bugs.',
       strengths: [],
       findings: [],
     },
   )
-  assert.equal(lenses.length, 1)
-  assert.equal(lenses[0].name, 'bugs')
-  assert.deepEqual(lenses[0].paths, ['**'])
-  assert.match(lenses[0].prompt, /\/skills\/tranchant\/recipes\/lenses\/bugs\.md$/)
+  // The plugin's recipe: src/cart.js is a front-end file, but no TypeScript one.
+  assert.deepEqual(
+    lenses.map((lens) => lens.name),
+    [
+      'correctness',
+      'accessibility',
+      'performance',
+      'security',
+      'tests',
+      'conventions',
+      'bugs',
+    ],
+  )
+  for (const lens of lenses)
+    assert.match(lens.prompt, new RegExp(`/agents/review/${lens.name}\\.md$`))
+  assert.ok(lenses[0].paths.includes('**/*.js'))
+  assert.deepEqual(lenses.at(-1).paths, ['scripts/release.sh'])
   // Nothing written in the repository; and open.mjs imports what it wrote.
   assert.equal(await git('status', '--porcelain'), '')
   const opened = await run(process.execPath, [path.join(SCRIPTS, 'open.mjs'), inbox], {
@@ -160,6 +179,26 @@ test('prepare.mjs refuses what it cannot review, and says why', async (t) => {
   await refused(['--', '-x'], /^REVIEW_REFUSED -x is not a branch or a merge request url/)
   await refused(['main'], /^REVIEW_REFUSED main has no change against main/)
   await refused(['--recipe', 'none.json'], /^REVIEW_REFUSED recipe .*none\.json: /)
+  // An otherwise lens takes the files the others leave: no globs, and one at most.
+  const recipes = await tempDir(t)
+  await writeFile(path.join(recipes, 'rest.md'), 'The rest.\n')
+  for (const [lenses, why] of /** @type {const} */ ([
+    [
+      [{ name: 'rest', prompt: 'rest.md', otherwise: true, paths: ['**'] }],
+      /an otherwise lens has no paths/,
+    ],
+    [
+      [
+        { name: 'a', prompt: 'rest.md', otherwise: true },
+        { name: 'b', prompt: 'rest.md', otherwise: true },
+      ],
+      /one otherwise lens at most/,
+    ],
+  ])) {
+    const recipe = path.join(recipes, 'recipe.json')
+    await writeFile(recipe, JSON.stringify({ version: 1, lenses }))
+    await refused(['--recipe', recipe], why)
+  }
   const outside = await tempDir(t)
   const ran = await prepare(outside)
   assert.match(ran.stdout, /^REVIEW_REFUSED .* is not in a git repository/)

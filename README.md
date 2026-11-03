@@ -110,24 +110,10 @@ run script.
 ```
 
 `/tranchant review` takes `--recipe <file>` to use your own lenses instead of
-the plugin's default one, which ships a single generic `bugs` lens. A recipe
-is a JSON file:
-
-```json
-{
-  "version": 1,
-  "lenses": [
-    { "name": "bugs", "prompt": "lenses/bugs.md", "paths": ["**"] },
-    { "name": "react", "prompt": "lenses/react.md", "paths": ["src/**/*.tsx"] }
-  ]
-}
-```
-
-Each lens names its instructions (a Markdown file, relative to the recipe)
-and the path globs it applies to; a lens whose globs the change does not
-touch is skipped. Three review agents run at a time; nothing is written in
-the reviewed working tree (a merge request's head is fetched when the
-checkout lacks it).
+the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)).
+A lens whose globs the change does not touch is skipped. Three review agents
+run at a time; nothing is written in the reviewed working tree (a merge
+request's head is fetched when the checkout lacks it).
 
 In the page:
 

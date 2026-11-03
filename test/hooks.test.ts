@@ -85,7 +85,8 @@ function world(
     ],
     // The envelope prepare.mjs writes.
     [INBOX, JSON.stringify({ version: 1, id: 'rev-1', status: 'reviewing' })],
-    ['/lenses/bugs.md', 'Look for bugs.\n'],
+    // A lens's prompt is its reviewer's whole instructions, its frontmatter left out.
+    ['/lenses/bugs.md', '---\nname: bugs\n---\n\nYou review one lens: bugs.\n'],
     ['/lenses/style.md', 'Look at the style.\n'],
   ])
   if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
@@ -95,9 +96,7 @@ function world(
     // The plugin's agent files.
     if (e.path.endsWith('/agents/worker.md'))
       return { value: '---\nname: worker\n---\n\nYou apply one finding.\n' }
-    if (e.path.endsWith('/agents/reviewer.md'))
-      return { value: '---\nname: reviewer\n---\n\nYou review one lens.\n' }
-    if (e.path.endsWith('/agents/verifier.md'))
+    if (e.path.endsWith('/agents/review/verifier.md'))
       return { value: '---\nname: verifier\n---\n\nYou verify one finding.\n' }
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
@@ -756,21 +755,18 @@ test('review writes the envelope and opens the page first, then one reviewer per
   expect(text).toMatch(/^Reviewing with 2 lens\(es\): bugs, style\./)
   expect(text).toMatch(/Tranchant serves Classification overview at http/)
   expect(w.spawned[0]?.prompt.split('\n')).toEqual([
-    'bugs',
+    'LENS=bugs',
     `REVIEW=${DIR}`,
     expect.stringMatching(/^SKILL=\/.+\/skills\/tranchant$/),
     `PROJECT=${ROOT}`,
+    'BASE=main',
     `HEAD=${HEAD}`,
     `RANGE=main...${HEAD}`,
     'OWNERSHIP=ours',
     'PATHS=**',
-    '',
-    "The lens's instructions:",
-    '',
-    'Look for bugs.',
   ])
   const spec = w.registered.get('tranchant:rv-bugs-rev-1')
-  expect(spec?.prompt).toBe('You review one lens.\n')
+  expect(spec?.prompt).toBe('You review one lens: bugs.\n')
   expect(spec?.tools).toEqual(['Read', 'Bash', 'Grep', 'Glob'])
   expect(spec?.hooks?.PreToolUse).toEqual([
     {
@@ -797,8 +793,8 @@ test('review writes the envelope and opens the page first, then one reviewer per
   for (const agent of [
     'tranchant:rv-bugs-rev-1',
     'tranchant:vf-bugs-1-rev-1',
-    'tranchant:reviewer',
-    'tranchant:verifier',
+    'tranchant:review:bugs',
+    'tranchant:review:verifier',
   ])
     expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
   expect(w.completed).toEqual([])
@@ -836,7 +832,9 @@ test('each finding that lands gets its verifier, once, three agents at a time', 
     'tranchant:vf-bugs-1-rev-1',
   ])
   expect(w.spawned[2]?.prompt).toMatch(
-    new RegExp(`^bugs-1\nREVIEW=${DIR}\nSKILL=.+\nPROJECT=${ROOT}\nHEAD=${HEAD}\n`),
+    new RegExp(
+      `^bugs-1\nREVIEW=${DIR}\nSKILL=.+\nPROJECT=${ROOT}\nBASE=main\nHEAD=${HEAD}\n`,
+    ),
   )
   expect(w.registered.get('tranchant:vf-bugs-1-rev-1')?.prompt).toBe(
     'You verify one finding.\n',

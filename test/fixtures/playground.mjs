@@ -203,4 +203,8 @@ if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
     console.log(`REVIEW_LIVE ${live}`)
   }
   console.error(`Now: claude then /tranchant ${path.relative(ROOT, out)}`)
+  if (variant === 'front-end')
+    console.error(
+      `Or, to run the lenses: claude from ${path.relative(ROOT, PLAYGROUND)}, then /tranchant review ${review.branch}`,
+    )
 }
