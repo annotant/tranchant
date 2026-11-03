@@ -10,6 +10,7 @@ folder: nothing is installed in a repository to review it.
 | `decisions.json`                  | Next to it                            | What the reviewer decided on each finding, its state, its runs and the history of its moves | The store (`scripts/lib/store.mjs`), for the server and the agents' scripts                                            |
 | `runs/<finding id>.jsonl`         | Next to it                            | The steps of the run in progress on that finding                                            | The hooks (`hooks/register.ts`)                                                                                        |
 | `runs/<finding id>.history.jsonl` | Next to it                            | The steps of every run that ended                                                           | The store, when a run ends                                                                                             |
+| `reviewers/<name>.jsonl`          | Next to it                            | The steps of one review agent of `/tranchant review`: `rv-<lens>` or `vf-<finding id>`      | The hooks (`hooks/register.ts`, `hook.mjs --reviewer`)                                                                 |
 
 `<state>` is `TRANCHANT_STATE_DIR`, else `$XDG_CACHE_HOME/tranchant`, else
 `~/.cache/tranchant`. `<hash>` is the first 12 hex digits of the SHA-1 of the
@@ -64,6 +65,7 @@ arrives. A producer that writes the whole review at once needs none of this:
   "summary": "## Change Map\n…", // Markdown: the Change Map and the summary
   "strengths": ["Tests cover the empty state.", "…"],
   "sources": { "codeReview": 9, "reviewPr": 4, "both": 2 }, // optional
+  "verify": true, // optional: findings land unverified, a verifier confirms each
   "findings": [/* Finding, in the order the report lists them */],
 }
 ```
@@ -78,6 +80,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `status`      | `reviewing` or `complete` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`.  |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three.              |
 | `summary`     | string                    | Markdown, shown above the findings.                                                                 |
+| `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
 | `findings`    | Finding[]                 | At least one, unless `status` is `reviewing`. Ids unique within the review.                         |
 
 ### A finding
@@ -147,6 +150,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `diagram.kind`               | `svg` or `text`                     | `svg`: inline SVG, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference); `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
 | `related[]`                  | object[], optional                  | Up to 4. Same shape as `path`, `line`, `excerpt`, `marks`.                                                                                                                                       |
 | `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs` or `add.mjs`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
+| `verified`                   | boolean, optional                   | Set by `verify.mjs` once a verifier confirmed or amended it; read only when the review's `verify` is true. Like `addedAt`, left out when two findings are compared.                             |
 
 #### Topics
 
@@ -276,6 +280,46 @@ One JSON object per line, as the hooks record the agent's tools:
 folder and tells the page to reload. A run that ends moves its file to
 `.history.jsonl`.
 
+A review agent's file, `reviewers/<name>.jsonl`, holds the same steps: the
+hooks write its `start` when it starts (its label says the lens or the
+finding), its tools and its notes, and an `end` step when it ends (`done`) or
+is stopped (`failed`). It is never moved: `/api/review` lists every review
+agent, running until its `end`; one whose session closed before it ended
+keeps showing running.
+
+## `/tranchant review`
+
+`/tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]`
+reviews a change with no producer of your own:
+
+1. `prepare.mjs` runs in the session's folder, or in `<folder>` (a path
+   starting with `.` or `/`, another repository), and finds the change: the
+   current branch, or `<branch>`, against
+   the repository's default branch (`origin/HEAD`, else the first of
+   `origin/main`, `origin/master`, `main`, `master` that exists),
+   `ownership: "ours"`; or a merge request read with `glab mr view <url> -F
+   json` (its `diff_refs`, its head fetched when the checkout lacks it),
+   `ownership: "theirs"`. It writes the envelope, `status: "reviewing"`,
+   `verify: true`, no finding, to `<state>/inbox/<id>.json`.
+2. The hooks open it as any review file: the server starts and the page
+   opens before any agent does.
+3. One reviewer per lens the change touches (`tranchant:rv-<lens>-<review>`,
+   `<review>` the review id's first 8 characters, the lens's prompt its
+   instructions; see [the recipe](#the-recipe)) reads the diff and the files
+   and calls `add.mjs` once per finding. As each finding lands, the server
+   prints `LANDED <id>` and a verifier (`tranchant:vf-<id>-<review>`,
+   `agents/review/verifier.md`) re-reads the code,
+   then confirms it (`verify.mjs`), amends it (`verify.mjs --amend`) or
+   removes it (`remove.mjs`), a duplicate of a finding that landed before it
+   included. Three review agents run at a time, in the order they queued.
+4. Once every reviewer and verifier ended, the hooks start a verifier for any
+   finding still unverified that had none (`verify.mjs --pending`), then call
+   `complete.mjs`. `/tranchant stop` ends the review agents and completes the
+   review too.
+
+Nothing is written in the reviewed working tree; a merge request's head is
+fetched into its `.git` when the checkout lacks it.
+
 ## The server
 
 `server.mjs --review <dir>` serves the page and its API on a free port of
@@ -296,6 +340,7 @@ locks and show no progress.
 | `POSTED <id>`, `POST_FAILED <id> <reason>`                 | The server ran `post.mjs` itself; informational.                                 |
 | `DROPPED <id>`, `SKIPPED <id>`                             | Informational.                                                                   |
 | `AGENT_ENDED <id>`                                         | `hook.mjs ended` found the finding still `working` and moved it to `failed`.     |
+| `LANDED <id>`                                              | A finding not verified yet is there, in a `verify` review still `reviewing`: the hooks start its verifier. Once per finding, after `READY`. |
 | `PORT_BUSY <port> is used by <owner>`                      | Could not listen.                                                                |
 | `REVIEW_REFUSED <reason>`                                  | The review folder is unreadable or its version unknown.                          |
 | `HOOKS_MISSING …`                                          | Started outside the plugin's hooks (`TRANCHANT_HOOKS` unset).                    |
@@ -307,9 +352,9 @@ locks and show no progress.
 | `GET /`               | The page.                                                                                                                                                                                                                                                                                                                                                          |
 | `GET /page.js`        | Its bundle.                                                                                                                                                                                                                                                                                                                                                        |
 | `GET /api/health`     | `{ ok: true, review: "<id>", version: "<plugin version>" }`.                                                                                                                                                                                                                                                                                                       |
-| `GET /api/review`     | `{ review, findings, runs, head }`: the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
+| `GET /api/review`     | `{ review, findings, runs, reviewers, head }`: the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
 | `GET /api/diff`       | `{ base, head, files, diff }`: the change's unified diff, `git diff <base>...<headSha>` run in `project` (`baseSha..headSha` with `mr.diffRefs`, which must name the review's `headSha`), its paths relative to `project` like the findings', and its files, each `{ path, oldPath?, additions, deletions, binary }`. Computed once; a failure is computed again on the next request. Answers 409 with the reason when git is missing, `project` is not a git repository, a commit is not there, `base` is not a revision, the diff is empty or past `TRANCHANT_MAX_DIFF_MIB` (32), or git fails; the server logs git's words on stderr, and the page shows its list view. |
-| `GET /api/events`     | Server-sent events: `changed` with `{ ids }` when a finding landed, or its record or run changed (`ids` empty when the review's `status` changed); `page` when the bundle was rebuilt.                                                                                                                                                                             |
+| `GET /api/events`     | Server-sent events: `changed` with `{ ids }` when a finding landed, was verified or removed, or its record or run changed (`ids` empty when the review's `status` or a review agent's file changed); `page` when the bundle was rebuilt.                                                                                                                                                                             |
 | `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "drop" \| "skip", "context"?, "comment"?, "reason"? } ] }`. Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
 | `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                     |
 | `POST /api/stop`      | `{ "id" }`; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                                                                |
@@ -323,8 +368,10 @@ both as `{ error: "<reason>" }`. `GET /` carries a content security policy
 ## The scripts the agents run
 
 `node SKILL/scripts/<name>.mjs`, `SKILL` being `skills/tranchant`. Every
-script takes `--review <dir>`. `open.mjs`, `add.mjs` and `complete.mjs` are
-the producer's; the others, an agent's or the server's.
+script takes `--review <dir>`, `prepare.mjs` aside. `open.mjs`, `add.mjs` and
+`complete.mjs` are the producer's; `prepare.mjs`, `verify.mjs` and
+`remove.mjs`, those of `/tranchant review`; the others, an agent's or the
+server's.
 
 | Script                                                                                                                      | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -332,10 +379,13 @@ the producer's; the others, an agent's or the server's.
 | `done.mjs <id> "<summary>"`                                                                                                 | `working` → `fixed`, with the files the run changed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `ask.mjs <id> "<question>" [--option "<label>: <description>"]… [--multiple]`                                               | `working` → `asking`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `post.mjs <id>`                                                                                                             | Posts `comment` (the reviewer's edit when there is one) as a positioned discussion on the MR: `glab api --method POST --header 'Content-Type: application/json' --input -` with a JSON body (`position` of type `text`, the three `diffRefs` SHAs, `old_path` and `new_path` both set to `path`, `new_line`), run from `project` so glab picks the host from the remote; then `queued` → `posted` with `posted.url`, or `failed` with glab's first error line. Run by the server on a `post` decision, never by an agent.                                                                                                  |
-| `open.mjs <review.json>`                                                                                                    | Validates and imports a review: the envelope into `review.json`, each inline finding into `findings/<id>.json`; prints `REVIEW <dir>`. Review and finding ids match `[\w-]{1,64}`: they become folder names and words on protocol lines. An id already imported with the same envelope (`status` and `findings` aside: a review grows) is reused, decisions kept, its inline findings not there yet added; with another envelope, or a finding of other content, it is refused (`REVIEW_REFUSED id <id> exists with other content`, `REVIEW_REFUSED finding <id> exists with other content`): the producer mints a new id. |
+| `open.mjs <review.json> [--verify]`                                                                                         | Validates and imports a review: the envelope into `review.json`, each inline finding into `findings/<id>.json`; prints `REVIEW <dir>`. `verify` and `verified` are dropped; `--verify`, which `/tranchant review` passes, keeps `verify`. Review and finding ids match `[\w-]{1,64}`: they become folder names and words on protocol lines. An id already imported with the same envelope (`status`, `verify` and `findings` aside: a review grows) is reused, decisions kept, its inline findings not there yet added; with another envelope, or a finding of other content, it is refused (`REVIEW_REFUSED id <id> exists with other content`, `REVIEW_REFUSED finding <id> exists with other content`): the producer mints a new id. |
 | `add.mjs --review <dir> [--file <finding.json>]`                                                                            | Adds one finding, from the file or stdin, to a review still `reviewing`: checked as a review's are (id, anchor, `comment` when `theirs`), written to `findings/<id>.json` with `addedAt`; prints `ADDED <id>`. The same finding again is accepted silently; another one under the same id, an unsound one, or any once the review is complete prints `ADD_REFUSED <reason>` and exits 2.                                                                                                                                                                                                                                   |
 | `complete.mjs --review <dir>`                                                                                               | Sets `status` to `complete`; prints `COMPLETE`. On a review complete already, `COMPLETE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `hook.mjs <pre\|post\|stop\|note\|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]` | The settings hooks of one finding's agent: file locks, refused Bash writes, steps.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `prepare.mjs [<branch> \| <mr url>] [--recipe <file>]`                                                                      | Run from the session's folder: writes the envelope of `/tranchant review` to `<state>/inbox/<id>.json`, prints `INBOX <file>`, then `LENS <json>` (`{ name, prompt, paths }`) per lens the change touches. `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying, a merge request glab cannot read (glab's reason).                                                                                                                                                                                                                                                                                                                    |
+| `verify.mjs <id> [--file <finding.json> \| --amend]`, `verify.mjs --pending`                                                                         | A verifier's verdict: `VERIFIED <id>` sets `verified: true`; with the finding whole (same id) from the file or stdin, `AMENDED <id>` replaces it, verified, its `addedAt` kept. Amending a finding the reviewer decided on is refused. `--pending` prints `UNVERIFIED <id>` per finding not verified. A refusal prints `VERIFY_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                   |
+| `remove.mjs <id>`                                                                                                           | Removes a finding a verifier rejected or found duplicated: `REMOVED <id>`. A finding the reviewer decided on, or one inline in `review.json`, stays: `REMOVE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `hook.mjs <pre\|post\|stop\|note\|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]` | The settings hooks of one finding's agent: file locks, refused Bash writes, steps. With `--reviewer <name>` in place of `--finding`, a review agent's: no lock, no writing tool, and its Bash runs only reading commands (git's reading subcommands, `cat`, `head`, `grep`…, chained; `sort` without `-o` or a compressor, `uniq` without an output file; no redirection but `2>&1` and `>/dev/null`, no substitution outside single quotes, no unquoted heredoc) and its own review script, a reviewer's `add.mjs` or a verifier's `verify.mjs`/`remove.mjs` on its own finding, the finding in a quoted heredoc; steps into `reviewers/<name>.jsonl`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## The recipe
 
@@ -349,20 +399,25 @@ file; the plugin's default is
   "version": 1,
   "lenses": [
     {
-      "name": "correctness", // [\w-]{1,64}; the agents' finding ids start with it
+      "name": "correctness", // [\w-]{1,40}, unique; the agents' finding ids start with it
       "prompt": "correctness.md", // the lens's prompt, relative to the recipe file
-      "paths": ["**/*.ts", "**/*.tsx"], // the lens runs when a changed file matches one
+      "paths": ["**/*.ts", "**/*.tsx"], // the lens runs when a changed file matches one; ["**"] when absent
     },
     { "name": "bugs", "prompt": "bugs.md", "otherwise": true }, // the files no other lens matched
   ],
 }
 ```
 
-A glob is matched against each changed file's path, relative to the project,
-with `**` crossing folders and `*` staying within a name. A lens runs once
-per review, when at least one changed file matches one of its globs; the
-lens with `otherwise` (one at most, no `paths`) runs when a changed file
-matches no other lens's globs. Each lens's agent gets `REVIEW`, `SKILL`,
-`PROJECT`, the base and the head, and the prompt's body as its instructions;
-it adds its findings with `add.mjs`, their ids `<name>-<n>`. The verifier
-(`agents/review/verifier.md`) runs once per finding as they land.
+A glob is a git `:(glob)` pathspec, matched against each changed file's path
+relative to the repository, with `**` crossing folders and `*` staying within
+a name. A lens runs once per review, when at least one changed file matches
+one of its globs; the lens with `otherwise` (one at most, no `paths`) runs
+when a changed file matches no other lens's globs, its `PATHS` those files.
+A recipe has 12 lenses at most. The lens's prompt, its frontmatter left out,
+is its agent's instructions, whole: it says how to read the change, anchor,
+word and report a finding. The agent's prompt gives `LENS`, `REVIEW`,
+`SKILL`, `PROJECT`, `BASE`, `HEAD`, `RANGE` (the git range of the change),
+`OWNERSHIP` and `PATHS`; it adds its findings with `add.mjs`, their ids
+`<name>-<n>`. The verifier (`agents/review/verifier.md`) gets the finding's
+id on its first line, then the same but `LENS` and `PATHS`, and runs once per
+finding as they land.

@@ -21,10 +21,16 @@ const FILE = `${ROOT}/.tranchant/review.json`
 const DIR = '/home/u/.cache/tranchant/0123456789ab/reviews/rev-1'
 const TITLE = 'Classification overview'
 const READY = `READY http://127.0.0.1:4599 review=rev-1 project=${ROOT}`
+const HEAD = '3552e3ef0c1d'
+const INBOX = '/home/u/.cache/tranchant/inbox/rev-1.json'
+const lens = (name: string) =>
+  `LENS ${JSON.stringify({ name, prompt: `/lenses/${name}.md`, paths: ['**'] })}`
+/** prepare.mjs's lines: the envelope it wrote, and two lenses. */
+const PREPARED = [`INBOX ${INBOX}`, lens('bugs'), lens('style'), ''].join('\n')
 
-const ok = (stdout: string) => ({
+const ok = (stdout: string, exitCode = 0) => ({
   value: {
-    exitCode: 0,
+    exitCode,
     stdout,
     stderr: '',
     isStdoutTruncated: false,
@@ -36,6 +42,9 @@ const ok = (stdout: string) => ({
 /** `gitRoot`: the repository the project is in, as `git rev-parse` answers. */
 /** `seeded`: what `$.state`'s `serving` holds before the module runs, as after a reload. */
 /** `refusing`: what open.mjs prints instead of `REVIEW <dir>`. */
+/** `preparing`: what prepare.mjs prints; `pending`: what each `verify.mjs --pending` prints, in turn. */
+/** `spawnRefused`: why every spawn is refused; `completeSays`: complete.mjs's refusal, exit 2. */
+/** `unreadable`: the review's review.json, which the hooks cannot load. */
 function world(
   on: On,
   {
@@ -43,24 +52,52 @@ function world(
     refused,
     seeded,
     refusing,
+    preparing = PREPARED,
+    pending = [],
+    spawnRefused,
+    completeSays,
+    unreadable,
   }: {
+    spawnRefused?: string
+    completeSays?: string
+    unreadable?: string
     gitRoot?: string
     refused?: string
     seeded?: Record<string, Served>
     refusing?: string
+    preparing?: string
+    pending?: string[]
   } = {},
 ) {
   const files = new Map<string, string>([
     [FILE, JSON.stringify({ version: 1, id: 'rev-1' })],
     [
       `${DIR}/review.json`,
-      JSON.stringify({ version: 1, id: 'rev-1', title: TITLE, project: ROOT }),
+      JSON.stringify({
+        version: 1,
+        id: 'rev-1',
+        title: TITLE,
+        project: ROOT,
+        base: 'main',
+        headSha: HEAD,
+        ownership: 'ours',
+      }),
     ],
+    // The envelope prepare.mjs writes.
+    [INBOX, JSON.stringify({ version: 1, id: 'rev-1', status: 'reviewing' })],
+    // A lens's prompt is its reviewer's whole instructions, its frontmatter left out.
+    ['/lenses/bugs.md', '---\nname: bugs\n---\n\nYou review one lens: bugs.\n'],
+    ['/lenses/style.md', 'Look at the style.\n'],
   ])
+  if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
+  // What the hooks did, in order: the import, the server, the page, the agents.
+  const order: string[] = []
   on('fs.read', (_$, e) => {
-    // The plugin's agent file.
+    // The plugin's agent files.
     if (e.path.endsWith('/agents/worker.md'))
       return { value: '---\nname: worker\n---\n\nYou apply one finding.\n' }
+    if (e.path.endsWith('/agents/review/verifier.md'))
+      return { value: '---\nname: verifier\n---\n\nYou verify one finding.\n' }
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
@@ -100,7 +137,20 @@ function world(
   const browsed: string[] = []
   const endings: string[][] = []
   const notes: { argv: string[]; stdin: string }[] = []
+  const prepared: { argv: string[]; cwd?: string }[] = []
+  const completed: string[][] = []
   on('process.run', (_$, e) => {
+    if (e.argv[1]?.endsWith('/scripts/prepare.mjs')) {
+      prepared.push({ argv: e.argv.slice(2), cwd: e.init?.cwd })
+      return ok(preparing)
+    }
+    if (e.argv[1]?.endsWith('/scripts/verify.mjs'))
+      return ok((pending.shift() ?? []).map((id) => `UNVERIFIED ${id}\n`).join(''))
+    if (e.argv[1]?.endsWith('/scripts/complete.mjs')) {
+      completed.push(e.argv.slice(2))
+      order.push('complete')
+      return completeSays === undefined ? ok('COMPLETE\n') : ok(`${completeSays}\n`, 2)
+    }
     if (e.argv.includes('--show-toplevel')) {
       return {
         value: {
@@ -114,6 +164,7 @@ function world(
     }
     if (e.argv[1]?.endsWith('/scripts/open.mjs')) {
       imported.push(e.argv[2] ?? '')
+      order.push('import')
       return ok(`${refusing ?? `REVIEW ${DIR}`}\n`)
     }
     if (e.argv[2] === 'ended') {
@@ -126,6 +177,7 @@ function world(
     }
     if (e.argv[0] === 'open' || e.argv[0] === 'xdg-open') {
       browsed.push(`${e.argv[0]} ${e.argv[1] ?? ''}`)
+      order.push('page')
       return ok('')
     }
     return ok('')
@@ -138,6 +190,8 @@ function world(
   // Claude Code offers the model every agent type no hook keeps from it.
   on('agent.offer', () => ({ isOffered: true }))
   on('turn.complete', () => ({ text: '' }))
+  on('session.receive', (_$, e) => ({ text: e.text }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
   // The agent types the plugin defines, by full name.
   const registered = new Map<string, AgentSpec>()
   on('agent.register', (_$, e) => {
@@ -160,10 +214,15 @@ function world(
   let held: Promise<void> | undefined
   let release: () => void = ignore
   on('agent.spawn', async (_$, e) => {
+    if (spawnRefused !== undefined) return { deny: spawnRefused }
+    // Claude Code's own check of an agent's name.
+    if (e.name !== undefined && !/^[A-Za-z0-9][\w-]{0,63}$/.test(e.name))
+      return { deny: `InputValidationError: name ${e.name}` }
     await held
     const input: Record<string, unknown> = { ...e }
     const type = String(input.subagent_type ?? e.subagentType)
     spawned.push({ prompt: e.prompt, name: e.name, type, description: e.description })
+    order.push(`spawn ${type}`)
     return { model: 'claude-sonnet-5-5', agentId: `a${spawned.length}` }
   })
   // The state a reload finds: `serving` as the module left it before.
@@ -187,6 +246,7 @@ function world(
   let exitCode: number | undefined
   on('process.spawn', async function* (_$, e) {
     servers.push([...e.argv])
+    order.push('server')
     serverEnvs.push(e.env)
     for (;;) {
       const line = printing.shift()
@@ -236,6 +296,9 @@ function world(
     ended: endings,
     notes,
     clock,
+    order,
+    prepared,
+    completed,
   }
 }
 
@@ -360,7 +423,10 @@ test("a fix starts the finding's agent, with hooks of its own, on the session's 
   await w.print(fix('f-01'))
 
   expect(w.spawned).toEqual([
-    expect.objectContaining({ type: 'tranchant:tr-f-01', name: 'tranchant f-01' }),
+    expect.objectContaining({
+      type: 'tranchant:tr-f-01',
+      name: expect.stringMatching(/^tranchant-f-01-[0-9a-z]+$/),
+    }),
   ])
   expect(w.spawned[0]?.prompt).toMatch(
     new RegExp(
@@ -661,5 +727,325 @@ test('/tranchant status tells the server, the agents at work and the queue in or
     tool_use_id: 's1',
   })
   expect(result).toBe(text)
+  await w.exit(0)
+})
+
+/** `/tranchant review`, its server ready. */
+async function review($: Engine, w: ReturnType<typeof world>, args = 'review') {
+  const answer = $.command.run(command(args))
+  await w.print(READY)
+  return (await answer).text
+}
+
+test('review writes the envelope and opens the page first, then one reviewer per lens', async ($, on) => {
+  const w = world(on)
+  const text = await review($, w, 'review feature/cart-discounts --recipe my.json')
+  expect(w.prepared).toEqual([
+    { argv: ['feature/cart-discounts', '--recipe', '/repo/web/my.json'], cwd: ROOT },
+  ])
+  // The envelope prepare.mjs wrote opens through the same path as a review file.
+  expect(w.imported).toEqual([INBOX])
+  expect(w.order).toEqual([
+    'import',
+    'server',
+    'page',
+    'spawn tranchant:rv-bugs-rev-1',
+    'spawn tranchant:rv-style-rev-1',
+  ])
+  expect(text).toMatch(/^Reviewing with 2 lens\(es\): bugs, style\./)
+  expect(text).toMatch(/Tranchant serves Classification overview at http/)
+  expect(w.spawned[0]?.prompt.split('\n')).toEqual([
+    'LENS=bugs',
+    `REVIEW=${DIR}`,
+    expect.stringMatching(/^SKILL=\/.+\/skills\/tranchant$/),
+    `PROJECT=${ROOT}`,
+    'BASE=main',
+    `HEAD=${HEAD}`,
+    `RANGE=main...${HEAD}`,
+    'OWNERSHIP=ours',
+    'PATHS=**',
+  ])
+  const spec = w.registered.get('tranchant:rv-bugs-rev-1')
+  expect(spec?.prompt).toBe('You review one lens: bugs.\n')
+  expect(spec?.tools).toEqual(['Read', 'Bash', 'Grep', 'Glob'])
+  expect(spec?.hooks?.PreToolUse).toEqual([
+    {
+      matcher: 'Bash',
+      hooks: [
+        {
+          type: 'command',
+          command: expect.stringMatching(
+            new RegExp(
+              `^'node' '/.+/scripts/hook\\.mjs' 'pre' '--reviewer' 'rv-bugs' '--review' '${DIR}' '--project' '${ROOT}'$`,
+            ),
+          ),
+        },
+      ],
+    },
+  ])
+  // Each one's start goes to its run file.
+  expect(w.notes.map((one) => one.argv.slice(0, 2))).toEqual([
+    ['--reviewer', 'rv-bugs'],
+    ['--reviewer', 'rv-style'],
+  ])
+  expect(w.notes[0]?.stdin).toMatch(/"kind":"start","label":"Reviewing: bugs"/)
+  // The model is offered none of the review agents.
+  for (const agent of [
+    'tranchant:rv-bugs-rev-1',
+    'tranchant:vf-bugs-1-rev-1',
+    'tranchant:review:bugs',
+    'tranchant:review:verifier',
+  ])
+    expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
+  expect(w.completed).toEqual([])
+  await w.exit(0)
+})
+
+test('review of a folder runs prepare.mjs in it, a recipe resolved from the session', async ($, on) => {
+  const w = world(on, { gitRoot: '/repo/elsewhere' })
+  await review($, w, 'review ../elsewhere --recipe my.json')
+  expect(w.prepared).toEqual([
+    { argv: ['--recipe', '/repo/web/my.json'], cwd: '/repo/elsewhere' },
+  ])
+  await w.exit(0)
+})
+
+test('review of a folder outside any repository is refused, nothing prepared', async ($, on) => {
+  const w = world(on)
+  const { text } = await $.command.run(command('review /tmp/nothing'))
+  expect(text).toBe('Tranchant cannot review: /tmp/nothing is not in a git repository')
+  expect(w.prepared).toEqual([])
+})
+
+test('a review prepare.mjs refuses is answered as refused, no server started', async ($, on) => {
+  const w = world(on, { preparing: 'REVIEW_REFUSED main has no change against main\n' })
+  const { text } = await $.command.run(command('review main'))
+  expect(text).toBe('Tranchant cannot review: main has no change against main')
+  expect(w.servers).toEqual([])
+  expect(w.spawned).toEqual([])
+  expect((await $.command.run(command('review a b'))).text).toMatch(
+    /^Usage: \/tranchant review/,
+  )
+})
+
+test('a review whose server could not start starts no reviewer', async ($, on) => {
+  // The server's watch is gone by the time the review reads its first line.
+  const w = world(on, { unreadable: '{"version":1,"project":"relative"}' })
+  const { text } = await $.command.run(command('review'))
+  expect(text).toMatch(/its project is not an absolute path/)
+  await w.clock.settle()
+  expect(w.spawned).toEqual([])
+})
+
+test('each finding that lands gets its verifier, once, three agents at a time', async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  await w.print('LANDED bugs-1', 'LANDED bugs-1', 'LANDED bugs-2')
+  // Two reviewers and one verifier run; the second verifier waits.
+  expect(w.spawned.map((one) => one.type)).toEqual([
+    'tranchant:rv-bugs-rev-1',
+    'tranchant:rv-style-rev-1',
+    'tranchant:vf-bugs-1-rev-1',
+  ])
+  expect(w.spawned[2]?.prompt).toMatch(
+    new RegExp(
+      `^bugs-1\nREVIEW=${DIR}\nSKILL=.+\nPROJECT=${ROOT}\nBASE=main\nHEAD=${HEAD}\n`,
+    ),
+  )
+  expect(w.registered.get('tranchant:vf-bugs-1-rev-1')?.prompt).toBe(
+    'You verify one finding.\n',
+  )
+  await $.turn.complete(turnEnded('a1', 'Added 2 findings.'))
+  await w.clock.settle()
+  expect(w.spawned.map((one) => one.type).at(-1)).toBe('tranchant:vf-bugs-2-rev-1')
+  expect(w.spawned).toHaveLength(4)
+  expect(w.toasts).toContain('rv-bugs: Added 2 findings.')
+  // Its end goes to its run file.
+  expect(
+    w.notes.find((one) => one.argv[1] === 'rv-bugs' && /"kind":"end"/.test(one.stdin)),
+  ).toBeDefined()
+  await w.exit(0)
+})
+
+test('once every reviewer and verifier ended, complete.mjs runs; a finding with no verifier gets one first', async ($, on) => {
+  const w = world(on, { pending: [['bugs-1', 'bugs-2'], []] })
+  await review($, w)
+  await w.print('LANDED bugs-1')
+  for (const agent of ['a1', 'a2']) await $.turn.complete(turnEnded(agent, 'Done.'))
+  await w.clock.settle()
+  expect(w.completed).toEqual([])
+  await $.turn.complete(turnEnded('a3', 'Confirmed.'))
+  await w.clock.settle()
+  // bugs-2 landed with no LANDED line yet: its verifier, before completing.
+  expect(w.spawned.map((one) => one.type).at(-1)).toBe('tranchant:vf-bugs-2-rev-1')
+  expect(w.completed).toEqual([])
+  await $.turn.complete(turnEnded('a4', 'Removed: a duplicate.'))
+  await w.clock.settle()
+  expect(w.completed).toEqual([['--review', DIR]])
+  expect(w.toasts.at(-1)).toBe('Tranchant finished reviewing Classification overview.')
+  // A finding that lands now starts nothing: the review is complete.
+  await w.print('LANDED bugs-3')
+  expect(w.spawned).toHaveLength(4)
+  await w.exit(0)
+})
+
+test('/tranchant status lists the reviewers; stop ends them and completes the review', async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  await w.print('LANDED bugs-1', 'LANDED bugs-2')
+  const { text } = await $.command.run(command('status'))
+  expect(text).toBe(
+    [
+      'Tranchant: 0 of 3 agents at work in this session.',
+      '',
+      `Classification overview (${DIR}): page at http://127.0.0.1:4599`,
+      '  Reviewing: 3 of 3 review agents at work.',
+      '    rv-bugs: agent a1 on claude-sonnet-5-5, for 0 s',
+      '    rv-style: agent a2 on claude-sonnet-5-5, for 0 s',
+      '    vf-bugs-1: agent a3 on claude-sonnet-5-5, for 0 s',
+      '  Review agents waiting, in order:',
+      '    1. vf-bugs-2',
+      '  No agent at work.',
+      '  No finding waiting.',
+    ].join('\n'),
+  )
+  const stopped = await $.command.run(command('stop'))
+  expect(stopped.text).toBe(
+    'Tranchant stopped serving Classification overview. Ended 3 agent(s) reviewing.',
+  )
+  expect(w.stopped).toEqual(['a1', 'a2', 'a3'])
+  expect(w.completed).toEqual([['--review', DIR]])
+  // The queue emptied: nothing starts in the freed places.
+  expect(w.spawned).toHaveLength(3)
+  await w.exit(0)
+})
+
+test("a reviewer's own words become notes in its run file", async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  await $.session.append({
+    agentId: 'a1',
+    door: 'response',
+    origin: { kind: 'model', model: 'claude-sonnet-5-5' },
+    uuid: 'row-2',
+    message: {
+      type: 'assistant',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Reading the cart first.' }],
+    },
+  })
+  await w.clock.settle()
+  expect(w.notes.at(-1)).toEqual({
+    argv: ['--reviewer', 'rv-bugs', '--review', DIR, '--project', ROOT, '--agent', 'a1'],
+    stdin: expect.stringMatching(/"kind":"note","label":"Reading the cart first\."/),
+  })
+  await w.exit(0)
+})
+
+/** An agent's message to the conversation: its final report with `final`. */
+function peer($: Engine, from: string, body: string, final = true) {
+  const text = final
+    ? `<agent-message from="${from}">\n[Subagent hand-back] The text below is the final report of a subagent. The report follows:\n  ${body}\n</agent-message>`
+    : `<agent-message from="${from}">\n${body}\n</agent-message>`
+  return $.session.receive({ origin: { kind: 'peer' }, text })
+}
+
+test("the hooks' agents' final reports are kept from the conversation, nothing else", async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  const name = w.spawned[0]?.name ?? ''
+  await $.turn.complete(turnEnded('a1', 'Added 2 findings.'))
+  expect(await peer($, name, 'Added 2 findings.')).toEqual({
+    consumed: expect.stringContaining(name),
+  })
+  // What it says mid-run, and another session's, reach the conversation.
+  expect(await peer($, name, 'Every Bash call is refused.', false)).toEqual({
+    text: expect.stringContaining('Every Bash call is refused.'),
+  })
+  expect(await peer($, 'someone-else', 'Done.')).toEqual({
+    text: expect.stringContaining('someone-else'),
+  })
+  // A teammate's delivery names its sender in its origin.
+  expect(
+    await $.session.receive({
+      origin: { kind: 'peer', teammate: name, isVerified: true },
+      text: '[Subagent hand-back] The report follows:\n  Done.',
+    }),
+  ).toEqual({ consumed: expect.stringContaining(name) })
+  await w.exit(0)
+})
+
+test("an agent of this session's report, entering as a prompt, is dropped; the person's is not", async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  const name = w.spawned[0]?.name ?? ''
+  const prompt = (text: string, kind: 'peer' | 'composer') =>
+    $.prompt.submit({ text, origin: { kind }, wait: false, isMeta: true })
+  const report = `Another Claude session sent a message:\n<agent-message from="${name}">\n[Subagent hand-back] The report follows:\n  Added 1 finding.\n</agent-message>`
+  expect(await prompt(report, 'peer')).toEqual({ drop: expect.stringContaining(name) })
+  expect(w.toasts).toContain('rv-bugs: Added 1 finding.')
+  expect(await prompt(report, 'composer')).toEqual({ text: report })
+  await w.exit(0)
+})
+
+test('a final report with no turn.complete ends its agent: the toast, its place freed', async ($, on) => {
+  const w = world(on, { preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n') })
+  await review($, w)
+  await peer($, w.spawned[0]?.name ?? '', 'No finding.')
+  await w.clock.settle()
+  expect(w.toasts).toContain('rv-bugs: No finding.')
+  expect(w.completed).toEqual([['--review', DIR]])
+  await w.exit(0)
+})
+
+test("a fix's agent's final report is kept from the conversation too", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'))
+  await w.clock.settle()
+  expect(await peer($, w.spawned[0]?.name ?? '', 'Fixed.')).toEqual({
+    consumed: expect.any(String),
+  })
+  expect(w.toasts).toContain('f-01: Fixed.')
+  await w.exit(0)
+})
+
+test('verifiers of long ids sharing their start get names of their own, which Claude Code takes', async ($, on) => {
+  const w = world(on, { preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n') })
+  await review($, w)
+  const long = `bugs-${'x'.repeat(57)}`
+  await w.print(`LANDED ${long}-1`, `LANDED ${long}-2`)
+  await w.clock.settle()
+  const names = w.spawned.map((one) => one.name)
+  expect(names).toHaveLength(3)
+  expect(new Set(names).size).toBe(3)
+  await w.exit(0)
+})
+
+test('a review agent that cannot start frees its place, and the review still completes', async ($, on) => {
+  const w = world(on, {
+    preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n'),
+    spawnRefused: 'agents are turned off',
+  })
+  await review($, w)
+  await w.clock.settle()
+  expect(w.toasts).toContain(
+    'Tranchant could not start the reviewer rv-bugs: agents are turned off',
+  )
+  expect(w.completed).toEqual([['--review', DIR]])
+  await w.exit(0)
+})
+
+test('a complete.mjs that fails is said, with the command that does it', async ($, on) => {
+  const w = world(on, {
+    preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n'),
+    completeSays: 'COMPLETE_REFUSED the review is complete already',
+  })
+  await review($, w)
+  await $.turn.complete(turnEnded('a1', 'No finding.'))
+  await w.clock.settle()
+  expect(w.toasts.at(-1)).toMatch(
+    /^Tranchant could not mark Classification overview complete: COMPLETE_REFUSED the review is complete already\. node .+\/complete\.mjs --review /,
+  )
   await w.exit(0)
 })

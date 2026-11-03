@@ -20,6 +20,8 @@ interface Props {
   finding: Finding
   record: FindingRecord | undefined
   steps: readonly Step[]
+  /** No verifier confirmed it yet. */
+  unverified?: boolean
   disabled: boolean
   onDecide: (decisions: DecisionInput[]) => void
   onAnswer: (id: string, text: string, choices: string[]) => void
@@ -134,6 +136,7 @@ export function FindingDetail({
   finding,
   record,
   steps,
+  unverified = false,
   disabled,
   onDecide,
   onAnswer,
@@ -178,6 +181,13 @@ export function FindingDetail({
     <article className="tr-detail" aria-labelledby="tr-detail-title">
       <header className="tr-detail-head">
         <h2 id="tr-detail-title">{finding.title}</h2>
+        {unverified && (
+          <p className="tr-muted" role="note">
+            {review.status === 'reviewing'
+              ? 'Not verified yet: a verifier re-reads the code, then confirms, corrects or removes it.'
+              : 'Not verified: the review ended before a verifier confirmed it.'}
+          </p>
+        )}
         <div className="tr-detail-meta">
           <CopyAnchor text={`${finding.path}:${finding.line}`} />
           <span className={`tr-chip tr-chip--bucket-${finding.bucket}`}>

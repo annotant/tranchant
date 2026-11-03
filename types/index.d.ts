@@ -14,6 +14,45 @@ export type Worker = {
   model?: string
 }
 
+/** A lens of a recipe: its instructions file and the path globs it applies to. */
+export type Lens = {
+  name: string
+  /** Absolute, as prepare.mjs prints it (a recipe names it relative to itself). */
+  prompt: string
+  paths: string[]
+}
+
+/** What waits for a free review agent: a lens's reviewer, or a finding's verifier. */
+export type ReviewJob =
+  { kind: 'reviewer'; lens: Lens } | { kind: 'verifier'; id: string }
+
+/**
+ * A review `/tranchant review` runs: the agents waiting for a free place, in
+ * order, and the findings a verifier was queued for.
+ */
+export type ReviewRun = {
+  queue: ReviewJob[]
+  verifying: string[]
+}
+
+/**
+ * An agent the hooks started for a review: a lens's reviewer (`rv-<lens>`) or
+ * a finding's verifier (`vf-<id>`). `running` until its turn completes.
+ */
+export type ReviewAgent = {
+  agent: string
+  /** `rv-<lens>` or `vf-<id>`: its run file's name, and its agent type's with the review's id. */
+  name: string
+  kind: 'reviewer' | 'verifier'
+  /** Its instructions file, absolute: its lens's, or agents/review/verifier.md. */
+  prompt: string
+  review: string
+  project: string
+  running: boolean
+  since: number
+  model?: string
+}
+
 /** A review the hooks serve: its folder and the project it lies in. */
 export type Served = {
   review: string
@@ -25,9 +64,18 @@ declare module 'claude-code' {
     /**
      * The skill's way in: `review` is a review file to import and open, or a
      * review folder already imported; `stop` ends the server and every agent;
-     * `status` says what runs.
+     * `status` says what runs; `run` reviews `target` (a branch, a merge
+     * request url, or a folder starting with `.` or `/`, another repository
+     * at its current branch; the current branch when absent) with `recipe`.
      */
-    mcp__tranchant__open: { review?: string; stop?: boolean; status?: boolean }
+    mcp__tranchant__open: {
+      review?: string
+      stop?: boolean
+      status?: boolean
+      run?: boolean
+      target?: string
+      recipe?: string
+    }
   }
   interface PluginState {
     tranchant: {
@@ -43,6 +91,10 @@ declare module 'claude-code' {
        * a line about it again starts nothing. Kept until the session ends.
        */
       handed: Record<string, string>
+      /** The reviews `/tranchant review` runs, by review folder, until they complete. */
+      reviewRuns: Record<string, ReviewRun>
+      /** By `<name>@<review folder>`: the review agents started, running or ended. */
+      reviewAgents: Record<string, ReviewAgent>
     }
   }
 }

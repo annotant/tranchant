@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // hook.mjs <pre|post|stop|note|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]
+// hook.mjs <pre|post|note> --reviewer <name> --review <dir> --project <root> [--agent <id>]
 // The hooks of one finding's agent: Claude Code runs them around each of its
 // tools with the event as JSON on stdin. Claude Code runs no plugin mod hook
 // for an agent a plugin starts, so the plugin's hooks module registers each
@@ -17,6 +18,11 @@
 //      working, neither done nor asked about, fails, so the reviewer can
 //      send it again. Prints `AGENT_ENDED <id>` when it did.
 //
+// `--reviewer`: a review agent's (a lens's reviewer, `rv-<lens>`, or a
+// finding's verifier, `vf-<id>`): it has no writing tool and takes no lock;
+// its steps go to reviewers/<name>.jsonl. pre allows only reading commands
+// and its own review script in Bash (reviewerRefusal).
+//
 // `--lock-root`: the git repository the project is in, which the hooks module
 // found; the locks are tabled per repository. A hook never fails the agent:
 // on any error, it lets the tool run.
@@ -25,7 +31,7 @@ import path from 'node:path'
 import { withFileLock } from './lib/filelock.mjs'
 import { currentRun, parseDecisions } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
-import { createStore, historyPath, progressPath } from './lib/store.mjs'
+import { createStore, historyPath, progressPath, reviewAgentPath } from './lib/store.mjs'
 
 /** @typedef {import('./lib/format.mjs').Entry} Entry */
 /** @typedef {import('./lib/format.mjs').Step} Step */
@@ -55,6 +61,42 @@ const WORD = String.raw`[^\s;&|()<>]+`
 // The agent's scripts, called by any path.
 const CLAIM = new RegExp(String.raw`\bclaim\.mjs\s+(${WORD})`)
 const ENDS = new RegExp(String.raw`\b(?:done|ask)\.mjs\s+(${WORD})`)
+// What a review agent may run: it reads untrusted code, so its Bash is an
+// allowlist of reading commands and its own review scripts, not a denylist.
+const READERS = new Set([
+  'git',
+  'cat',
+  'head',
+  'tail',
+  'wc',
+  'ls',
+  'grep',
+  'nl',
+  'sort',
+  'uniq',
+  'cut',
+  'jq',
+  'echo',
+  'pwd',
+  'diff',
+])
+const GIT_READS = new Set([
+  'diff',
+  'show',
+  'log',
+  'rev-parse',
+  'ls-files',
+  'ls-tree',
+  'blame',
+  'cat-file',
+  'grep',
+  'status',
+  'merge-base',
+  'rev-list',
+])
+// git options that write a file or run a program.
+const GIT_RISKY = /^(?:--output|--ext-diff|-O|--open-files-in-pager)/
+const REVIEW_SCRIPT = /\/scripts\/(add|verify|remove)\.mjs$/
 // A Bash command that writes files takes no lock: refused, the agent must use
 // Edit or Write. Best effort, on the usual forms. What an inline script writes
 // cannot be told: always refused.
@@ -123,11 +165,161 @@ async function debug(agent, finding, message) {
 const mayWorkOn = (/** @type {Entry | undefined} */ entry) =>
   entry?.state === 'queued' || entry?.state === 'working'
 
+const REFUSED_SHELL = 'a redirection, a substitution or an unquoted heredoc'
+// The two redirections a reading command may keep: they write no file.
+const KEPT_REDIRECTION = /^(?:&\d|\s*\/dev\/null)(?=[\s;&|]|$)/
+
 /**
- * The hooks of one finding's agent.
- * @param {{ finding: string, review: string, root: string, lockRoot: string, agent: string }} options
+ * A command's words, by segment, split on `;`, `|`, `&` and newlines outside
+ * quotes; or why it is refused: a redirection but `2>&1` and `>/dev/null`, a
+ * substitution outside single quotes, an unquoted heredoc. A quoted heredoc's
+ * body is data, skipped: the finding a review script reads.
+ * @param {string} text
+ * @returns {{ segments: string[][] } | { refusal: string }}
  */
-function hooksFor({ finding, review, root, lockRoot, agent }) {
+function shellWords(text) {
+  /** @type {string[][]} */
+  const segments = [[]]
+  let word = ''
+  // `""` is a word: whether one is under way.
+  let started = false
+  let quote = ''
+  /** @type {string[]} */
+  const heredocs = []
+  const end = () => {
+    if (started) segments.at(-1)?.push(word)
+    word = ''
+    started = false
+  }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] ?? ''
+    if (quote === "'") {
+      if (c === "'") quote = ''
+      else word += c
+      continue
+    }
+    if (c === '\\' && i + 1 < text.length) {
+      const escaped = text[++i] ?? ''
+      if (escaped === '\n') continue
+      // Within double quotes, a backslash escapes these alone.
+      word += quote === '"' && !/[$`"\\\n]/.test(escaped) ? `\\${escaped}` : escaped
+      started = true
+      continue
+    }
+    if (c === '`' || (c === '$' && text[i + 1] === '(')) return { refusal: REFUSED_SHELL }
+    if (quote === '"') {
+      if (c === '"') quote = ''
+      else word += c
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      started = true
+      continue
+    }
+    if (c === '<' && text[i + 1] === '<') {
+      const marker = /^<<-?[ \t]*(['"])([\w-]+)\1/.exec(text.slice(i))
+      if (!marker) return { refusal: REFUSED_SHELL }
+      heredocs.push(marker[2] ?? '')
+      end()
+      i += marker[0].length - 1
+      continue
+    }
+    if (c === '<' || c === '>') {
+      const kept = c === '>' && (!started || /^\d$/.test(word))
+      const rest = kept ? KEPT_REDIRECTION.exec(text.slice(i + 1)) : null
+      if (!rest) return { refusal: REFUSED_SHELL }
+      word = ''
+      started = false
+      i += rest[0].length
+      continue
+    }
+    if (/[;|&\n]/.test(c)) {
+      end()
+      segments.push([])
+      // The bodies start on the next line: each ends on its delimiter alone.
+      if (c === '\n')
+        for (const delimiter of heredocs.splice(0)) {
+          const line = new RegExp(String.raw`^[ \t]*${delimiter}[ \t]*$`, 'm')
+          const found = line.exec(text.slice(i + 1))
+          if (!found) return { refusal: 'a heredoc with no end' }
+          i += found.index + found[0].length
+        }
+      continue
+    }
+    if (/\s/.test(c)) end()
+    else {
+      word += c
+      started = true
+    }
+  }
+  if (quote) return { refusal: 'an unclosed quote' }
+  if (heredocs.length) return { refusal: 'a heredoc with no end' }
+  end()
+  return { segments }
+}
+
+/**
+ * Why a reading command's arguments would write or run something, or
+ * undefined: sort's output file or compressor (GNU takes any prefix of a
+ * long option), uniq's output operand, git's.
+ * @param {string} program
+ * @param {string[]} args
+ */
+function argumentRefusal(program, args) {
+  if (program === 'sort' && args.some((arg) => /^--(?:o|co)|^-[^-]*o/.test(arg)))
+    return 'sort writes a file or runs a program with that option'
+  if (program === 'uniq') {
+    // Its counts follow -f, -s and -w; any other operand is a file, the second written.
+    const operands = args.filter(
+      (arg, i) => !arg.startsWith('-') && !/^-[fsw]$/.test(args[i - 1] ?? ''),
+    )
+    if (operands.length > 1) return 'uniq writes its second file'
+  }
+  if (program !== 'git') return undefined
+  const sub = args[0] === '-C' ? args[2] : args[0]
+  if (!sub || !GIT_READS.has(sub)) return `git ${sub ?? ''} is not a reading command`
+  if (args.some((arg) => GIT_RISKY.test(arg)))
+    return 'a git option that writes or runs a program'
+  return undefined
+}
+
+/**
+ * Why review agent `name` may not run `command`, or undefined when it may: a
+ * chain of reading commands, and the agent's own script (a reviewer's
+ * add.mjs; a verifier's verify.mjs or remove.mjs, on its own finding).
+ * @param {string} name `rv-<lens>` or `vf-<finding id>`.
+ * @param {string} command
+ */
+function reviewerRefusal(name, command) {
+  const parsed = shellWords(command)
+  if ('refusal' in parsed) return parsed.refusal
+  for (const [program, ...args] of parsed.segments) {
+    if (!program) continue
+    if (program === 'node') {
+      const script = REVIEW_SCRIPT.exec(args[0] ?? '')?.[1]
+      const verifier = name.startsWith('vf-')
+      if (!script) return 'node runs only the review scripts'
+      if (!verifier && script !== 'add')
+        return `a reviewer adds findings, ${script}.mjs is a verifier's`
+      if (verifier && script === 'add') return 'a verifier checks a finding, it adds none'
+      if (verifier && args[1] !== name.slice(3))
+        return `a verifier gives its verdict on ${name.slice(3)} only`
+      continue
+    }
+    if (!READERS.has(program)) return `${program} is not a reading command`
+    const refused = argumentRefusal(program, args)
+    if (refused) return refused
+  }
+  return undefined
+}
+
+/**
+ * The hooks of one finding's agent, or with `reviewer`, of a review agent:
+ * `finding` is then its name.
+ * @param {{ finding: string, review: string, root: string, lockRoot: string, agent: string, reviewer?: boolean }} options
+ */
+function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) {
   const log = (/** @type {string} */ message) => debug(agent, finding, message)
   const scripts = path.dirname(new URL(import.meta.url).pathname)
   const table = path.join(locksDir(lockRoot), 'table.json')
@@ -225,6 +417,16 @@ function hooksFor({ finding, review, root, lockRoot, agent }) {
    * @param {Step[]} steps
    */
   async function record(steps) {
+    if (reviewer) {
+      if (!steps.length) return
+      const file = reviewAgentPath(review, finding)
+      await mkdir(path.dirname(file), { recursive: true })
+      await appendFile(
+        file,
+        steps.map((step) => `${JSON.stringify({ ...step, agent })}\n`).join(''),
+      )
+      return
+    }
     const entry = await readEntry()
     const run = entry ? currentRun(entry)?.id : undefined
     if (!run || !steps.length) return
@@ -379,7 +581,18 @@ function hooksFor({ finding, review, root, lockRoot, agent }) {
       /** @type {Step} */
       const step = { at: Date.now(), ...(id && { id }), ...describe(tool, input) }
       const command = (tool === 'Bash' && textOf(input, 'command')) || ''
-      if (command && writesFromBash(command)) {
+      const refused = reviewer && command ? reviewerRefusal(finding, command) : undefined
+      if (refused) {
+        await log(`refused a review agent's command: ${short(command, 120)}`)
+        await record([{ ...step, state: 'failed', detail: refused }])
+        return (
+          `Refused: ${refused}. A review agent runs reading commands only (git ` +
+          `${[...GIT_READS].join('/')}, ${[...READERS].filter((one) => one !== 'git').join(', ')}), ` +
+          'one at a time or chained, without redirections or substitutions, and its own review script ' +
+          'with the finding in a quoted heredoc. Use the Read, Grep and Glob tools for the rest.'
+        )
+      }
+      if (!reviewer && command && writesFromBash(command)) {
         await log(`refused a Bash write: ${short(command, 120)}`)
         await record([
           {
@@ -393,7 +606,7 @@ function hooksFor({ finding, review, root, lockRoot, agent }) {
           "the other findings' agents. Make the change with the Edit or Write tool instead."
         )
       }
-      const target = writeTarget(tool, input)
+      const target = reviewer ? undefined : writeTarget(tool, input)
       if (target) {
         const deny = await lockTarget(target, step)
         if (deny) return deny
@@ -413,6 +626,10 @@ function hooksFor({ finding, review, root, lockRoot, agent }) {
         ...describe(tool, input),
         state: failed ? 'failed' : 'done',
         ...(failed && { detail: short(error.trim().split('\n')[0] ?? '', 160) }),
+      }
+      if (reviewer) {
+        await record([step])
+        return
       }
       const entry = await readEntry()
       if (CLAIM.test(command) && entry) {
@@ -472,15 +689,18 @@ function hooksFor({ finding, review, root, lockRoot, agent }) {
 
 async function main() {
   const [mode] = process.argv.slice(2)
-  const finding = flag('--finding')
+  const reviewer = flag('--reviewer')
+  const finding = reviewer ?? flag('--finding')
   const review = flag('--review')
   const root = flag('--project')
   if (!mode || !finding || !review || !root) {
     console.error(
-      'usage: hook.mjs <pre|post|stop|note|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]',
+      'usage: hook.mjs <pre|post|stop|note|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>], or --reviewer <name> in place of --finding',
     )
     process.exit(2)
   }
+  // A review agent's file is named after it: nothing outside reviewers/.
+  if (reviewer && !/^[\w-]{1,80}$/.test(reviewer)) process.exit(2)
   let text = ''
   for await (const chunk of process.stdin) text += chunk
   /** @type {HookInput} */
@@ -492,7 +712,10 @@ async function main() {
     root,
     lockRoot: flag('--lock-root') ?? repositoryOf(root),
     agent: event.agent_id ?? flag('--agent') ?? '-',
+    reviewer: reviewer !== undefined,
   })
+  // A review agent holds no lock and no finding: nothing to release or fail.
+  if (reviewer && (mode === 'stop' || mode === 'ended')) return
   if (mode === 'pre') {
     const deny = await hooks.pre(event)
     if (deny)

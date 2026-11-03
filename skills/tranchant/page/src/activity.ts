@@ -25,7 +25,7 @@ export function activityOf(step: Step): string {
     const started = step.state === 'running' ? 'Starting' : 'Started'
     return step.model ? `${started} on ${modelName(step.model)}` : started
   }
-  if (step.kind === 'note') return step.label
+  if (step.kind === 'note' || step.kind === 'end') return step.label
   if (step.state === 'running') return `${RUNNING[step.kind] ?? 'Using'} ${step.label}`
   if (step.state === 'failed')
     return `${RUNNING[step.kind] ?? 'Using'} ${step.label} failed`

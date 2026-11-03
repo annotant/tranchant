@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// open.mjs <review.json>
+// open.mjs <review.json> [--verify]
 // Validates a review file and imports it into the state folder,
 // <state>/<hash of its project>/reviews/<its id>/: review.json keeps the
 // envelope, findings/<id>.json each finding the producer wrote inline, and
@@ -7,7 +7,10 @@
 // imported already with the same envelope (status and findings aside: a
 // review grows) is reused, its decisions kept, and its inline findings not
 // there yet are added; with another envelope, or a finding of other content,
-// it is refused: the producer mints a new id. Any refusal prints
+// it is refused: the producer mints a new id. `verify` and the findings'
+// `verified` are the hooks' alone: dropped, unless `--verify`, which
+// `/tranchant review` passes for the envelope prepare.mjs wrote, keeps
+// `verify`. Any refusal prints
 // `REVIEW_REFUSED <reason>` and exits 2.
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -67,7 +70,13 @@ if (!file) {
 }
 
 const text = await read(file)
-const review = parse(file, text)
+// Only a run of /tranchant review has verifiers: whatever a file claims, its findings are not dimmed.
+const { verify: _claimed, ...parsed } = parse(file, text)
+const review = {
+  ...parsed,
+  ...(process.argv.includes('--verify') ? { verify: true } : {}),
+  findings: parsed.findings.map(({ verified: _verified, ...finding }) => finding),
+}
 const { id, project } = review
 const dir = reviewDir(project, id)
 const target = path.join(dir, 'review.json')

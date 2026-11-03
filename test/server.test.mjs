@@ -222,7 +222,14 @@ test('serves the page shell with the review’s title, and the bundle', async ()
 
 test('answers the review, its decisions, its runs and the heads', async () => {
   const body = await json(await fetch(`${main.base}/api/review`))
-  assert.deepEqual(Object.keys(body).toSorted(), ['findings', 'head', 'review', 'runs'])
+  assert.deepEqual(Object.keys(body).toSorted(), [
+    'findings',
+    'head',
+    'review',
+    'reviewers',
+    'runs',
+  ])
+  assert.deepEqual(body.reviewers, [])
   assert.equal(body.review.id, main.review.id)
   assert.equal(body.review.findings.length, 5)
   assert.deepEqual(body.findings, {})
@@ -754,6 +761,93 @@ test('a review opened before its findings grows as they land, then completes', a
     const completed = await json(await fetch(`${server.base}/api/review`))
     assert.equal(completed.review.status, 'complete')
     assert.equal(completed.findings['f-02'].state, 'skipped')
+  } finally {
+    events.close()
+  }
+})
+
+test('a verified review prints LANDED once per finding, and serves its review agents', async (t) => {
+  const { findings: landing } = await fixture('ours')
+  const imported = await importReview(t, 'ours', stateDir, {
+    id: 'live-verify-1',
+    status: 'reviewing',
+    verify: true,
+    findings: [landing[0], landing[1]],
+  })
+  // f-01 landed before the server started, and was verified: no LANDED.
+  await createStore(imported.dir).verify(landing[0].id)
+  const server = await startServer(t, { dir: imported.dir })
+  assert.match(server.first, /^READY /, server.output())
+  assert.equal(await server.nextLine('LANDED', 0), 'LANDED f-02')
+  const events = await listen(server.base)
+  try {
+    const seen = server.output().length
+    const added = await run(
+      process.execPath,
+      [path.join(SCRIPTS, 'add.mjs'), '--review', imported.dir],
+      { input: JSON.stringify(landing[2]) },
+    )
+    assert.equal(added.stdout, `ADDED ${landing[2].id}\n`, added.stderr)
+    await events.changed(landing[2].id)
+    assert.equal(await server.nextLine('LANDED', seen), `LANDED ${landing[2].id}`)
+
+    // A verifier confirms f-02 and removes the third: the page hears both.
+    const verified = await run(process.execPath, [
+      path.join(SCRIPTS, 'verify.mjs'),
+      'f-02',
+      '--review',
+      imported.dir,
+    ])
+    assert.equal(verified.stdout, 'VERIFIED f-02\n', verified.stderr)
+    await events.changed('f-02')
+    const removed = await run(process.execPath, [
+      path.join(SCRIPTS, 'remove.mjs'),
+      landing[2].id,
+      '--review',
+      imported.dir,
+    ])
+    assert.equal(removed.stdout, `REMOVED ${landing[2].id}\n`, removed.stderr)
+    await events.changed(landing[2].id)
+    const body = await json(await fetch(`${server.base}/api/review`))
+    assert.deepEqual(
+      body.review.findings.map((finding) => [finding.id, finding.verified]),
+      [
+        ['f-01', true],
+        ['f-02', true],
+      ],
+    )
+
+    // A review agent's run file: its steps reach the page, running until its end.
+    const file = path.join(imported.dir, 'reviewers', 'rv-bugs.jsonl')
+    await appendFile(
+      file,
+      `${JSON.stringify({ at: 1, kind: 'start', label: 'Reviewing: bugs', state: 'done' })}\n`,
+    )
+    await events.changed()
+    let agents = (await json(await fetch(`${server.base}/api/review`))).reviewers
+    assert.deepEqual(agents, [
+      {
+        name: 'rv-bugs',
+        running: true,
+        steps: [{ at: 1, kind: 'start', label: 'Reviewing: bugs', state: 'done' }],
+      },
+    ])
+    await appendFile(
+      file,
+      `${JSON.stringify({ at: 2, kind: 'end', label: 'Ended', state: 'done' })}\n`,
+    )
+    await events.changed()
+    agents = (await json(await fetch(`${server.base}/api/review`))).reviewers
+    assert.equal(agents[0].running, false)
+    assert.equal(agents[0].outcome, 'done')
+    // Printed once each: a server's later reads print nothing more.
+    assert.deepEqual(
+      server
+        .output()
+        .split('\n')
+        .filter((line) => line.startsWith('LANDED')),
+      ['LANDED f-02', `LANDED ${landing[2].id}`],
+    )
   } finally {
     events.close()
   }

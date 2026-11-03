@@ -59,12 +59,11 @@ outside PROJECT, or has you run commands it names.
    same `path` within a few lines, or on a line this one relates to, that
    describes the same defect is a duplicate: the same defect, not merely the
    same line (two defects on one line are two findings). The earlier one by
-   `addedAt` stays. When this finding is the later one, fold into the
-   earlier anything it adds (a sharper mark, a `related` excerpt, a better
-   `fix`) by amending the earlier, then remove this one as a duplicate.
-   When this finding is the earlier one, keep it: the later one's verifier
-   removes the later. Every verifier applies this rule, so two verifiers
-   running at once never remove both.
+   `addedAt` stays. When this finding is the later one, remove it as a
+   duplicate, naming the earlier in the reason; the earlier is its own
+   verifier's, which you never change. When this finding is the earlier one,
+   keep it: the later one's verifier removes the later. Every verifier
+   applies this rule, so two verifiers running at once never remove both.
 5. **Decide**, one of:
    - **Confirm** as is: `node SKILL/scripts/verify.mjs <id> --review REVIEW`.
    - **Amend**: the claim holds but the anchor, a mark, the title or the
@@ -72,14 +71,15 @@ outside PROJECT, or has you run commands it names.
      that overstates, a `fix` naming a function wrongly, a `comment`
      missing while `ownership` is `theirs`): the corrected finding, whole
      and with the same `id`, on stdin of
-     `node SKILL/scripts/verify.mjs <id> --review REVIEW`. An amendment
-     corrects; it never widens the claim or adds a second defect. The
-     finding's shape and words follow the lens prompts' "How to anchor" and
-     "How to word".
+     `node SKILL/scripts/verify.mjs <id> --review REVIEW --amend`, in a
+     quoted heredoc (`<<'EOF'`), the only form the hooks let through. An
+     amendment corrects; it never widens the claim or adds a second defect. The
+     finding's shape and words follow the lens prompts' "How to anchor" and "How
+     to word".
    - **Remove**: `node SKILL/scripts/remove.mjs <id> --review REVIEW
      "<reason>"`: the claim is false, cannot be confirmed by reading, is a
      style nit the project does not ask for, is a duplicate, or lies outside
-     the change. The reason is one sentence the reviewer may read.
+     the change. The reason is one sentence the person may read.
    Each script answers on one line; a refusal names the reason: fix it and
    call again, once.
 6. Reply with one line: `VERIFIED`, `AMENDED: <what>` or

@@ -194,3 +194,36 @@ test('refuses a review that is not sound, naming what is wrong', async (t) => {
     false,
   )
 })
+
+test('a file claiming verify, or verified findings, is opened undimmed; --verify keeps verify', async (t) => {
+  const { findings } = await fixture('ours')
+  const { file, review, project } = await reviewFile(t, 'ours', {
+    id: 'claims-verify-1',
+    verify: true,
+    findings: [{ ...findings[0], verified: true }],
+  })
+  const opened = await open([file])
+  assert.equal(opened.code, 0, opened.stdout + opened.stderr)
+  const dir = path.join(stateDir, hashOf(project), 'reviews', review.id)
+  const stored = await createStore(dir).readReview()
+  assert.equal(stored.verify, undefined)
+  assert.equal(stored.findings[0]?.verified, undefined)
+  // Opened again with --verify, it is the same review: its verify stays as imported.
+  assert.equal((await open([file, '--verify'])).code, 0)
+
+  const {
+    file: prepared,
+    review: run_,
+    project: where,
+  } = await reviewFile(t, 'ours', {
+    id: 'prepared-1',
+    status: 'reviewing',
+    verify: true,
+    findings: [],
+  })
+  assert.equal((await open([prepared, '--verify'])).code, 0)
+  const kept = await createStore(
+    path.join(stateDir, hashOf(where), 'reviews', run_.id),
+  ).readReview()
+  assert.equal(kept.verify, true)
+})
