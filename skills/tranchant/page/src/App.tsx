@@ -17,6 +17,7 @@ import {
   type DecisionInput,
   groupFindings,
   isReviewing,
+  needsYou,
   orderedFindings,
   plural,
   type Review,
@@ -63,10 +64,13 @@ function Header({
   review,
   tally,
   moved,
+  onNeedsYou,
 }: {
   review: Review
   tally: ReturnType<typeof counts>
   moved: boolean
+  /** Opens the next finding waiting on the reviewer. */
+  onNeedsYou: () => void
 }) {
   return (
     <header className="tr-header">
@@ -120,6 +124,24 @@ function Header({
             </span>
           )}
         </div>
+      </div>
+      <div className="tr-attention">
+        <button
+          type="button"
+          className={`tr-attention-item ${tally.needsYou ? 'tr-attention-item--alert' : ''}`}
+          disabled={!tally.needsYou}
+          title="Asking or failed: open the next one"
+          onClick={onNeedsYou}
+        >
+          Needs you <strong>{tally.needsYou}</strong>
+        </button>
+        <span
+          className={`tr-attention-item ${tally.running ? 'tr-attention-item--live' : ''}`}
+          title="Queued or working"
+        >
+          {tally.running > 0 && <span className="tr-spinner" aria-hidden="true" />}
+          Running <strong>{tally.running}</strong>
+        </span>
       </div>
       <dl className="tr-counts" aria-label="Findings by state">
         <div>
@@ -312,6 +334,14 @@ export default function App() {
     setOpenId(id)
   }, [])
 
+  // From the cursor, wrapping; off the set it starts at the first. Moving the cursor scrolls.
+  const openNextNeedingYou = () => {
+    const needing = ordered.filter((finding) => needsYou(stateOf(records, finding.id)))
+    const index = needing.findIndex((finding) => finding.id === cursor)
+    const next = needing[(index + 1) % needing.length]
+    if (next) open(next.id)
+  }
+
   useEffect(() => {
     if (!review) return undefined
     function onKey(event: KeyboardEvent) {
@@ -413,7 +443,12 @@ export default function App() {
           Tranchant stopped serving this review. Retrying every 5 seconds…
         </div>
       )}
-      <Header review={review} tally={tally} moved={moved} />
+      <Header
+        review={review}
+        tally={tally}
+        moved={moved}
+        onNeedsYou={openNextNeedingYou}
+      />
       <ReviewAgents
         agents={(payload?.reviewers ?? []).map((agent) =>
           // An agent whose end step was never written ended with its review all the same.
