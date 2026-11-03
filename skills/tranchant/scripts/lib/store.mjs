@@ -47,7 +47,7 @@ const MAX_SUMMARY = 2000
 const MAX_TEXT = 4000
 /** A model id is short (`claude-opus-5-5`): the hooks' value, kept bounded. */
 const MAX_MODEL = 100
-const WRITE_KINDS = new Set(['edit', 'write', 'multiedit'])
+export const WRITE_KINDS = new Set(['edit', 'write', 'multiedit'])
 // What the agent says and thinks accompanies its steps; it is not one.
 const NARRATION_KINDS = new Set(['note', 'thinking', 'message'])
 

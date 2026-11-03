@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync, watch } from 'node:fs'
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -23,12 +23,14 @@ import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/projec
 import { oneLine, statusOf } from './lib/format.mjs'
 import {
   StoreRefusal,
+  WRITE_KINDS,
   createStore,
   readProgress,
   readReviewAgents,
 } from './lib/store.mjs'
 
 /** @typedef {import('./lib/format.mjs').Entry} Entry */
+/** @typedef {import('./lib/format.mjs').Step} Step */
 
 const found = findReview()
 if (!found) {
@@ -317,6 +319,24 @@ async function commitOf(what, revision) {
   }
 }
 
+/** Refuses, with the reason, a project git cannot read. */
+async function ensureRepository() {
+  try {
+    await git(['rev-parse', '--is-inside-work-tree'])
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') {
+      throw new DiffUnavailable('git is not installed', { cause: error })
+    }
+    const words = gitWords(error)
+    throw new DiffUnavailable(
+      /not a git repository/.test(words)
+        ? `${project} is not a git repository`
+        : `git cannot read ${project}: ${words}`,
+      { cause: error },
+    )
+  }
+}
+
 /**
  * The unified diff of the change and its files: the MR's own diff refs when
  * the review has them, else what reached `headSha` since `base`.
@@ -335,20 +355,7 @@ async function computeDiff() {
   }
   const base = refs ? refs.baseSha : review.base
   const head = refs ? refs.headSha : review.headSha
-  try {
-    await git(['rev-parse', '--is-inside-work-tree'])
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') {
-      throw new DiffUnavailable('git is not installed', { cause: error })
-    }
-    const words = gitWords(error)
-    throw new DiffUnavailable(
-      /not a git repository/.test(words)
-        ? `${project} is not a git repository`
-        : `git cannot read ${project}: ${words}`,
-      { cause: error },
-    )
-  }
+  await ensureRepository()
   const baseSha = await commitOf('base', base)
   const headSha = await commitOf('head', head)
   // Shas only from here: nothing the producer wrote reaches git as an argument.
@@ -383,6 +390,218 @@ async function computeDiff() {
   return { base, head, files: parseNumstat(numstat.stdout), diff: patch.stdout }
 }
 
+/**
+ * One file a fix wrote, and the other findings whose runs wrote it after:
+ * the diff then shows their changes too.
+ * @typedef {{ path: string, since: string[] }} ChangedFile
+ */
+
+/**
+ * Where a write step wrote, relative to `project`; undefined outside it, or
+ * for a step that is not a write.
+ * @param {Step} step
+ */
+function writtenPath(step) {
+  if (!WRITE_KINDS.has(step.kind) || step.state === 'failed') return undefined
+  // Older runs have no `file`: their label was the path, or only a name outside the repository.
+  const where = typeof step.file === 'string' ? step.file : step.label
+  if (typeof where !== 'string' || !where) return undefined
+  const relative = path.relative(project, path.resolve(project, where))
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative))
+    return undefined
+  return relative
+}
+
+/**
+ * By path, the last time finding `id`'s run that fixed it (else its last run
+ * that ended) wrote it.
+ * @param {string} id
+ */
+async function writtenBy(id) {
+  const { findings } = await store.readDecisions()
+  const runs = findings[id]?.runs ?? []
+  const run =
+    runs.findLast((one) => one.outcome === 'fixed') ?? runs.findLast((one) => one.endedAt)
+  /** @type {Map<string, number>} */
+  const last = new Map()
+  for (const step of await readProgress(dir, id, undefined, { history: true })) {
+    if (run && step.run && step.run !== run.id) continue
+    const file = writtenPath(step)
+    if (file) last.set(file, Math.max(last.get(file) ?? 0, step.at ?? 0))
+  }
+  return last
+}
+
+/**
+ * By path of `last`, the other findings whose runs, ended or in progress,
+ * wrote it after `last` says this one did.
+ * @param {string} id
+ * @param {Map<string, number>} last
+ */
+async function writtenSince(id, last) {
+  /** @type {Map<string, Set<string>>} */
+  const since = new Map([...last.keys()].map((file) => [file, new Set()]))
+  /** @type {string[]} */
+  let names = []
+  try {
+    names = await readdir(runsDir)
+  } catch (error) {
+    // Unreadable, the warning would be missing: only an absent folder means no run.
+    if (errorCode(error) !== 'ENOENT') throw error
+  }
+  const others = new Set(
+    names.flatMap((name) => {
+      const other = /^([\w-]{1,64})(?:\.history)?\.jsonl$/.exec(name)?.[1]
+      return other && other !== id ? [other] : []
+    }),
+  )
+  for (const other of others) {
+    const steps = [
+      ...(await readProgress(dir, other)),
+      ...(await readProgress(dir, other, undefined, { history: true })),
+    ]
+    for (const step of steps) {
+      const file = writtenPath(step)
+      const mine = file === undefined ? undefined : last.get(file)
+      if (file && mine !== undefined && (step.at ?? 0) > mine) since.get(file)?.add(other)
+    }
+  }
+  return since
+}
+
+/** @param {unknown} error */
+const isGitFailure = (error) =>
+  !!error && typeof error === 'object' && ('stderr' in error || 'killed' in error)
+
+/**
+ * Whether `file`, untracked, may be read as a new file: a regular file whose
+ * real path is in the project and not in `.git`. A symlinked folder would lead
+ * out of it, and a pipe would hold git until its timeout.
+ * @param {string} file Relative to `project`.
+ * @param {string} realProject
+ */
+async function readableNewFile(file, realProject) {
+  const full = path.join(project, file)
+  try {
+    if (!(await lstat(full)).isFile()) return false
+    const real = path.relative(realProject, await realpath(full))
+    return (
+      !!real &&
+      !real.startsWith('..') &&
+      !path.isAbsolute(real) &&
+      real.split(path.sep)[0] !== '.git'
+    )
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return false
+    throw error
+  }
+}
+
+/**
+ * The diff against HEAD of `files` on the working tree: git's for the tracked
+ * ones, a new file's for the others still there; past MAX_DIFF in all, refused.
+ * @param {string[]} files Relative to `project`.
+ */
+async function workingDiff(files) {
+  await ensureRepository()
+  try {
+    await git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])
+  } catch (error) {
+    const missing =
+      error && typeof error === 'object' && 'code' in error && error.code === 1
+    throw new DiffUnavailable(
+      missing && !stderrOf(error).trim()
+        ? `${project} has no commit to compare with`
+        : `git rev-parse HEAD failed: ${gitWords(error)}`,
+      { cause: error },
+    )
+  }
+  const flags = ['--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/']
+  // Literal: a path the agent wrote is never a glob or a magic pathspec.
+  const literal = ['--literal-pathspecs', '-c', 'core.quotePath=false']
+  const parts = []
+  let size = 0
+  const add = (/** @type {string} */ part) => {
+    size += Buffer.byteLength(part)
+    if (size > MAX_DIFF) {
+      throw new DiffUnavailable(`the changes are larger than ${MAX_DIFF_MIB} MiB`)
+    }
+    parts.push(part)
+  }
+  let command = 'git ls-files'
+  try {
+    const listed = await git([...literal, 'ls-files', '-z', '--', ...files])
+    const tracked = new Set(listed.stdout.split('\0').filter(Boolean))
+    if (tracked.size) {
+      command = 'git diff HEAD'
+      const { stdout } = await git([
+        ...literal,
+        'diff',
+        ...flags,
+        '--relative',
+        'HEAD',
+        '--',
+        ...tracked,
+      ])
+      add(stdout)
+    }
+    const realProject = await realpath(project)
+    for (const file of files) {
+      if (tracked.has(file) || !(await readableNewFile(file, realProject))) continue
+      command = `git diff --no-index ${file}`
+      add(await newFileDiff([...literal, 'diff', ...flags], file))
+    }
+    return parts.join('')
+  } catch (error) {
+    if (!isGitFailure(error)) throw error
+    throw new DiffUnavailable(`${command} failed: ${gitWords(error)}`, { cause: error })
+  }
+}
+
+/**
+ * The diff of an untracked file from nothing: `--no-index` exits 1 when the
+ * two differ, which is its success here, unless git said why.
+ * @param {string[]} args
+ * @param {string} file
+ */
+async function newFileDiff(args, file) {
+  try {
+    return (await git([...args, '--no-index', '--', '/dev/null', file])).stdout
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : 0
+    if (
+      code === 1 &&
+      !stderrOf(error).trim() &&
+      error &&
+      typeof error === 'object' &&
+      'stdout' in error
+    ) {
+      return String(error.stdout)
+    }
+    throw error
+  }
+}
+
+/**
+ * What `GET /api/changes/<id>` answers: the files finding `id`'s fix wrote
+ * and their diff against HEAD as the working tree has them now.
+ * @param {string} id
+ * @returns {Promise<{ files: ChangedFile[], diff: string }>}
+ */
+async function changesOf(id) {
+  const last = await writtenBy(id)
+  if (!last.size) return { files: [], diff: '' }
+  const since = await writtenSince(id, last)
+  const paths = [...last.keys()]
+  return {
+    files: paths.map((file) => ({
+      path: file,
+      since: [...(since.get(file) ?? [])].toSorted(),
+    })),
+    diff: await workingDiff(paths),
+  }
+}
+
 /** @type {Promise<DiffPayload> | undefined} */
 let diff
 
@@ -401,6 +620,8 @@ async function handle(req, res) {
   // it would decide findings, and start agents.
   const { origin } = req.headers
   if (origin && !origins.has(origin)) throw new ClientError(403)
+  // A same-origin GET carries no Origin: a rebound DNS name would read the answers.
+  if (!origins.has(`http://${req.headers.host}`)) throw new ClientError(403)
 
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, {
@@ -466,6 +687,19 @@ async function handle(req, res) {
       progress: await readProgress(dir, run),
       history: await readProgress(dir, run, undefined, { history: true }),
     })
+  }
+
+  const changed = /^\/api\/changes\/([^/]+)$/.exec(url.pathname)?.[1]
+  if (req.method === 'GET' && changed !== undefined) {
+    const known = (await store.readReview()).findings.some((one) => one.id === changed)
+    if (!ID.test(changed) || !known) return send(res, 404, { error: 'not found' })
+    try {
+      return send(res, 200, await changesOf(changed))
+    } catch (error) {
+      if (!(error instanceof DiffUnavailable)) throw error
+      console.error(`tranchant server: /api/changes/${changed}: ${error.message}`)
+      return send(res, 409, { error: error.message })
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/decisions') {

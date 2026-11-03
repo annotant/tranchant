@@ -141,6 +141,7 @@ test("records a claimed run's steps, and ends the run on done", async (t) => {
     ],
   )
   assert.equal(steps[0].model, 'claude-opus-5-5')
+  assert.equal(steps[1].file, 'src/App.tsx')
 
   await w.tool(
     0,
@@ -168,6 +169,16 @@ test("records a claimed run's steps, and ends the run on done", async (t) => {
   // Its locks went with the run.
   await w.claim(1)
   assert.equal(await w.tool(1, 'Edit', edit(path.join(w.root, 'src/App.tsx'))), undefined)
+})
+
+test('a write records its path from the project; outside the repository, its label is a name', async (t) => {
+  const w = await world(t, 1)
+  await w.claim(0)
+  await w.tool(0, 'Write', { file_path: '/tmp/elsewhere/App.tsx', content: 'x' })
+  const outside = (await w.progress(0)).at(-1)
+  assert.equal(outside?.label, 'App.tsx')
+  assert.equal(outside?.file, path.relative(w.root, '/tmp/elsewhere/App.tsx'))
+  assert.match(outside?.file ?? '', /^\.\.\//)
 })
 
 test("refuses a file another finding's agent holds, after the wait", async (t) => {

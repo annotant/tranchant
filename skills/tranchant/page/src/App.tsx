@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type DiffState,
   postAnswer,
@@ -18,6 +18,7 @@ import {
   groupFindings,
   isReviewing,
   needsYou,
+  nextOpen,
   orderedFindings,
   plural,
   type Review,
@@ -224,6 +225,8 @@ export default function App() {
   const [summaryOpen, setSummaryOpen] = useState(readSummaryOpen)
   const [view, setView] = useState<View>(readView)
   const [notice, setNotice] = useState<string>()
+  // A decision left no open finding to move to: the detail says so until the reviewer opens one.
+  const [settled, setSettled] = useState(false)
 
   const review = payload?.review
   const records = useMemo(() => payload?.findings ?? {}, [payload])
@@ -268,12 +271,20 @@ export default function App() {
   // The first finding opens itself, and the cursor starts on the open one.
   const openId = has(openState) ? openState : ordered[0]?.id
   const cursor = has(cursorState) ? cursorState : openId
+  // Read once a decision returns: the reviewer may have moved on, and the records reloaded.
+  const latest = useRef({ openId, ordered, records })
+  useEffect(() => {
+    latest.current = { openId, ordered, records }
+  })
 
+  /** Sends `decisions`; resolves to the ids the server applied. */
   const decide = useCallback(
-    async (decisions: DecisionInput[]) => {
-      if (!decisions.length) return
+    async (decisions: DecisionInput[]): Promise<string[]> => {
+      if (!decisions.length) return []
+      let applied: string[] = []
       try {
         const result = await postDecisions(decisions)
+        applied = result.applied
         setNotice(
           result.refused.length
             ? `Refused: ${result.refused.map((one) => `${one.id} (${one.reason})`).join(', ')}`
@@ -288,6 +299,7 @@ export default function App() {
         setNotice(failure instanceof Error ? failure.message : 'The request failed.')
       }
       await reload()
+      return applied
     },
     [reload],
   )
@@ -332,7 +344,21 @@ export default function App() {
   const open = useCallback((id: string) => {
     setCursor(id)
     setOpenId(id)
+    setSettled(false)
   }, [])
+
+  // A decision on the finding shown leads on to the next open one; a batch's never moves.
+  const decideShown = useCallback(
+    async (decision: DecisionInput) => {
+      const applied = await decide([decision])
+      const now = latest.current
+      if (!applied.includes(decision.id) || now.openId !== decision.id) return
+      const next = nextOpen(now.ordered, now.records, decision.id)
+      if (next) open(next)
+      else setSettled(true)
+    },
+    [decide, open],
+  )
 
   // From the cursor, wrapping; off the set it starts at the first. Moving the cursor scrolls.
   const openNextNeedingYou = () => {
@@ -365,14 +391,15 @@ export default function App() {
       else if (event.key === 'x' && cursor) toggle(cursor)
       else if (action && cursor && review && !disabled) {
         if (allows(action, stateOf(records, cursor), review)) {
-          void decide([{ id: cursor, action }])
+          if (cursor === openId) void decideShown({ id: cursor, action })
+          else void decide([{ id: cursor, action }])
         }
       } else return
       event.preventDefault()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [review, ordered, cursor, records, disabled, decide, toggle])
+  }, [review, ordered, cursor, openId, records, disabled, decide, decideShown, toggle])
 
   if (!loaded) return <div className="tr-loading">Loading the review…</div>
   if (!review) {
@@ -419,7 +446,11 @@ export default function App() {
       steps={payload?.runs[current.id] ?? []}
       unverified={unverified.has(current.id)}
       disabled={disabled}
-      onDecide={(decisions) => void decide(decisions)}
+      onDecide={(decisions) => {
+        const [one] = decisions
+        if (decisions.length === 1 && one) void decideShown(one)
+        else void decide(decisions)
+      }}
       onAnswer={(id, text, choices) => void answer(id, text, choices)}
       onStop={(id) => void stop(id)}
     />
@@ -565,6 +596,13 @@ export default function App() {
         )}
         {/* Third child in both layouts, the diff's slot empty in the list: its drafts survive. */}
         <main key="detail" className="tr-detail-pane">
+          {settled && tally.open === 0 && (
+            <p className="tr-settled" role="status">
+              {tally.needsYou || tally.running
+                ? `No open finding left: ${tally.needsYou} need you, ${tally.running} running`
+                : 'All findings settled'}
+            </p>
+          )}
           {detail}
         </main>
       </div>

@@ -1,6 +1,6 @@
 import { act } from '@testing-library/react'
 import { expect, vi } from 'vitest'
-import type { DiffPayload } from '../src/api'
+import type { ChangesPayload, DiffPayload } from '../src/api'
 import type {
   DecisionInput,
   Finding,
@@ -397,7 +397,8 @@ const NOT_A_REPOSITORY: DiffAnswer = {
 /**
  * Stands in for the server: serves `payload`, records each POST, answers
  * `applied` for every decision, and on `/api/diff` the `diff` given, or a
- * 409 "not a git repository" when none is; `answerDiff` changes it.
+ * 409 "not a git repository" when none is; `answerDiff` changes it. On
+ * `/api/changes/<id>`, `changes[id]`, else no file.
  * `down()` makes every request fail, as when the session ended; `up()`
  * brings it back.
  */
@@ -405,6 +406,7 @@ export function fakeServer(
   initial: ReviewPayload,
   histories: Record<string, Step[]> = {},
   diff: DiffAnswer = NOT_A_REPOSITORY,
+  changes: Record<string, ChangesPayload> = {},
 ) {
   let diffAnswer = diff
   let current = initial
@@ -434,6 +436,10 @@ export function fakeServer(
     }
     if (url.pathname.startsWith('/api/runs/')) {
       return Response.json(histories[decodeURIComponent(url.pathname.slice(10))] ?? [])
+    }
+    if (url.pathname.startsWith('/api/changes/')) {
+      const id = decodeURIComponent(url.pathname.slice(13))
+      return Response.json(changes[id] ?? { files: [], diff: '' })
     }
     if (url.pathname === '/api/diff') {
       return 'diff' in diffAnswer

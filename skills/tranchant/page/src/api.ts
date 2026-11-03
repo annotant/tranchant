@@ -8,6 +8,7 @@ const ANSWER = '/api/answer'
 const STOP = '/api/stop'
 const RUNS = '/api/runs/'
 const DIFF = '/api/diff'
+const CHANGES = '/api/changes/'
 
 /** How often the page asks again once the server stopped answering. */
 export const RETRY_MS = 5000
@@ -104,6 +105,21 @@ function stepsOf(body: unknown): Step[] {
   }
   return []
 }
+
+/** A file a fix wrote; `since`, the other findings whose runs, ended or running, wrote it after this fix last did. */
+interface ChangedFile {
+  path: string
+  since: string[]
+}
+
+/** What `GET /api/changes/<id>` answers: the files a fix wrote, and their diff against HEAD. */
+export interface ChangesPayload {
+  files: ChangedFile[]
+  diff: string
+}
+
+export const fetchChanges = (id: string) =>
+  request<ChangesPayload>(`${CHANGES}${encodeURIComponent(id)}`)
 
 export const fetchRuns = async (id: string) =>
   stepsOf(await request<unknown>(`${RUNS}${encodeURIComponent(id)}`))

@@ -2,6 +2,7 @@
 // its API on the port it printed.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import http from 'node:http'
 import {
   appendFile,
   chmod,
@@ -10,6 +11,7 @@ import {
   readFile,
   rename,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises'
 import path from 'node:path'
@@ -651,6 +653,186 @@ test('lists the steps of a run in progress, then its history', async () => {
   assert.equal(runs.history.length, 2)
   assert.equal((await fetch(`${main.base}/api/runs/..%2Fx`)).status, 404)
   assert.deepEqual((await json(await fetch(`${main.base}/api/review`))).runs, {})
+})
+
+/**
+ * Runs a fix of finding `id` through the store, its run writing `steps`;
+ * `end` says how the run ends: `done`, `failed`, or still `working`.
+ * @param {string} dir
+ * @param {string} id
+ * @param {object[]} steps
+ * @param {{ end?: 'done' | 'failed' | 'working' }} [options]
+ */
+async function fixWith(dir, id, steps, { end = 'done' } = {}) {
+  const store = createStore(dir)
+  await store.decide(id, { action: 'fix' })
+  await store.claim(id, { agent: 'a1', model: 'claude-opus-5-5' })
+  await writeSteps(dir, id, steps)
+  if (end === 'done') await store.done(id, 'Done.')
+  else if (end === 'failed') await store.abandon(id, 'a1')
+}
+
+/**
+ * Appends `steps` to finding `id`'s run in progress.
+ * @param {string} dir
+ * @param {string} id
+ * @param {object[]} steps
+ */
+async function writeSteps(dir, id, steps) {
+  await mkdir(path.dirname(progressPath(dir, id)), { recursive: true })
+  await appendFile(
+    progressPath(dir, id),
+    steps.map((step) => `${JSON.stringify(step)}\n`).join(''),
+  )
+}
+
+test('lists the files a fix wrote and their diff against HEAD; another fix since is named', async (t) => {
+  const server = await startServer(t, { name: 'ours' })
+  const { project, dir } = server
+  await mkdir(path.join(project, 'src'), { recursive: true })
+  await writeFile(path.join(project, 'src/a.ts'), 'one\n')
+  await writeFile(path.join(project, 'src/b.ts'), 'kept\n')
+  await gitIn(project, 'init', '-q')
+  await gitIn(project, 'add', '-A')
+  await gitIn(project, 'commit', '-q', '-m', 'init')
+  await writeFile(path.join(project, 'src/a.ts'), 'two\n')
+  // Changed, but by a write that failed: not the fix's.
+  await writeFile(path.join(project, 'src/b.ts'), 'changed\n')
+  await writeFile(path.join(project, 'src/new file.ts'), 'fresh\n')
+  await writeFile(path.join(project, 'src/early.ts'), 'early\n')
+  await writeFile(path.join(project, 'README.md'), 'mine\n')
+  // A first run that failed: its writes are not the fix's.
+  await fixWith(
+    dir,
+    'f-01',
+    [
+      {
+        at: 1,
+        kind: 'write',
+        label: 'src/early.ts',
+        file: 'src/early.ts',
+        state: 'done',
+      },
+    ],
+    { end: 'failed' },
+  )
+  await fixWith(dir, 'f-01', [
+    { at: 2, kind: 'read', label: 'src/b.ts', state: 'done' },
+    { at: 3, kind: 'edit', label: 'src/a.ts', file: 'src/a.ts', state: 'done' },
+    { at: 4, kind: 'write', label: 'src/new file.ts', state: 'done' },
+    { at: 5, kind: 'edit', label: 'src/b.ts', file: 'src/b.ts', state: 'failed' },
+    { at: 6, kind: 'edit', label: '../outside.ts', state: 'done' },
+    // Outside the repository: the label is only a name, the project has one.
+    {
+      at: 7,
+      kind: 'write',
+      label: 'README.md',
+      file: '../../tmp/README.md',
+      state: 'done',
+    },
+  ])
+  // Another fix wrote src/a.ts after this one did; a third is still writing it.
+  await fixWith(dir, 'f-02', [
+    { at: 9, kind: 'edit', label: 'src/a.ts', file: 'src/a.ts', state: 'done' },
+  ])
+  await fixWith(
+    dir,
+    'f-03',
+    [{ at: 10, kind: 'edit', label: 'src/a.ts', file: 'src/a.ts', state: 'running' }],
+    { end: 'working' },
+  )
+
+  const response = await fetch(`${server.base}/api/changes/f-01`)
+  assert.equal(response.status, 200)
+  const body = await json(response)
+  assert.deepEqual(body.files, [
+    { path: 'src/a.ts', since: ['f-02', 'f-03'] },
+    { path: 'src/new file.ts', since: [] },
+  ])
+  assert.match(body.diff, /^diff --git a\/src\/a\.ts b\/src\/a\.ts$/m)
+  assert.match(body.diff, /^-one$/m)
+  assert.match(body.diff, /^\+two$/m)
+  assert.match(body.diff, /^\+\+\+ b\/src\/new file\.ts\t?$/m)
+  assert.match(body.diff, /^\+fresh$/m)
+  assert.doesNotMatch(body.diff, /b\.ts|early|README/)
+
+  const later = await json(await fetch(`${server.base}/api/changes/f-02`))
+  assert.deepEqual(later.files, [{ path: 'src/a.ts', since: ['f-03'] }])
+})
+
+test('a run with no edit lists no file, and an id that is not one is not found', async (t) => {
+  const server = await startServer(t, { name: 'ours' })
+  await fixWith(server.dir, 'f-03', [
+    { at: 1, kind: 'read', label: 'src/a.ts', state: 'done' },
+  ])
+  const response = await fetch(`${server.base}/api/changes/f-03`)
+  assert.equal(response.status, 200)
+  assert.deepEqual(await json(response), { files: [], diff: '' })
+  assert.deepEqual(await json(await fetch(`${server.base}/api/changes/f-04`)), {
+    files: [],
+    diff: '',
+  })
+  assert.equal((await fetch(`${server.base}/api/changes/..%2Fx`)).status, 404)
+  assert.equal((await fetch(`${server.base}/api/changes/f-99`)).status, 404)
+})
+
+test('an untracked path through a symlinked folder, or that is not a file, is not read', async (t) => {
+  const server = await startServer(t, { name: 'ours' })
+  const { project, dir } = server
+  const outside = await tempDir(t)
+  await writeFile(path.join(outside, 'secret.txt'), 'SECRET\n')
+  await writeFile(path.join(project, 'kept.txt'), 'kept\n')
+  await gitIn(project, 'init', '-q')
+  await gitIn(project, 'add', '-A')
+  await gitIn(project, 'commit', '-q', '-m', 'init')
+  await symlink(outside, path.join(project, 'linked'))
+  await mkdir(path.join(project, 'folder'))
+  await fixWith(dir, 'f-01', [
+    {
+      at: 1,
+      kind: 'write',
+      label: 'linked/secret.txt',
+      file: 'linked/secret.txt',
+      state: 'done',
+    },
+    { at: 2, kind: 'write', label: 'folder', file: 'folder', state: 'done' },
+  ])
+  const response = await fetch(`${server.base}/api/changes/f-01`)
+  assert.equal(response.status, 200)
+  const body = await json(response)
+  assert.equal(body.files.length, 2)
+  assert.equal(body.diff, '')
+})
+
+test('a request for another host is refused', async () => {
+  // fetch never sends the Host it is given: a rebound DNS name does.
+  const status = await new Promise((resolve, reject) => {
+    http
+      .get(
+        {
+          host: '127.0.0.1',
+          port: main.port,
+          path: '/api/health',
+          headers: { host: `rebound.example:${main.port}` },
+        },
+        (response) => {
+          response.resume()
+          resolve(response.statusCode)
+        },
+      )
+      .on('error', reject)
+  })
+  assert.equal(status, 403)
+})
+
+test('the changes of a fix in a project git cannot read are unavailable', async (t) => {
+  const server = await startServer(t, { name: 'ours' })
+  await fixWith(server.dir, 'f-05', [
+    { at: 1, kind: 'edit', label: 'src/a.ts', state: 'done' },
+  ])
+  const response = await fetch(`${server.base}/api/changes/f-05`)
+  assert.equal(response.status, 409)
+  assert.match((await json(response)).error, /not a git repository/)
 })
 
 test('posts a comment with glab itself, and records where it landed', async () => {

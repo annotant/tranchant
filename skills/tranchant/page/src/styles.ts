@@ -307,6 +307,9 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 
 .tr-outcome { padding: 8px 10px; background: var(--tr-bg-2); border-radius: var(--tr-radius); }
 .tr-changed { margin: 4px 0 0; padding-left: 20px; }
+.tr-warn { color: var(--tr-warn); }
+.tr-fix-changes { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.tr-settled { margin: 0 0 12px; padding: 8px 10px; border-radius: var(--tr-radius); background: var(--tr-bg-2); font-weight: 600; }
 .tr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .tr-context { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .tr-inline-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
