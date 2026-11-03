@@ -1,0 +1,301 @@
+{
+  "version": 1,
+  "id": "c7d1f0a2-4e8b-4c3a-9f6d-2b5e8a1c3d4f",
+  "createdAt": "2026-10-30T17:12:40.000Z",
+  "project": "/Users/me/dev/cart-demo",
+  "branch": "feature/cart-discounts",
+  "base": "main",
+  "headSha": "8a1c3d4f2b5e9f6d4c3a4e8bc7d1f0a2e5b6c7d8",
+  "ownership": "ours",
+  "title": "Discount codes in the cart",
+  "summary": "## Change Map\n\n- `src/cart/discount.ts`: `applyDiscount` posts a code and the subtotal to `/api/discounts`.\n- `src/cart/DiscountForm.tsx`: the form that applies a code, prefilled from `?code=` in the page’s URL.\n- `src/cart/Cart.tsx`: shows the discount line and the discounted total.\n- `src/cart/total.ts`, `src/cart/types.ts`, `src/api/types.ts`: the discount’s type, response type and arithmetic.\n- `src/cart/discount.spec.ts`, `src/cart/DiscountForm.spec.tsx`: the new tests.\n\n## Summary\n\nThe feature cannot work as shipped: the response field is misread behind an `any`, the memoised total ignores the discount, and a refused code shows nothing, which its test does not catch. The code field lacks a label, and the applied note renders the typed code as HTML.",
+  "strengths": [
+    "`discount.spec.ts` covers the request shape and a refused code with `rejects`, the right way.",
+    "Integer cents all the way: `discountAmount` rounds once, in `total.ts`.",
+    "`aria-busy` on the form while the code is checked, and a guard against a double submit."
+  ],
+  "findings": [
+    {
+      "id": "correctness-1",
+      "topic": "Bugs",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "The total never updates: discount is missing from the memo",
+      "path": "src/cart/Cart.tsx",
+      "line": 9,
+      "excerpt": {
+        "startLine": 7,
+        "lines": [
+          "export function Cart() {",
+          "  const { items, status, discount, remove, setDiscount } = useCart()",
+          "  const total = useMemo(() => discounted(subtotal(items), discount), [items])",
+          "",
+          "  if (status === 'loading') return <p className=\"cart__status\">Loading your cart…</p>"
+        ]
+      },
+      "marks": [
+        {
+          "line": 9,
+          "from": 58,
+          "to": 67,
+          "note": "read here"
+        },
+        {
+          "line": 9,
+          "from": 69,
+          "to": 76,
+          "note": "not listed here: the memo keeps the first value, null"
+        }
+      ],
+      "problem": "`useMemo` recomputes `total` only when `items` change. `discount` is read inside but not listed, so the memo keeps the value it computed with `discount` null: the subtotal.",
+      "why": "The user applies a code, sees the discount line appear, and the total does not move. The feature looks broken, and the total shown is not the one the discount line implies.",
+      "fix": "Drop the memo, which saves nothing here: `const total = discounted(subtotal(items), discount)`. Listing `discount` in the dependencies works too."
+    },
+    {
+      "id": "correctness-2",
+      "topic": "Bugs",
+      "bucket": "review",
+      "tag": "concern",
+      "title": "A refused code shows nothing: the failure is swallowed",
+      "path": "src/cart/DiscountForm.tsx",
+      "line": 27,
+      "excerpt": {
+        "startLine": 19,
+        "lines": [
+          "  const submit = async (event: FormEvent) => {",
+          "    event.preventDefault()",
+          "    if (status === 'pending') return",
+          "    setStatus('pending')",
+          "    try {",
+          "      onApply(await applyDiscount(code.trim(), subtotal))",
+          "      setStatus('applied')",
+          "    } catch {",
+          "      setStatus('idle')",
+          "    }",
+          "  }"
+        ]
+      },
+      "marks": [
+        {
+          "line": 26,
+          "from": 6,
+          "to": 13,
+          "note": "any failure: unknown code, expired code, network"
+        },
+        {
+          "line": 27,
+          "from": 6,
+          "to": 23,
+          "note": "back to the start, no message"
+        }
+      ],
+      "problem": "When `applyDiscount` rejects, for an unknown or expired code as much as for a network failure, the form goes back to `idle` and shows nothing. `Status` has no failed state.",
+      "why": "The user types a code, clicks Apply, and the form just resets. They cannot tell a wrong code from a broken page, so they retry or give up.",
+      "fix": "Add a `failed` status set in the `catch`, with a message under the form (`role=\"alert\"`, as `Cart` does when the cart cannot load) that says the code was refused. Keep the typed code so the user can correct it."
+    },
+    {
+      "id": "types-1",
+      "topic": "Bugs",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "`any` hides a typo: `data.percentage` is undefined",
+      "path": "src/cart/discount.ts",
+      "line": 9,
+      "excerpt": {
+        "startLine": 4,
+        "lines": [
+          "export async function applyDiscount(code: string, subtotal: number): Promise<Discount> {",
+          "  const data: any = await request('/api/discounts', {",
+          "    method: 'POST',",
+          "    body: JSON.stringify({ code, subtotal }),",
+          "  })",
+          "  return { code: data.code, percent: data.percentage }",
+          "}"
+        ]
+      },
+      "marks": [
+        {
+          "line": 5,
+          "from": 14,
+          "to": 17,
+          "note": "`request` is generic: `request<DiscountResponse>` types this"
+        },
+        {
+          "line": 9,
+          "from": 37,
+          "to": 52,
+          "note": "the response field is `percent`"
+        }
+      ],
+      "problem": "`data` is `any`, so `data.percentage` type-checks, but the response field is `percent`: `DiscountResponse` in `src/api/types.ts` says so, and so do the mocks in the tests. Every discount comes back with `percent: undefined`.",
+      "why": "The discount line shows `Discount (undefined%)` and the total becomes NaN. The feature cannot work, and nothing says why.",
+      "fix": "Type the call, `request<DiscountResponse>(…)`, and return `data.percent`: the compiler then refuses `percentage`. Drop the `any`.",
+      "related": [
+        {
+          "path": "src/api/types.ts",
+          "line": 9,
+          "excerpt": {
+            "startLine": 7,
+            "lines": [
+              "export type DiscountResponse = {",
+              "  code: string",
+              "  percent: number",
+              "  expiresAt: string",
+              "}"
+            ]
+          },
+          "marks": [
+            {
+              "line": 9,
+              "from": 2,
+              "to": 9,
+              "note": "the field the API sends"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "accessibility-1",
+      "topic": "Bugs",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "The discount code field has no label",
+      "path": "src/cart/DiscountForm.tsx",
+      "line": 37,
+      "excerpt": {
+        "startLine": 33,
+        "lines": [
+          "      <input",
+          "        className=\"discount-form__code\"",
+          "        value={code}",
+          "        onChange={(event) => setCode(event.target.value)}",
+          "        placeholder=\"Discount code\"",
+          "      />",
+          "      <button type=\"submit\" disabled={code.trim() === ''}>",
+          "        Apply",
+          "      </button>"
+        ]
+      },
+      "marks": [
+        {
+          "line": 33,
+          "from": 6,
+          "to": 12,
+          "note": "no label, no aria-label"
+        },
+        {
+          "line": 37,
+          "from": 8,
+          "to": 35,
+          "note": "a placeholder is not a name: it goes away as the user types"
+        }
+      ],
+      "problem": "The code field has no label: only a placeholder, which disappears as soon as the user types and is not announced as the field’s name by every screen reader.",
+      "why": "A screen reader user lands on an unnamed text field with no clue what it takes. The field is also harder to reach on a phone, with no label to tap. The remove buttons in `Cart` show the project names its controls.",
+      "fix": "Add `<label htmlFor=\"discount-code\">Discount code</label>` before the input and `id=\"discount-code\"` on it. Keep a placeholder only as an example, such as `SAVE10`."
+    },
+    {
+      "id": "security-1",
+      "topic": "Security & Permissions",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "The typed code is rendered as HTML",
+      "path": "src/cart/DiscountForm.tsx",
+      "line": 45,
+      "excerpt": {
+        "startLine": 42,
+        "lines": [
+          "      {status === 'applied' && (",
+          "        <p",
+          "          className=\"discount-form__note\"",
+          "          dangerouslySetInnerHTML={{ __html: `Code <strong>${code}</strong> applied` }}",
+          "        />",
+          "      )}"
+        ]
+      },
+      "marks": [
+        {
+          "line": 45,
+          "from": 59,
+          "to": 66,
+          "note": "the field’s text, or the link’s ?code="
+        }
+      ],
+      "problem": "The note is built as an HTML string around `code` and set through `dangerouslySetInnerHTML`. `code` is what the user typed, or what a link carried in `?code=` (`codeFromLink`). Whatever it holds becomes markup.",
+      "why": "A link such as `?code=<img src=x onerror=…>` runs script in the page of whoever opens it, once a real code is applied… or at once, with a code the server accepts. Stored or reflected, it is injection through the discount field.",
+      "fix": "Render the code as text: `<p className=\"discount-form__note\">Code <strong>{code}</strong> applied</p>`. React escapes it."
+    },
+    {
+      "id": "tests-1",
+      "topic": "Tests",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "The refused-code test cannot fail",
+      "path": "src/cart/DiscountForm.spec.tsx",
+      "line": 30,
+      "excerpt": {
+        "startLine": 25,
+        "lines": [
+          "test('tells the user when the code is refused', async () => {",
+          "  respond(404, { error: 'unknown code' })",
+          "  render(<DiscountForm subtotal={2500} onApply={vi.fn()} />)",
+          "  await userEvent.type(screen.getByRole('textbox'), 'NOPE')",
+          "  await userEvent.click(screen.getByRole('button', { name: 'Apply' }))",
+          "  await waitFor(() => expect(screen.queryByText(/refused/)).toBeDefined())",
+          "})"
+        ]
+      },
+      "marks": [
+        {
+          "line": 30,
+          "from": 36,
+          "to": 58,
+          "note": "null when nothing matches"
+        },
+        {
+          "line": 30,
+          "from": 60,
+          "to": 73,
+          "note": "null is defined: passes either way"
+        }
+      ],
+      "problem": "`queryByText` returns `null` when nothing matches, and `toBeDefined()` passes on `null`. The assertion holds whether or not a message shows, so the test passes today, while the form shows nothing on a refused code.",
+      "why": "The error path looks covered and is not: the swallowed failure in `DiscountForm` ships green, and so will the next regression there.",
+      "fix": "Assert the message the form should show: `expect(await screen.findByText(/refused/)).toBeInTheDocument()`. It fails until the form shows one."
+    },
+    {
+      "id": "conventions-1",
+      "topic": "Conventions",
+      "bucket": "auto",
+      "tag": "concern",
+      "title": "Discount amount formatted by hand",
+      "path": "src/cart/Cart.tsx",
+      "line": 47,
+      "excerpt": {
+        "startLine": 44,
+        "lines": [
+          "      {discount && (",
+          "        <p className=\"cart__discount\">",
+          "          <span>{`Discount (${discount.percent}%)`}</span>",
+          "          <span>{`−$${((subtotal(items) * discount.percent) / 100 / 100).toFixed(2)}`}</span>",
+          "        </p>",
+          "      )}",
+          "      <p className=\"cart__total\">",
+          "        Total <strong>{formatPrice(total)}</strong>"
+        ]
+      },
+      "marks": [
+        {
+          "line": 47,
+          "from": 17,
+          "to": 85,
+          "note": "formatPrice(discountAmount(subtotal(items), discount))"
+        }
+      ],
+      "problem": "The discount line formats cents by hand, `−$` and `toFixed(2)`, where `CLAUDE.md` asks for `formatPrice` on every amount shown. The total four lines below uses it, and `discountAmount` in `total.ts` already rounds the cents.",
+      "why": "The two amounts drift: `formatPrice` groups thousands and follows the currency, this line does not, and the rounding is done twice, differently.",
+      "fix": "`<span>−{formatPrice(discountAmount(subtotal(items), discount))}</span>`, importing `discountAmount` from `./total`."
+    }
+  ]
+}

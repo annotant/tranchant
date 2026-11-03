@@ -27,7 +27,7 @@ export async function tempDir(t, prefix = 'tranchant-test-') {
 
 /**
  * A fixture review, parsed anew: each test may change its copy, however it likes.
- * @param {'theirs' | 'ours'} name
+ * @param {'theirs' | 'ours' | 'front-end'} name
  * @returns {Promise<any>}
  */
 export const fixture = async (name) =>

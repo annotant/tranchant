@@ -15,6 +15,8 @@
         // Builds the playground a real session tries the plugin on.
         "test/fixtures/playground.mjs"
       ],
+      // The front-end fixture is another project's code, with planted defects: not ours to lint.
+      "ignore": ["test/fixtures/front-end/**"],
       "node": false,
       // `typecheck` runs the TypeScript the workspace installs, hoisted to the root.
       "ignoreBinaries": ["tsc"],

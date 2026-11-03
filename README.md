@@ -44,6 +44,45 @@ wrong.
   a per-file lock before every write, so two agents never edit the same file
   at once, and Bash commands that write files are refused.
 
+## What the review looks at
+
+`/tranchant review` runs the review itself, in the background: one reviewer
+agent per lens of a recipe, each reading the change's diff and the files it
+needs, then a verifier per finding as they land, and the page fills while
+they run. The default recipe targets web front ends: React, Vue, Svelte or
+plain TypeScript and HTML. Its lenses live in `agents/review/`, one prompt
+each:
+
+| Lens            | Looks for                                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `correctness`   | State and effects (stale closures, missing cleanup), lifecycle, async races, stale data after a mutation, loading and error states, event handling |
+| `types`         | `any` and unsafe casts that hide a defect, missing narrowing, nullability, unions that are not exhaustive, public types that leak internals |
+| `accessibility` | Semantics, keyboard reachability, focus management, labels and names, contrast and motion through the project's own tokens            |
+| `performance`   | Render churn, memoisation misuse, import weight, layout thrash, unbounded lists, request storms                                        |
+| `security`      | HTML injection (`innerHTML` and its framework equivalents), URL and link handling, secrets in client code, unsafe deserialisation       |
+| `tests`         | What the change should test and does not, assertions that cannot fail, flaky patterns, tests that test the mock                        |
+| `conventions`   | The project's own conventions, read from its `CLAUDE.md`, its lint and formatter configuration and the patterns its code already uses   |
+| `bugs`          | Everything the front-end lenses do not cover (scripts, configuration, build, server code): logic, error handling, inputs, breaking changes |
+
+A finding is a defect or a real risk, never a style nit the project's own
+tooling does not ask for, and never a rule from outside the project: the
+lenses review a change against the project's conventions and general
+front-end knowledge, not against one organisation's rulebook. Each finding
+is anchored on its line with an excerpt and marks on the exact spots, worded
+as a problem, why it matters and a fix, with the comment to post when the
+change is someone else's.
+
+The verifier (`agents/review/verifier.md`) re-reads the code behind every
+finding, checks the anchor and the claim, removes what it cannot confirm,
+merges the duplicates the lenses report on the same defect, and keeps
+precision over recall.
+
+The recipe (`agents/review/recipe.json`) maps each lens to the path globs it
+applies to (`*.tsx`, `*.ts`, `*.jsx`, `*.js`, `*.vue`, `*.svelte`, `*.css`,
+`*.scss`, `*.html`); the `bugs` lens takes the files no other lens claims.
+`--recipe <path>` runs your own, in the same shape. See
+[the review file](docs/review-file.md#the-recipe).
+
 ## Install
 
 Requires Claude Code 2.1.287 or later (its mods), Node.js 22.12 or later,

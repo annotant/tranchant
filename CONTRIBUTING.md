@@ -40,6 +40,13 @@ node test/fixtures/playground.mjs    # --theirs for the MR variant, --fresh to r
 claude
 ```
 
+`--front-end` builds the front-end fixture instead: a small cart app on
+`main` and, on `feature/cart-discounts`, a discount feature with seven
+planted defects (see [the fixture](test/fixtures/front-end/README.md)), its
+`review.json` the review of those defects, so you can fix real bugs in a real
+project. It also writes `.playground/review-live.json`, the same review in
+progress, for a lens run by hand to fill.
+
 ```
 /tranchant .playground/review.json
 ```
@@ -68,6 +75,12 @@ TRANCHANT_HOOKS=1 node skills/tranchant/scripts/server.mjs \
 After a change to `skills/tranchant/SKILL.md`, `agents/` or `hooks/`, run
 `/reload-plugins`; after one to `page/src`, `npm run build` (or `npm run
 watch`).
+
+The review's lenses (`agents/review/*.md`) share their sections on inputs,
+anchoring, wording and reporting word for word: a change to one of those
+sections goes into every lens. Try a lens on the playground's planted defects
+as [the fixture](test/fixtures/front-end/README.md) describes before changing
+its prompt.
 
 ## Before opening a pull request
 
