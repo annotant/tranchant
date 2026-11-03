@@ -192,6 +192,7 @@ function world(
   on('agent.offer', () => ({ isOffered: true }))
   on('turn.complete', () => ({ text: '' }))
   on('session.receive', (_$, e) => ({ text: e.text }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
   // The agent types the plugin defines, by full name.
   const registered = new Map<string, AgentSpec>()
   on('agent.register', (_$, e) => {
@@ -957,6 +958,19 @@ test("the hooks' agents' final reports are kept from the conversation, nothing e
       text: '[Subagent hand-back] The report follows:\n  Done.',
     }),
   ).toEqual({ consumed: expect.stringContaining(name) })
+  await w.exit(0)
+})
+
+test("an agent of this session's report, entering as a prompt, is dropped; the person's is not", async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  const name = w.spawned[0]?.name ?? ''
+  const prompt = (text: string, kind: 'peer' | 'composer') =>
+    $.prompt.submit({ text, origin: { kind }, wait: false, isMeta: true })
+  const report = `Another Claude session sent a message:\n<agent-message from="${name}">\n[Subagent hand-back] The report follows:\n  Added 1 finding.\n</agent-message>`
+  expect(await prompt(report, 'peer')).toEqual({ drop: expect.stringContaining(name) })
+  expect(w.toasts).toContain('rv-bugs: Added 1 finding.')
+  expect(await prompt(report, 'composer')).toEqual({ text: report })
   await w.exit(0)
 })
 

@@ -200,6 +200,7 @@ function shellWords(text) {
     }
     if (c === '\\' && i + 1 < text.length) {
       const escaped = text[++i] ?? ''
+      if (escaped === '\n') continue
       // Within double quotes, a backslash escapes these alone.
       word += quote === '"' && !/[$`"\\\n]/.test(escaped) ? `\\${escaped}` : escaped
       started = true

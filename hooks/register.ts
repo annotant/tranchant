@@ -946,6 +946,26 @@ function reportOf(text: string) {
     .trim()
 }
 
+// The harness's frame comes first: a report quoting another frame names its sender after.
+const AGENT_MESSAGE = /<agent-message from="([\w-]+)">/
+
+/**
+ * Why `text`, from `from`, stays out of the conversation: the final report
+ * of an agent the hooks spawned. One with no turn.complete before it ends
+ * its agent: its toast, and its place freed. What an agent sends mid-run,
+ * and any other, is for the person: undefined.
+ */
+async function ownReport($: $, from: string | undefined, text: string) {
+  const spawned = from === undefined ? undefined : await spawnedBy($, from)
+  if (!spawned || !text.includes(HAND_BACK)) return undefined
+  if (spawned.running) {
+    const report = reportOf(text)
+    await workerDone($, spawned.agent, report)
+    await reviewAgentDone($, spawned.agent, report)
+  }
+  return `${from}'s report: the page and its toast have it`
+}
+
 /** The agent the hooks spawned under `name`, a fix's or the review's, and whether it runs. */
 async function spawnedBy($: $, name: string) {
   const worker = Object.entries(await read($, workers)).find(
@@ -1601,22 +1621,18 @@ export const register: Register = (on) => {
   })
 
   // An agent's final report comes back to the conversation; the page has it already.
+  // A report of an agent of this session's enters as a prompt, another session's as a delivery.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind !== 'peer') return next(e)
+    const kept = await ownReport($, AGENT_MESSAGE.exec(e.text)?.[1], e.text)
+    return kept === undefined ? next(e) : { drop: kept }
+  })
   on('session.receive', async ($, e, next) => {
     if (e.agentId !== undefined || e.origin.kind !== 'peer') return next(e)
     const from =
-      'teammate' in e.origin
-        ? e.origin.teammate
-        : /^\s*<agent-message from="([\w-]+)">/.exec(e.text)?.[1]
-    const spawned = from === undefined ? undefined : await spawnedBy($, from)
-    // What an agent sends mid-run is for the person.
-    if (!spawned || !e.text.includes(HAND_BACK)) return next(e)
-    // An agent that ended with no turn.complete: its toast, and its place freed.
-    if (spawned.running) {
-      const report = reportOf(e.text)
-      await workerDone($, spawned.agent, report)
-      await reviewAgentDone($, spawned.agent, report)
-    }
-    return { consumed: `${from}'s report: the page and its toast have it` }
+      'teammate' in e.origin ? e.origin.teammate : AGENT_MESSAGE.exec(e.text)?.[1]
+    const kept = await ownReport($, from, e.text)
+    return kept === undefined ? next(e) : { consumed: kept }
   })
 
   // An agent ended its turn: a fix's Stop hook released its locks; a review agent holds none.

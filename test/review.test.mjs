@@ -368,6 +368,8 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
     `grep -n "readReview\\|writeFinding" src/cart.js`,
     `grep -rn '=> {' src | grep -v ';'`,
     "git diff main | grep -n '`[a-z]*`'",
+    // A line continued with a backslash is one command, as the shell reads it.
+    'git \\\n  diff main \\\n  -- src | head -50',
   ])
     assert.equal(
       await hook('pre', { ...bash(quoted), tool_use_id: 't5' }),
@@ -405,8 +407,8 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
     [
       // The sed, then the seven refused commands.
       ...Array.from({ length: 8 }, () => ['bash', 'failed', 'a1']),
-      // Its own script, the git read and the three quoted patterns.
-      ...Array.from({ length: 5 }, () => ['bash', 'running', 'a1']),
+      // Its own script, the git read, the three quoted patterns and the continued line.
+      ...Array.from({ length: 6 }, () => ['bash', 'running', 'a1']),
       ...Array.from({ length: 13 }, () => ['bash', 'failed', 'a1']),
       ['read', 'done', 'a1'],
     ],
