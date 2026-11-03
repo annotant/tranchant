@@ -13,6 +13,7 @@ import {
   tagOf,
 } from './domain'
 import { Excerpt } from './Excerpt'
+import { FixChanges } from './FixChanges'
 import { RunPanel } from './RunPanel'
 
 interface Props {
@@ -260,6 +261,7 @@ export function FindingDetail({
                 ))}
               </ul>
             )}
+            <FixChanges id={finding.id} disabled={disabled} />
           </div>
         )}
         {state === 'failed' && (

@@ -390,6 +390,23 @@ export const applicable = (
 export const idsInBucket = (review: Pick<Review, 'findings'>, bucket: Bucket) =>
   review.findings.filter((finding) => finding.bucket === bucket).map((f) => f.id)
 
+/**
+ * The first `open` finding after `id` in `ordered`, wrapping once; `id`
+ * itself never: `records` may predate the decision on it.
+ */
+export function nextOpen(
+  ordered: readonly Pick<Finding, 'id'>[],
+  records: Records,
+  id: string,
+): string | undefined {
+  const index = ordered.findIndex((finding) => finding.id === id)
+  for (let step = 1; step <= ordered.length; step++) {
+    const next = ordered[(index + step) % ordered.length]
+    if (next && next.id !== id && stateOf(records, next.id) === 'open') return next.id
+  }
+  return undefined
+}
+
 /** Ids of the findings nothing was decided on. */
 export const openIds = (review: Pick<Review, 'findings'>, records: Records) =>
   review.findings

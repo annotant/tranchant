@@ -270,13 +270,15 @@ One JSON object per line, as the hooks record the agent's tools:
 ```jsonc
 { "at": 1761838297469, "kind": "start", "label": "Started", "state": "done", "model": "claude-opus-5-5" }
 { "at": 1761838298102, "kind": "read", "label": "src/people/usePeople.ts", "state": "done" }
-{ "at": 1761838301540, "kind": "edit", "label": "src/people/usePeople.ts", "state": "running" }
+{ "at": 1761838301540, "kind": "edit", "label": "src/people/usePeople.ts", "file": "src/people/usePeople.ts", "state": "running" }
 { "at": 1761838304011, "kind": "bash", "label": "pnpm exec vitest run src/people", "state": "failed", "detail": "…" }
 { "at": 1761838310200, "kind": "note", "label": "Early return added; the drawer test passes.", "state": "done" }
 ```
 
 `kind` is `start`, `read`, `edit`, `write`, `bash`, `search`, `note` or
-`tool`; `state` is `running`, `done` or `failed`. The server watches the
+`tool`; `state` is `running`, `done` or `failed`. An `edit` or `write` has
+`file`, its path from `project` (`../` outside it): outside the repository, its
+`label` is only the file's name. The server watches the
 folder and tells the page to reload. A run that ends moves its file to
 `.history.jsonl`.
 
@@ -358,10 +360,11 @@ locks and show no progress.
 | `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "drop" \| "skip", "context"?, "comment"?, "reason"? } ] }`. Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
 | `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                     |
 | `POST /api/stop`      | `{ "id" }`; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                                                                |
+| `GET /api/changes/<id>` | `{ files, diff }`: what finding `id`'s fix changed. `files`, each `{ path, since }`, are the paths of the `edit` and `write` steps (not `failed`) of its run that ended `fixed` (else its last run that ended), in `.history.jsonl`: their `file` (their `label` in runs recorded before it), relative to `project`, those outside it left out; `since` names the other findings whose runs, ended or in progress, wrote that file after this run last did: the diff then shows their changes too. `diff` is their unified diff against `HEAD` on the working tree, run in `project` (`git diff HEAD` for the tracked files, from `/dev/null` for an untracked regular file whose real path is in `project` and not in `.git`; anything else untracked left out). A finding with no run, or whose run wrote nothing, answers `{ files: [], diff: "" }`; an id not in the review, 404. Answers 409 with the reason when git is missing, `project` is not a git repository or has no commit, the diff is past `TRANCHANT_MAX_DIFF_MIB`, or git fails. |
 | `GET /api/runs/<id>`  | `{ progress, history }`: the steps of the run in progress, then those of the runs that ended, each a list.                                                                                                                                                                                                                                                         |
 
 Everything is same-origin; the server refuses a request whose `Origin` is not
-its own (403). A malformed body answers 400 and a move the store refuses 409,
+its own, or whose `Host` is not `127.0.0.1` or `localhost` on its port (403). A malformed body answers 400 and a move the store refuses 409,
 both as `{ error: "<reason>" }`. `GET /` carries a content security policy
 (`script-src 'self'`, inline styles, nothing external).
 

@@ -450,9 +450,18 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
   }
 
   /**
+   * A write's label, and its path from the project: a label outside the
+   * repository is only a name, which would read as a file of the project.
+   * @param {string} file
+   */
+  function written(file) {
+    return { label: shown(file), file: path.relative(root, path.resolve(root, file)) }
+  }
+
+  /**
    * @param {string} tool
    * @param {Record<string, unknown>} input
-   * @returns {{ kind: string, label: string }}
+   * @returns {{ kind: string, label: string, file?: string }}
    */
   function describe(tool, input) {
     const text = (/** @type {string} */ key) => textOf(input, key) ?? ''
@@ -462,13 +471,14 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     }
     switch (tool) {
       case 'Read':
+        return { kind: 'read', label: shown(text('file_path')) }
       case 'Edit':
       case 'Write':
-        return { kind: tool.toLowerCase(), label: shown(text('file_path')) }
+        return { kind: tool.toLowerCase(), ...written(text('file_path')) }
       case 'MultiEdit':
-        return { kind: 'edit', label: shown(text('file_path')) }
+        return { kind: 'edit', ...written(text('file_path')) }
       case 'NotebookEdit':
-        return { kind: 'edit', label: shown(text('notebook_path')) }
+        return { kind: 'edit', ...written(text('notebook_path')) }
       case 'Bash':
         return CLAIM.test(text('command'))
           ? { kind: 'start', label: 'Started' }

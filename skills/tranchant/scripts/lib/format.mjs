@@ -322,6 +322,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {number} at Milliseconds since the epoch.
  * @property {string} kind `start`, `read`, `edit`, `write`, `bash`, `search`, `note` or `tool`; a review agent's last step is `end`.
  * @property {string} label
+ * @property {string} [file] `edit` and `write`: the path from the project, `../` when outside it.
  * @property {string} [id] Tools only: Claude Code's tool_use_id.
  * @property {'running' | 'done' | 'failed'} [state]
  * @property {string} [detail] Why it failed, or what a note adds.

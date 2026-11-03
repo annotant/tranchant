@@ -10,6 +10,7 @@ import { expect, test, vi } from 'vitest'
 import { RETRY_MS } from '../src/api'
 import App from '../src/App'
 import {
+  decisionsOf,
   diffPayload,
   fakeEvents,
   fakeServer,
@@ -21,6 +22,13 @@ import {
 } from './fixture'
 
 const TITLE = 'Classification overview page'
+
+/** A promise the test settles itself. */
+function deferred() {
+  const settlers: (() => void)[] = []
+  const promise = new Promise<void>((settle) => settlers.push(settle))
+  return { promise, resolve: () => settlers.forEach((settle) => settle()) }
+}
 
 /** Renders the page on a server without a diff: the list view, once the page knows. */
 async function renderApp(data = payload()) {
@@ -191,6 +199,156 @@ test('j/k move the cursor, Enter opens, x selects, f fixes the focused finding',
   // The cursor does not run past the ends.
   for (let i = 0; i < 10; i++) fireEvent.keyDown(document, { key: 'k' })
   expect(selectedOption()).toBe('f-02')
+})
+
+test('a decision on the finding shown opens the next open one in list order', async () => {
+  // List order is f-02, f-01, f-05, f-03, f-04; f-01 is no longer open.
+  const server = await renderApp(payload({ records: { 'f-01': record('fixed') } }))
+  expect(selectedOption()).toBe('f-02')
+  fireEvent.click(screen.getByRole('button', { name: 'Fix now' }))
+  await waitFor(() => expect(selectedOption()).toBe('f-05'))
+  expect(screen.getByRole('article').textContent).toContain(
+    'Off-by-one in the page count',
+  )
+  fireEvent.keyDown(document, { key: 's' })
+  await waitFor(() => expect(selectedOption()).toBe('f-03'))
+  expect(decisionsOf(server.posts.at(-1))).toEqual([{ id: 'f-05', action: 'skip' }])
+  expect(screen.queryByText('All findings settled')).toBeNull()
+})
+
+test('the next open finding wraps to the start of the list', async () => {
+  await renderApp()
+  fireEvent.click(screen.getByText('Use the design tokens'))
+  await waitFor(() => expect(selectedOption()).toBe('f-04'))
+  fireEvent.click(
+    within(screen.getByRole('article')).getByRole('button', { name: 'Skip' }),
+  )
+  await waitFor(() => expect(selectedOption()).toBe('f-02'))
+})
+
+test('a decision on the last open finding stays on it and says all are settled', async () => {
+  const records = {
+    'f-01': record('fixed'),
+    'f-03': record('dropped'),
+    'f-04': record('skipped'),
+    'f-05': record('posted'),
+  }
+  const server = await renderApp(payload({ records }))
+  expect(selectedOption()).toBe('f-02')
+  // What the page reloads once the decision applied.
+  server.set(payload({ records: { ...records, 'f-02': record('skipped') } }))
+  fireEvent.click(
+    within(screen.getByRole('article')).getByRole('button', { name: 'Skip' }),
+  )
+  expect((await screen.findByText('All findings settled')).getAttribute('role')).toBe(
+    'status',
+  )
+  expect(selectedOption()).toBe('f-02')
+})
+
+test('with fixes still running or asking, the last decision says what is left', async () => {
+  const records = {
+    'f-01': record('asking'),
+    'f-03': record('dropped'),
+    'f-04': record('skipped'),
+    'f-05': record('working'),
+  }
+  const server = await renderApp(payload({ records }))
+  server.set(payload({ records: { ...records, 'f-02': record('skipped') } }))
+  fireEvent.click(
+    within(screen.getByRole('article')).getByRole('button', { name: 'Skip' }),
+  )
+  await screen.findByText('No open finding left: 1 need you, 1 running')
+  expect(screen.queryByText('All findings settled')).toBeNull()
+})
+
+test('a decision that did not apply leaves the finding shown', async () => {
+  const server = await renderApp()
+  server.down()
+  fireEvent.click(screen.getByRole('button', { name: 'Fix now' }))
+  await screen.findByText('Failed to fetch')
+  expect(selectedOption()).toBe('f-02')
+  expect(screen.queryByText('All findings settled')).toBeNull()
+})
+
+test('a decision that returns after the reviewer opened another does not move them', async () => {
+  const server = await renderApp()
+  const { promise: held, resolve: release } = deferred()
+  const answer = server.fetch.getMockImplementation()
+  server.fetch.mockImplementationOnce(async (input: string, init?: RequestInit) => {
+    await held
+    return answer ? answer(input, init) : Response.json({})
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Fix now' }))
+  fireEvent.click(screen.getByText('Use the design tokens'))
+  release()
+  await waitFor(() => expect(server.posts).toHaveLength(1))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(selectedOption()).toBe('f-04')
+})
+
+test('a batch decision does not move the finding shown', async () => {
+  const server = await renderApp()
+  fireEvent.keyDown(document, { key: 'x' })
+  fireEvent.click(screen.getByRole('button', { name: /^Skip 1/ }))
+  await waitFor(() => expect(server.posts).toHaveLength(1))
+  expect(decisionsOf(server.posts[0])).toEqual([{ id: 'f-02', action: 'skip' }])
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(selectedOption()).toBe('f-02')
+})
+
+test('a fixed finding shows the files its fix wrote and their diff on demand', async () => {
+  const data = payload({
+    records: {
+      'f-02': record('fixed', {
+        runs: [{ id: 'r1', startedAt: 'a', endedAt: 'b', outcome: 'fixed' }],
+      }),
+    },
+  })
+  const server = fakeServer(data, {}, undefined, {
+    'f-02': {
+      files: [
+        { path: 'src/api/guard.ts', since: ['f-05'] },
+        { path: 'src/api/new.ts', since: [] },
+      ],
+      diff: [
+        'diff --git a/src/api/guard.ts b/src/api/guard.ts',
+        '--- a/src/api/guard.ts',
+        '+++ b/src/api/guard.ts',
+        '@@ -1 +1 @@',
+        '-if (admin) return',
+        '+if (admin && sameTenant) return',
+        'diff --git a/src/api/new.ts b/src/api/new.ts',
+        'new file mode 100644',
+        '--- /dev/null',
+        '+++ b/src/api/new.ts',
+        '@@ -0,0 +1 @@',
+        '+export const fresh = 1',
+        '',
+      ].join('\n'),
+    },
+  })
+  render(<App />)
+  await screen.findByRole('heading', { name: TITLE })
+  fireEvent.click(await screen.findByRole('button', { name: 'View changes' }))
+  const changes = await screen.findByRole('region', { name: 'Changes of the fix' })
+  expect(server.fetch).toHaveBeenCalledWith('/api/changes/f-02', expect.anything())
+  expect(within(changes).getByRole('note').textContent).toContain(
+    'also changed since by f-05',
+  )
+  expect(
+    within(changes).getByLabelText('Diff of src/api/guard.ts').textContent,
+  ).toContain('if (admin && sameTenant) return')
+  expect(within(changes).getByText('new file')).toBeDefined()
+  fireEvent.click(within(changes).getByRole('button', { name: 'Hide changes' }))
+  expect(screen.queryByRole('region', { name: 'Changes of the fix' })).toBeNull()
+})
+
+test('a fix that wrote no file says so', async () => {
+  fakeServer(payload({ records: { 'f-02': record('fixed') } }))
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'View changes' }))
+  await screen.findByText('The fix wrote no file in the project.')
 })
 
 test('shortcuts do nothing while typing, and p does nothing on ours', async () => {
