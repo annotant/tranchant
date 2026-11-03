@@ -9,6 +9,7 @@ import {
   openIds,
   orderedFindings,
   type State,
+  stateLabel,
 } from '../src/domain'
 import { FINDINGS, ORDER, record, review } from './fixture'
 
@@ -16,7 +17,7 @@ test('findings group by bucket, then topic, then path:line', () => {
   const groups = groupFindings(FINDINGS)
   expect(groups.map((group) => group.label)).toEqual([
     'Needs your review',
-    'Auto-addressable',
+    'Safe to auto-fix',
   ])
   expect(groups[0]?.topics.map((topic) => topic.topic)).toEqual(['Bugs'])
   expect(groups[0]?.topics[0]?.findings.map((finding) => finding.id)).toEqual([
@@ -96,7 +97,7 @@ test('a batch applies to the selected findings the action can move', () => {
   expect(openIds(review(), records)).toEqual(['f-01', 'f-03', 'f-05'])
 })
 
-test('the header counts open, fixed, posted and dropped', () => {
+test('the header counts by what the state means: to do, done, set aside', () => {
   const records = {
     'f-01': record('fixed'),
     'f-02': record('posted'),
@@ -104,23 +105,49 @@ test('the header counts open, fixed, posted and dropped', () => {
     'f-04': record('skipped'),
   }
   expect(counts(review(), records)).toEqual({
-    open: 1,
-    fixed: 1,
-    posted: 1,
-    dropped: 1,
+    toDo: 1,
+    inProgress: 0,
     needsYou: 0,
-    running: 0,
+    done: 2,
+    setAside: 2,
   })
 })
 
 test.each([
   ['asking', 'needsYou'],
   ['failed', 'needsYou'],
-  ['queued', 'running'],
-  ['working', 'running'],
+  ['queued', 'inProgress'],
+  ['working', 'inProgress'],
 ] as const)('a finding %s counts as %s', (state, bucket) => {
   const tally = counts(review(), { 'f-01': record(state) })
   expect(tally[bucket]).toBe(1)
-  expect(tally.needsYou + tally.running).toBe(1)
-  expect(tally.open).toBe(4)
+  expect(tally.needsYou + tally.inProgress).toBe(1)
+  expect(tally.toDo).toBe(4)
+})
+
+test('every state shows a human word, never its own name', () => {
+  const states = [
+    'open',
+    'queued',
+    'working',
+    'asking',
+    'fixed',
+    'posted',
+    'dropped',
+    'skipped',
+    'failed',
+    'stopped',
+  ] as const
+  expect(Object.fromEntries(states.map((state) => [state, stateLabel(state)]))).toEqual({
+    open: 'To do',
+    queued: 'In progress',
+    working: 'In progress',
+    asking: 'Needs you',
+    failed: 'Needs you',
+    fixed: 'Done',
+    posted: 'Done',
+    dropped: 'Set aside',
+    skipped: 'Set aside',
+    stopped: 'Set aside',
+  })
 })

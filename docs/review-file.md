@@ -89,7 +89,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 {
   "id": "f-03",
   "topic": "Bugs", // see Topics
-  "bucket": "review", // "review" (🔴 needs your review) or "auto" (🟢 auto-addressable)
+  "bucket": "review", // "review" (🔴 needs your review) or "auto" (🟢 safe to auto-fix)
   "tag": "concern", // "concern" (the default), "question" or "suggestion"
   "title": "Null tenantId crashes the loop", // one line, under 80 characters
   "path": "src/people/usePeople.ts", // relative to project
@@ -226,8 +226,8 @@ Moves the store accepts:
 A `fixed` or `posted` finding is final: no move leaves it (the reviewer
 reverts by hand, or asks for a follow-up in a new review).
 
-The page's one-shot buttons (Fix all auto-addressable, Post all) act on the
-`open` findings only, in list order; a selection may apply any move the table
+The page's one-shot buttons (Fix all safe to auto-fix, Post all) act on the
+`open` findings (To do on the page) only, in list order; a selection may apply any move the table
 allows. At start, the server prints `FIX <id>` again for every `queued` fix
 and runs the queued posts again; a `working` finding is left to its agent.
 

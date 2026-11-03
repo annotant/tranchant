@@ -159,7 +159,7 @@ test('the view draws markers under their lines, notes on the header, and the ope
   const row21 = container.querySelector('#tr-file-1 .tr-row[data-line="21"]')
   const stack = [...(row21?.parentElement?.querySelectorAll('.tr-marker') ?? [])]
   expect(stack.map((marker) => marker.id)).toEqual(['tr-marker-f-02', 'tr-marker-f-06'])
-  expect(stack[0]?.textContent).toContain('fixed')
+  expect(stack[0]?.textContent).toContain('Done')
   expect(stack[0]?.textContent).toContain('Bugs')
   expect(stack[1]?.classList.contains('tr-marker--focused')).toBe(true)
   const row42 = container.querySelector('#tr-file-0 .tr-row[data-line="42"]')

@@ -3,7 +3,8 @@ import {
   type BucketGroup,
   type Finding,
   type Records,
-  STATE_LABELS,
+  STATE_DETAILS,
+  stateLabel,
   stateOf,
   tagOf,
 } from './domain'
@@ -62,7 +63,9 @@ function Row({
       />
       <button type="button" className="tr-item-main" onClick={onOpen} tabIndex={-1}>
         <span className="tr-item-line">
-          <span className={`tr-chip tr-chip--${state}`}>{STATE_LABELS[state]}</span>
+          <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+            {stateLabel(state)}
+          </span>
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}

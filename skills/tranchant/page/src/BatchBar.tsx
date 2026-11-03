@@ -93,14 +93,14 @@ export function BatchBar({
           className="tr-btn tr-btn--link"
           onClick={() => onSelect(idsInBucket(review, 'auto'))}
         >
-          auto-addressable
+          safe to auto-fix
         </button>
         <button
           type="button"
           className="tr-btn tr-btn--link"
           onClick={() => onSelect(open)}
         >
-          open
+          to do
         </button>
         {selected.size > 0 && (
           <button
@@ -136,7 +136,7 @@ export function BatchBar({
           disabled={disabled || !autoOpen.length}
           onClick={() => propose('fix', autoOpen)}
         >
-          Fix all auto-addressable
+          Fix all safe to auto-fix
           {autoOpen.length > 0 && <span className="tr-count"> {autoOpen.length}</span>}
         </button>
         {posting && (

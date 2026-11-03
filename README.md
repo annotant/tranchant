@@ -38,7 +38,7 @@ wrong.
   approve as written or edit first; you can still fix it locally when you
   checked their branch out.
 - **One shot, or piece by piece.** Fix or post everything, only the
-  auto-addressable findings, or a selection. A batch is one request; each
+  findings safe to auto-fix, or a selection. A batch is one request; each
   finding keeps its own state.
 - **No session waits on another.** The plugin's hooks read the server and
   start each fix's agent at once, in the background, with no model turn.
@@ -124,13 +124,13 @@ In the page:
   fetched).
 - **Fix now** applies the finding to the working tree. Add context first when
   the fix needs a choice the agent cannot make.
-- **Keep & post** / **Edit & post** put the comment on the MR, as suggested or
+- **Post as written** / **Edit & post** put the comment on the MR, as suggested or
   as you rewrote it. The author sees your name: the comment is posted with
   your `glab` login.
 - **Drop** records why the finding is wrong or intentional; **Skip** defers
   it.
 - The bar at the top applies one action to all findings, to the
-  auto-addressable ones, or to the ones you ticked.
+  ones safe to auto-fix, or to the ones you ticked.
 
 Nothing is committed or pushed: the fixes wait on your branch for your
 review.

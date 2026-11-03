@@ -17,6 +17,7 @@ import {
   type DecisionInput,
   groupFindings,
   isReviewing,
+  GROUP_LABELS,
   needsYou,
   nextOpen,
   orderedFindings,
@@ -131,36 +132,26 @@ function Header({
           type="button"
           className={`tr-attention-item ${tally.needsYou ? 'tr-attention-item--alert' : ''}`}
           disabled={!tally.needsYou}
-          title="Asking or failed: open the next one"
+          title="An agent asks you, or a fix did not land: go to the next one"
           onClick={onNeedsYou}
         >
-          Needs you <strong>{tally.needsYou}</strong>
+          {GROUP_LABELS.needsYou} <strong>{tally.needsYou}</strong>
         </button>
         <span
-          className={`tr-attention-item ${tally.running ? 'tr-attention-item--live' : ''}`}
-          title="Queued or working"
+          className={`tr-attention-item ${tally.inProgress ? 'tr-attention-item--live' : ''}`}
+          title="Waiting for an agent, or being fixed"
         >
-          {tally.running > 0 && <span className="tr-spinner" aria-hidden="true" />}
-          Running <strong>{tally.running}</strong>
+          {tally.inProgress > 0 && <span className="tr-spinner" aria-hidden="true" />}
+          {GROUP_LABELS.inProgress} <strong>{tally.inProgress}</strong>
         </span>
       </div>
       <dl className="tr-counts" aria-label="Findings by state">
-        <div>
-          <dt>open</dt>
-          <dd>{tally.open}</dd>
-        </div>
-        <div>
-          <dt>fixed</dt>
-          <dd>{tally.fixed}</dd>
-        </div>
-        <div>
-          <dt>posted</dt>
-          <dd>{tally.posted}</dd>
-        </div>
-        <div>
-          <dt>dropped</dt>
-          <dd>{tally.dropped}</dd>
-        </div>
+        {(['toDo', 'done', 'setAside'] as const).map((group) => (
+          <div key={group}>
+            <dt>{GROUP_LABELS[group]}</dt>
+            <dd>{tally[group]}</dd>
+          </div>
+        ))}
       </dl>
       <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
     </header>
@@ -596,10 +587,10 @@ export default function App() {
         )}
         {/* Third child in both layouts, the diff's slot empty in the list: its drafts survive. */}
         <main key="detail" className="tr-detail-pane">
-          {settled && tally.open === 0 && (
+          {settled && tally.toDo === 0 && (
             <p className="tr-settled" role="status">
-              {tally.needsYou || tally.running
-                ? `No open finding left: ${tally.needsYou} need you, ${tally.running} running`
+              {tally.needsYou || tally.inProgress
+                ? `Nothing left to do: ${tally.needsYou} need you, ${tally.inProgress} in progress`
                 : 'All findings settled'}
             </p>
           )}

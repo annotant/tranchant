@@ -50,9 +50,9 @@ test('ours offers Fix now, Drop and Skip, never a post', () => {
   expect(button(/post/i)).toBeNull()
 })
 
-test('theirs offers Keep & post, Edit & post, Fix now and Drop', () => {
+test('theirs offers Post as written, Edit & post, Fix now and Drop', () => {
   renderDetail({ ownership: 'theirs' })
-  expect(button('Keep & post')).not.toBeNull()
+  expect(button('Post as written')).not.toBeNull()
   expect(button('Edit & post')).not.toBeNull()
   expect(button('Fix now')).not.toBeNull()
   expect(button('Drop')).not.toBeNull()
@@ -149,9 +149,9 @@ test('Drop asks for a reason inline and sends it', () => {
   ])
 })
 
-test('Keep & post sends the comment as written; Edit & post sends the edit', () => {
+test('Post as written sends the comment as written; Edit & post sends the edit', () => {
   const { onDecide } = renderDetail({ ownership: 'theirs' })
-  fireEvent.click(button('Keep & post')!)
+  fireEvent.click(button('Post as written')!)
   expect(onDecide).toHaveBeenLastCalledWith([{ id: 'f-01', action: 'post' }])
   fireEvent.click(button('Edit & post')!)
   const box = screen.getByLabelText<HTMLTextAreaElement>('Comment to post')
@@ -244,4 +244,31 @@ test('a multiple-choice question ticks several options', async () => {
       },
     ]),
   )
+})
+
+const run = (id: string, outcome?: 'fixed' | 'asking' | 'failed' | 'stopped') => ({
+  id,
+  startedAt: '2026-01-01T00:00:00Z',
+  ...(outcome && { outcome }),
+})
+
+test('the chip names the group and its title the state; runs end in human words', () => {
+  renderDetail({
+    state: 'failed',
+    fields: {
+      runs: [
+        run('r1', 'fixed'),
+        run('r2', 'asking'),
+        run('r3', 'failed'),
+        run('r4', 'stopped'),
+        run('r5'),
+      ],
+    },
+  })
+  const chip = document.querySelector('.tr-chip--failed:not(.tr-runs *)')
+  expect(chip?.textContent).toBe('Needs you')
+  expect(chip?.getAttribute('title')).toBe('The fix did not land')
+  expect(
+    [...document.querySelectorAll('.tr-runs .tr-chip')].map((one) => one.textContent),
+  ).toEqual(['Fixed', 'Asked you', 'Did not land', 'Stopped', 'In progress'])
 })
