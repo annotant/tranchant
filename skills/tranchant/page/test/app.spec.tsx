@@ -84,6 +84,63 @@ test('the header shows the branch, the ownership, Jira, the counts and the versi
   expect(screen.queryByText('checkout moved')).toBeNull()
 })
 
+test('the header shows what needs you and what runs; Needs you opens each in turn', async () => {
+  await renderApp(
+    payload({
+      records: {
+        'f-03': record('failed', { reason: 'tests red' }),
+        'f-01': record('asking'),
+        'f-04': record('working'),
+      },
+    }),
+  )
+  expect(screen.getByRole('button', { name: 'Needs you 2' })).toBeDefined()
+  expect(screen.getByText('Running').textContent).toBe('Running 1')
+  expect(document.querySelector('.tr-attention .tr-spinner')).not.toBeNull()
+  // List order is f-02, f-01, f-05, f-03, f-04: f-01 first, then f-03, then f-01 again.
+  fireEvent.click(screen.getByRole('button', { name: 'Needs you 2' }))
+  await waitFor(() => expect(selectedOption()).toBe('f-01'))
+  expect(screen.getByRole('option', { current: true }).id.replace('tr-option-', '')).toBe(
+    'f-01',
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Needs you 2' }))
+  await waitFor(() => expect(selectedOption()).toBe('f-03'))
+  fireEvent.click(screen.getByRole('button', { name: 'Needs you 2' }))
+  await waitFor(() => expect(selectedOption()).toBe('f-01'))
+})
+
+test('Needs you starts at the first in list order when the cursor is off the set', async () => {
+  await renderApp(
+    payload({ records: { 'f-01': record('asking'), 'f-03': record('failed') } }),
+  )
+  fireEvent.click(screen.getByText('Off-by-one in the page count'))
+  await waitFor(() => expect(selectedOption()).toBe('f-05'))
+  fireEvent.click(screen.getByRole('button', { name: 'Needs you 2' }))
+  await waitFor(() => expect(selectedOption()).toBe('f-01'))
+})
+
+test('the header counters follow a change', async () => {
+  const events = fakeEvents()
+  const server = await renderApp(payload({ records: { 'f-01': record('asking') } }))
+  expect(screen.getByRole('button', { name: 'Needs you 1' })).toBeDefined()
+  server.set(payload({ records: { 'f-01': record('working') } }))
+  events.send('changed')
+  const none = await screen.findByRole('button', { name: 'Needs you 0' })
+  expect(none.hasAttribute('disabled')).toBe(true)
+  expect(screen.getByText('Running').textContent).toBe('Running 1')
+})
+
+test('Needs you 1 opens the asking finding; at zero it is muted', async () => {
+  await renderApp(payload({ records: { 'f-05': record('asking') } }))
+  fireEvent.click(screen.getByRole('button', { name: 'Needs you 1' }))
+  await waitFor(() => expect(selectedOption()).toBe('f-05'))
+  cleanup()
+  await renderApp()
+  const none = screen.getByRole('button', { name: 'Needs you 0' })
+  expect(none.hasAttribute('disabled')).toBe(true)
+  expect(document.querySelector('.tr-attention .tr-spinner')).toBeNull()
+})
+
 test("theirs names the author's MR and warns when the checkout moved", async () => {
   await renderApp(payload({ ownership: 'theirs', current: 'deadbeef' }))
   const mr = screen.getByRole('link', { name: "jfdoe's MR !5746" })

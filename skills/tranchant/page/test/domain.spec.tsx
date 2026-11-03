@@ -101,7 +101,26 @@ test('the header counts open, fixed, posted and dropped', () => {
     'f-01': record('fixed'),
     'f-02': record('posted'),
     'f-03': record('dropped'),
-    'f-04': record('working'),
+    'f-04': record('skipped'),
   }
-  expect(counts(review(), records)).toEqual({ open: 1, fixed: 1, posted: 1, dropped: 1 })
+  expect(counts(review(), records)).toEqual({
+    open: 1,
+    fixed: 1,
+    posted: 1,
+    dropped: 1,
+    needsYou: 0,
+    running: 0,
+  })
+})
+
+test.each([
+  ['asking', 'needsYou'],
+  ['failed', 'needsYou'],
+  ['queued', 'running'],
+  ['working', 'running'],
+] as const)('a finding %s counts as %s', (state, bucket) => {
+  const tally = counts(review(), { 'f-01': record(state) })
+  expect(tally[bucket]).toBe(1)
+  expect(tally.needsYou + tally.running).toBe(1)
+  expect(tally.open).toBe(4)
 })

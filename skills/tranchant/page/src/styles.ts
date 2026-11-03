@@ -98,6 +98,18 @@ dl { margin: 0; }
 .tr-header h1 { font-size: 18px; }
 .tr-header-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
 .tr-branch { color: var(--tr-muted); }
+.tr-attention { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.tr-attention-item {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px;
+  border: 1px solid transparent; border-radius: 12px; background: none;
+  font-size: 12px; color: var(--tr-muted); white-space: nowrap;
+}
+.tr-attention-item strong { margin-left: auto; padding-left: 6px; }
+button.tr-attention-item:not(:disabled) { cursor: pointer; }
+.tr-attention-item--alert { background: var(--tr-warn-bg); color: var(--tr-warn); border-color: var(--tr-warn); font-weight: 600; }
+.tr-attention-item--alert:hover { filter: brightness(0.97); }
+.tr-attention-item--live { background: var(--tr-accent-weak); color: var(--tr-accent); }
+.tr-attention-item .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
 .tr-counts { display: flex; gap: 16px; }
 .tr-counts > div { text-align: center; }
 .tr-counts dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tr-muted); }

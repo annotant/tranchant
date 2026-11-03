@@ -342,19 +342,38 @@ export const orderedFindings = (findings: readonly Finding[]): Finding[] =>
     group.topics.flatMap((topic) => topic.findings),
   )
 
-/** The header's counts: findings left to settle, and how the settled ones ended. */
+type Count = 'open' | 'fixed' | 'posted' | 'dropped' | 'needsYou' | 'running'
+
+// Exhaustive so a new state cannot drop out of the header unnoticed; null counts nowhere.
+const COUNTED: Record<State, Count | null> = {
+  open: 'open',
+  fixed: 'fixed',
+  posted: 'posted',
+  dropped: 'dropped',
+  asking: 'needsYou',
+  failed: 'needsYou',
+  queued: 'running',
+  working: 'running',
+  skipped: null,
+  stopped: null,
+}
+
+/** An agent waits for an answer, or a fix did not land: the reviewer must act. */
+export const needsYou = (state: State) => COUNTED[state] === 'needsYou'
+
+/** The header's counts: by how settled ones ended, what waits on you, what is queued or running. */
 export function counts(review: Pick<Review, 'findings'>, records: Records) {
-  const tally = { open: 0, fixed: 0, posted: 0, dropped: 0 }
+  const tally: Record<Count, number> = {
+    open: 0,
+    fixed: 0,
+    posted: 0,
+    dropped: 0,
+    needsYou: 0,
+    running: 0,
+  }
   for (const finding of review.findings) {
-    const state = stateOf(records, finding.id)
-    if (
-      state === 'open' ||
-      state === 'fixed' ||
-      state === 'posted' ||
-      state === 'dropped'
-    ) {
-      tally[state]++
-    }
+    const bucket = COUNTED[stateOf(records, finding.id)]
+    if (bucket) tally[bucket]++
   }
   return tally
 }
