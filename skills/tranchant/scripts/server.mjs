@@ -200,6 +200,31 @@ async function currentHead() {
   }
 }
 
+/** @type {Promise<string | null> | undefined} */
+let account
+
+/**
+ * The username glab posts as, read once from the project (glab takes the
+ * host from its remote); null when glab cannot say, and never asked again.
+ */
+function accountOnce() {
+  account ??= gitExec(process.env.TRANCHANT_GLAB || 'glab', ['api', 'user'], {
+    cwd: existsSync(project) ? project : undefined,
+    timeout: 10_000,
+  })
+    .then(({ stdout }) => {
+      const username = JSON.parse(stdout)?.username
+      return typeof username === 'string' && username.trim() ? username.trim() : null
+    })
+    .catch((error) => {
+      console.error(
+        `tranchant server: /api/account: ${oneLine(String(error?.message ?? error))}`,
+      )
+      return null
+    })
+  return account
+}
+
 /** The most MiB of diff the server reads from git and hands the page. */
 const MAX_DIFF_MIB = Number(process.env.TRANCHANT_MAX_DIFF_MIB ?? 32)
 const MAX_DIFF = MAX_DIFF_MIB * 1024 * 1024
@@ -664,6 +689,10 @@ async function handle(req, res) {
       reviewers,
       head: { reviewed: latest.headSha, current },
     })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/account') {
+    return send(res, 200, { username: await accountOnce() })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/diff') {

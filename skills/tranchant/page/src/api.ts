@@ -9,6 +9,7 @@ const STOP = '/api/stop'
 const RUNS = '/api/runs/'
 const DIFF = '/api/diff'
 const CHANGES = '/api/changes/'
+const ACCOUNT = '/api/account'
 
 /** How often the page asks again once the server stopped answering. */
 export const RETRY_MS = 5000
@@ -120,6 +121,33 @@ export interface ChangesPayload {
 
 export const fetchChanges = (id: string) =>
   request<ChangesPayload>(`${CHANGES}${encodeURIComponent(id)}`)
+
+/** What `GET /api/account` answers: null when glab cannot say. */
+export interface AccountPayload {
+  username: string | null
+}
+
+/** The username glab posts as, asked once while `wanted`; undefined until known or when glab cannot say. */
+export function useAccount(wanted: boolean) {
+  const [username, setUsername] = useState<string>()
+  useEffect(() => {
+    if (!wanted) return undefined
+    let disposed = false
+    async function load() {
+      try {
+        const answer = await request<AccountPayload>(ACCOUNT)
+        if (!disposed && answer.username) setUsername(answer.username)
+      } catch {
+        // A server older than /api/account: the confirmation says "your glab account".
+      }
+    }
+    void load()
+    return () => {
+      disposed = true
+    }
+  }, [wanted])
+  return username
+}
 
 export const fetchRuns = async (id: string) =>
   stepsOf(await request<unknown>(`${RUNS}${encodeURIComponent(id)}`))

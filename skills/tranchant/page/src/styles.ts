@@ -170,6 +170,8 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
   background: var(--tr-warn-bg); color: var(--tr-warn); border-radius: var(--tr-radius);
 }
 
+.tr-confirm-post ul { margin: 4px 0 0; padding-left: 18px; }
+
 .tr-btn {
   display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: var(--tr-radius);
   border: 1px solid var(--tr-border); background: var(--tr-bg); cursor: pointer; font-weight: 500; white-space: nowrap;

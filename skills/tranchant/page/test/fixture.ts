@@ -1,6 +1,6 @@
 import { act } from '@testing-library/react'
 import { expect, vi } from 'vitest'
-import type { ChangesPayload, DiffPayload } from '../src/api'
+import type { AccountPayload, ChangesPayload, DiffPayload } from '../src/api'
 import type {
   DecisionInput,
   Finding,
@@ -409,6 +409,7 @@ export function fakeServer(
   changes: Record<string, ChangesPayload> = {},
 ) {
   let diffAnswer = diff
+  let account: AccountPayload | undefined = { username: null }
   let current = initial
   let down = false
   const posts: Post[] = []
@@ -441,6 +442,11 @@ export function fakeServer(
       const id = decodeURIComponent(url.pathname.slice(13))
       return Response.json(changes[id] ?? { files: [], diff: '' })
     }
+    if (url.pathname === '/api/account') {
+      return account
+        ? Response.json(account)
+        : Response.json({ error: 'not found' }, { status: 404 })
+    }
     if (url.pathname === '/api/diff') {
       return 'diff' in diffAnswer
         ? Response.json(diffAnswer)
@@ -454,6 +460,10 @@ export function fakeServer(
     fetch,
     set(next: ReviewPayload) {
       current = next
+    },
+    /** undefined: a server without the route, which answers 404. */
+    answerAccount(next: AccountPayload | undefined) {
+      account = next
     },
     answerDiff(next: DiffAnswer) {
       diffAnswer = next

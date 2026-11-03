@@ -1,12 +1,17 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import App from '../src/App'
+import type { AccountPayload } from '../src/api'
 import { decisionsOf, fakeServer, payload, record } from './fixture'
 
 const button = (name: string | RegExp) => screen.getByRole('button', { name })
 
-async function renderApp(data = payload()) {
+async function renderApp(
+  data = payload(),
+  account: AccountPayload | undefined = { username: null },
+) {
   const server = fakeServer(data)
+  server.answerAccount(account)
   render(<App />)
   await screen.findByRole('heading', { name: 'Classification overview page' })
   // The list view, once the page learnt there is no diff.
@@ -87,7 +92,7 @@ test('Post and "Post all" exist for theirs only, and post the open findings', as
     payload({ ownership: 'theirs', records: { 'f-01': record('posted') } }),
   )
   fireEvent.click(button(/^Post all/))
-  expect(screen.getByRole('alertdialog').textContent).toContain('Post 4 comments?')
+  expect(screen.getByRole('alertdialog').textContent).toContain('Post 4 comments')
   fireEvent.click(button('Confirm'))
   await waitFor(() => expect(server.posts).toHaveLength(1))
   const decisions = decisionsOf(server.posts[0])
@@ -100,9 +105,48 @@ test('Post and "Post all" exist for theirs only, and post the open findings', as
   expect(decisions.every((decision) => decision.action === 'post')).toBe(true)
 })
 
-test('ours has no Post', async () => {
-  await renderApp()
+test('confirming a post names the merge request, the account and each finding', async () => {
+  await renderApp(
+    payload({ ownership: 'theirs', records: { 'f-01': record('posted') } }),
+    { username: 'reviewer-bot' },
+  )
+  fireEvent.click(button(/^Post all/))
+  const dialog = screen.getByRole('alertdialog')
+  await waitFor(() =>
+    expect(dialog.textContent).toContain('Post 4 comments on !5746 as reviewer-bot?'),
+  )
+  const titles = within(within(dialog).getByRole('list', { name: 'Comments to post' }))
+    .getAllByRole('listitem')
+    .map((item) => item.textContent)
+  expect(titles).toEqual([
+    'Admins skip the tenant check',
+    'Off-by-one in the page count',
+    'Is the empty state covered?',
+    'Use the design tokens',
+  ])
+})
+
+const askedAccount = (server: ReturnType<typeof fakeServer>) =>
+  server.fetch.mock.calls.some(([url]) => url === '/api/account')
+
+for (const [what, account] of [
+  ['glab cannot read', { username: null }],
+  ['a server without the route', undefined],
+] as const) {
+  test(`${what}: the confirmation says "your glab account"`, async () => {
+    const server = await renderApp(payload({ ownership: 'theirs' }), account)
+    await waitFor(() => expect(askedAccount(server)).toBe(true))
+    fireEvent.click(button(/^Post all/))
+    expect(screen.getByRole('alertdialog').textContent).toContain(
+      'Post 5 comments on !5746 as your glab account?',
+    )
+  })
+}
+
+test('ours has no Post, and never asks for the account', async () => {
+  const server = await renderApp()
   expect(screen.queryByRole('button', { name: /^Post/ })).toBeNull()
+  expect(askedAccount(server)).toBe(false)
 })
 
 test('"select open" and "select auto-addressable" fill the selection', async () => {
