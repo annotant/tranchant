@@ -8,7 +8,7 @@
 // prints `INBOX <file>`, then one `LENS <json>` per lens whose paths the
 // change touches: `{ name, prompt, paths }`, `prompt` the lens's instructions
 // file, absolute. Any refusal prints `REVIEW_REFUSED <reason>` and exits 2.
-// Nothing is written in the reviewed repository.
+// Nothing is written in the reviewed working tree; an MR's head is fetched.
 // TRANCHANT_GLAB names another glab executable (the tests' fake one).
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'

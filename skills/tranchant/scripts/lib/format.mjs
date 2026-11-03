@@ -183,7 +183,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Diagram} [diagram]
  * @property {Related[]} [related] Up to 4.
  * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
- * @property {boolean} [verified] Set by verify.mjs once a verifier confirmed it; read only when the review's `verify` is true.
+ * @property {boolean} [verified] Set by verify.mjs once a verifier confirmed or amended it; read only when the review's `verify` is true.
  */
 
 /**
@@ -217,7 +217,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} summary Markdown, shown above the findings.
  * @property {string[]} strengths
  * @property {Record<string, number>} [sources]
- * @property {boolean} [verify] Findings land unverified and a verifier confirms each: `/tranchant review` sets it.
+ * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.
  * @property {Finding[]} findings At least one, unless `status` is `reviewing`.
  */
 
@@ -745,11 +745,12 @@ export function envelopeOf(review) {
 
 /**
  * What tells a review from another with the same id, as JSON: its envelope,
- * status left out. A review that grew, or completed, is still the same one.
- * @param {{ findings?: unknown, status?: unknown }} review
+ * status and `verify` left out. A review that grew, or completed, is still the
+ * same one, opened again without `--verify` too.
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown }} review
  */
 export function identityOf(review) {
-  const { status: _status, ...identity } = envelopeOf(review)
+  const { status: _status, verify: _verify, ...identity } = envelopeOf(review)
   return JSON.stringify(canonical(identity))
 }
 

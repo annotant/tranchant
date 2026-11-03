@@ -2,7 +2,7 @@
 // remove.mjs <id> --review <dir>
 // A verifier removes a finding that landed: its claim does not hold, or it
 // repeats one that landed before it. Prints `REMOVED <id>`; a finding the
-// reviewer decided on, or one inline in review.json, stays:
+// person decided on, or one inline in review.json, stays:
 // `REMOVE_REFUSED <reason>`, exit 2.
 import { oneLine } from './lib/format.mjs'
 import { findReview, positional } from './lib/project.mjs'

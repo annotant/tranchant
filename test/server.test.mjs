@@ -772,9 +772,10 @@ test('a verified review prints LANDED once per finding, and serves its review ag
     id: 'live-verify-1',
     status: 'reviewing',
     verify: true,
-    // f-01 landed before the server started, and was verified: no LANDED.
-    findings: [{ ...landing[0], verified: true }, landing[1]],
+    findings: [landing[0], landing[1]],
   })
+  // f-01 landed before the server started, and was verified: no LANDED.
+  await createStore(imported.dir).verify(landing[0].id)
   const server = await startServer(t, { dir: imported.dir })
   assert.match(server.first, /^READY /, server.output())
   assert.equal(await server.nextLine('LANDED', 0), 'LANDED f-02')

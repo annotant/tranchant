@@ -4,7 +4,7 @@
 // A verifier's verdict on a finding that landed: confirmed, it gets
 // `verified: true` and prints `VERIFIED <id>`; amended (the finding whole,
 // same id, from the file or, with --amend, stdin), it is replaced, verified,
-// and prints `AMENDED <id>`. Amending a finding the reviewer decided on is
+// and prints `AMENDED <id>`. Amending a finding the person decided on is
 // refused. `--pending`: the hooks' check before they complete the review, one
 // `UNVERIFIED <id>` per finding not verified yet. A refusal prints
 // `VERIFY_REFUSED <reason>` and exits 2.

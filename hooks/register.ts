@@ -12,9 +12,10 @@
 //
 // `/tranchant review` writes a review's envelope, opens it the same way, then
 // starts one reviewer per lens of a recipe and, as each finding lands, a
-// verifier on it, three at a time, each a type of its own (`tranchant:rv-<lens>`,
-// `tranchant:vf-<id>`) whose hooks record its steps for the page. Once every
-// one ended, the review completes.
+// verifier on it, three at a time, each a type of its own
+// (`tranchant:rv-<lens>-<review>`, `tranchant:vf-<id>-<review>`, `<review>` the
+// first 8 characters of the review's id) whose hooks record its steps for the
+// page. Once every one ended, the review completes.
 //
 // The workers, the reviews served and run, the review agents and the fixes
 // handed over live in $.state, so they survive a reload of the module and
@@ -134,10 +135,27 @@ const skillDir = ($: $) => `${$.plugin.root}/skills/tranchant`
 /** A finding's id as the person reads it. */
 const tag = (id: string) => short(id, 16)
 /** A finding's agent's name; `tranchant:` before it makes its type. */
-const agentName = (id: string) => `tr-${id.replace(/[^\w-]/g, '-').slice(0, 32)}`
-/** The name an agent is spawned under: Claude Code refuses a space, a dot or past 64 characters. */
-const spawnName = (name: string) =>
-  `tranchant-${name.replace(/[^\w-]/g, '-')}`.slice(0, 64)
+// A type name is 64 characters at most: a long id is cut, and tagged to stay its own.
+const agentName = (id: string) => `tr-${shorten(id.replace(/[^\w-]/g, '-'), 32)}`
+/** `text` whole within `max` characters, else cut and tagged with its hash. */
+const shorten = (text: string, max: number) =>
+  text.length <= max
+    ? text
+    : `${text.slice(0, max - 8)}-${hashTag(text).padStart(7, '0')}`
+/** FNV-1a, in base 36: a short tag of `text`. */
+function hashTag(text: string) {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++)
+    hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
+  return (hash >>> 0).toString(36)
+}
+/**
+ * The name an agent is spawned under: Claude Code refuses a space, a dot or
+ * past 64 characters; the tag of its review keeps two cut names, or two
+ * reviews' `rv-bugs`, apart.
+ */
+const spawnName = (name: string, dir: string) =>
+  `tranchant-${name.replace(/[^\w-]/g, '-').slice(0, 46)}-${hashTag(`${name}@${dir}`)}`
 
 let debugOnce: Promise<boolean> | undefined
 
@@ -169,7 +187,7 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
     base?: unknown
     headSha?: unknown
     ownership?: unknown
-    mr?: { diffRefs?: unknown }
+    mr?: { diffRefs?: { baseSha?: unknown } }
   } = JSON.parse(await $.fs.read(`${dir}/review.json`))
   if (typeof file.project !== 'string' || !file.project.startsWith('/'))
     throw new Error('its project is not an absolute path')
@@ -177,10 +195,13 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
   const top = await gitTop($, project)
   const base = typeof file.base === 'string' ? file.base : ''
   const headSha = typeof file.headSha === 'string' ? file.headSha : ''
+  const refs = file.mr?.diffRefs
+  const mrBase =
+    typeof refs?.baseSha === 'string' && refs.baseSha ? refs.baseSha : undefined
   return {
     headSha,
-    // As the server reads it: the MR's own refs, else what reached the head since the base.
-    range: file.mr?.diffRefs ? `${base}..${headSha}` : `${base}...${headSha}`,
+    // As the server reads it: the MR's own base sha, else what reached the head since the base.
+    range: mrBase ? `${mrBase}..${headSha}` : `${base}...${headSha}`,
     ownership: file.ownership === 'theirs' ? 'theirs' : 'ours',
     dir,
     id: typeof file.id === 'string' && file.id ? file.id : basename(dir),
@@ -460,7 +481,7 @@ async function spawnWorker($: $, review: Review, id: string, name: string, line:
 async function startWorker($: $, watched: Watch, { id, line }: Queued) {
   const review = watched.review
   if (!review) return
-  const name = spawnName(id)
+  const name = spawnName(id, watched.dir)
   starting.set(id, { dir: watched.dir, since: Date.now(), stop: false })
   const started = await spawnWorker($, review, id, name, line).catch(
     (error: unknown) => ({
@@ -712,9 +733,10 @@ async function startServing($: $, dir: string) {
 
 /**
  * `review` is a review file to import, or a folder open.mjs made: the folder
- * to serve, or why there is none.
+ * to serve, or why there is none. `verify`: prepare.mjs's envelope, which
+ * keeps its `verify`; open.mjs drops it from any other file.
  */
-async function reviewDir($: $, given: string) {
+async function reviewDir($: $, given: string, verify = false) {
   const cwd = normalize(await $.session.cwd())
   const path = resolve(cwd, given)
   const exists = (file: string) => $.fs.exists(file).catch(() => false)
@@ -724,7 +746,12 @@ async function reviewDir($: $, given: string) {
       error: `No review at ${path}: give a review file, or a review folder holding review.json.`,
     }
   const ran = await $.process
-    .run(['node', `${skillDir($)}/scripts/open.mjs`, path], { cwd })
+    .run(
+      ['node', `${skillDir($)}/scripts/open.mjs`, path, ...(verify ? ['--verify'] : [])],
+      {
+        cwd,
+      },
+    )
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
   const lines = ran.stdout
     .split('\n')
@@ -903,12 +930,32 @@ async function rearm($: $) {
   }
 }
 
-/** The names the hooks spawned their agents under, the fixes' and the review's. */
-async function spawnedNames($: $) {
-  return new Set([
-    ...Object.keys(await read($, workers)).map(spawnName),
-    ...Object.values(await read($, reviewAgents)).map((one) => spawnName(one.name)),
-  ])
+/** What Claude Code writes before a finished agent's report, and after it. */
+const HAND_BACK = '[Subagent hand-back]'
+const REPORT_FOLLOWS = 'The report follows:'
+/** The report a hand-back carries, unindented, or its whole text. */
+function reportOf(text: string) {
+  const at = text.indexOf(REPORT_FOLLOWS)
+  if (at === -1) return text
+  return text
+    .slice(at + REPORT_FOLLOWS.length)
+    .replace(/<\/agent-message>\s*$/, '')
+    .split('\n')
+    .map((line) => line.replace(/^ {2}/, ''))
+    .join('\n')
+    .trim()
+}
+
+/** The agent the hooks spawned under `name`, a fix's or the review's, and whether it runs. */
+async function spawnedBy($: $, name: string) {
+  const worker = Object.entries(await read($, workers)).find(
+    ([id, one]) => spawnName(id, one.review) === name,
+  )
+  if (worker) return { agent: worker[1].agent, running: worker[1].running }
+  const reviewing = Object.values(await read($, reviewAgents)).find(
+    (one) => spawnName(one.name, one.review) === name,
+  )
+  return reviewing && { agent: reviewing.agent, running: reviewing.running }
 }
 
 /** A finding's agent ended its run: its one line for the person, and the next in line. */
@@ -947,7 +994,7 @@ const reviewAgentName = (job: ReviewJob) =>
  * run at once and an agent's hooks come from its type, registered again per review.
  */
 const reviewAgentType = (name: string, review: Review) =>
-  `${name}-${review.id.replace(/[^\w-]/g, '').slice(0, 8)}`
+  `${shorten(name, 55)}-${review.id.replace(/[^\w-]/g, '').slice(0, 8)}`
 /** Its key in `reviewAgents`: names repeat across reviews. */
 const agentKey = (name: string, dir: string) => `${name}@${dir}`
 
@@ -998,10 +1045,13 @@ async function reviewNote(
       },
     )
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
-  if (ran.exitCode !== 0)
-    await debug(
-      $,
-      `${tag(one.name)}: its steps were not recorded: ${short(ran.stderr.trim(), 160)}`,
+  if (ran.exitCode === 0) return
+  const why = short(ran.stderr.trim() || `hook.mjs exited ${ran.exitCode}`, 160)
+  await debug($, `${tag(one.name)}: its steps were not recorded: ${why}`)
+  // A start or an end unwritten leaves the page showing the agent wrong: said once.
+  if (steps.some((step) => step.kind === 'start' || step.kind === 'end'))
+    $.ui.toast(
+      `Tranchant could not record ${tag(one.name)}'s start or end on the page: ${why}`,
     )
 }
 
@@ -1087,7 +1137,11 @@ async function startReviewQueued($: $) {
 
 /** Starts the review agents the queues hold, three at a time, one start at a time. */
 function pumpReviews($: $) {
-  reviewDispatching = reviewDispatching.then(() => startReviewQueued($)).catch(ignore)
+  reviewDispatching = reviewDispatching
+    .then(() => startReviewQueued($))
+    .catch((error: unknown) =>
+      debug($, `starting review agents failed: ${message(error)}`),
+    )
   return reviewDispatching
 }
 
@@ -1105,7 +1159,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
   const key = agentKey(name, dir)
   const kind = job.kind
   startingReview.set(key, { dir, since: Date.now(), stop: false })
-  const label = spawnName(name)
+  const label = spawnName(name, dir)
   const started = await (async () =>
     $.agent.spawn({
       subagentType: await registerReviewAgent($, review, name, kind),
@@ -1264,7 +1318,9 @@ async function finishReview($: $, dir: string, why: string, stopped = false) {
 }
 
 function checkComplete($: $, dir: string) {
-  completing = completing.then(() => completeIfDone($, dir)).catch(ignore)
+  completing = completing
+    .then(() => completeIfDone($, dir))
+    .catch((error: unknown) => debug($, `completing ${dir} failed: ${message(error)}`))
   return completing
 }
 
@@ -1349,18 +1405,20 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   if (refused)
     return `Tranchant cannot review: ${refused.slice('REVIEW_REFUSED '.length)}`
   const inbox = lines.find((line) => line.startsWith('INBOX '))?.slice('INBOX '.length)
+  const unread: string[] = []
   const lenses = lines.flatMap((line): Lens[] => {
     if (!line.startsWith('LENS ')) return []
     try {
       const lens: Lens = JSON.parse(line.slice('LENS '.length))
       return [lens]
     } catch {
+      unread.push(short(line, 80))
       return []
     }
   })
   if (!inbox || !lenses.length)
     return `Tranchant could not prepare the review: ${short(ran.stderr.trim() || `prepare.mjs exited ${ran.exitCode}`, 300)}`
-  const found = await reviewDir($, inbox)
+  const found = await reviewDir($, inbox, true)
   if ('error' in found) return found.error
   const { dir } = found
   const served = await startServing($, dir)
@@ -1378,6 +1436,9 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   await pumpReviews($)
   return [
     `Reviewing with ${lenses.length} lens(es): ${lenses.map((lens) => lens.name).join(', ')}. Findings land on the page as the reviewers find them, each verified in turn.`,
+    ...(unread.length
+      ? [`prepare.mjs printed lenses that are not JSON, left out: ${unread.join('; ')}`]
+      : []),
     served,
   ].join('\n')
 }
@@ -1498,7 +1559,7 @@ export const register: Register = (on) => {
     return next(e)
   })
 
-  // The findings' agents and the review's are the hooks' alone: the model is not offered them.
+  // The fixes' and the review's agents are the hooks' alone: the model is not offered them.
   on('agent.offer', async ($, e, next) =>
     e.agent === WORKER ||
     FINDING_AGENT.test(e.agent) ||
@@ -1509,7 +1570,7 @@ export const register: Register = (on) => {
       : next(e),
   )
 
-  // What the agent writes between its tool calls, as notes under the finding.
+  // What an agent writes between its tool calls: notes under its finding, or in its reviewers/ file.
   on('session.append', async ($, e, next) => {
     const stored = await next(e)
     if (!e.agentId || e.message.type !== 'assistant') return stored
@@ -1539,18 +1600,26 @@ export const register: Register = (on) => {
     return stored
   })
 
-  // An agent's report comes back to the conversation; the page has it already.
+  // An agent's final report comes back to the conversation; the page has it already.
   on('session.receive', async ($, e, next) => {
     if (e.agentId !== undefined || e.origin.kind !== 'peer') return next(e)
     const from =
       'teammate' in e.origin
         ? e.origin.teammate
         : /^\s*<agent-message from="([\w-]+)">/.exec(e.text)?.[1]
-    if (from === undefined || !(await spawnedNames($)).has(from)) return next(e)
+    const spawned = from === undefined ? undefined : await spawnedBy($, from)
+    // What an agent sends mid-run is for the person.
+    if (!spawned || !e.text.includes(HAND_BACK)) return next(e)
+    // An agent that ended with no turn.complete: its toast, and its place freed.
+    if (spawned.running) {
+      const report = reportOf(e.text)
+      await workerDone($, spawned.agent, report)
+      await reviewAgentDone($, spawned.agent, report)
+    }
     return { consumed: `${from}'s report: the page and its toast have it` }
   })
 
-  // A finding's agent ended its turn. Its Stop hook released its locks.
+  // An agent ended its turn: a fix's Stop hook released its locks; a review agent holds none.
   on('turn.complete', async ($, e, next) => {
     void rearm($)
     if (e.agentId) {

@@ -1,4 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { RETRY_MS } from '../src/api'
 import App from '../src/App'
@@ -521,6 +528,17 @@ test('the file list follows the file the diff is scrolled to; a file or the curs
     rects.mockRestore()
     scrolls.mockRestore()
   }
+})
+
+test('a review that ended shows no agent at work, and says its unverified findings stay so', async () => {
+  const [first] = FINDINGS
+  await renderApp({
+    ...payload({ review: { status: 'complete', verify: true, findings: [first!] } }),
+    reviewers: [{ name: 'rv-bugs', running: true, steps: [] }],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(within(agents).queryByLabelText('running')).toBeNull()
+  expect(screen.getByText(/the review ended before a verifier confirmed it/)).toBeTruthy()
 })
 
 test('a verified review dims the findings no verifier confirmed, and shows its agents', async () => {

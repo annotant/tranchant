@@ -183,8 +183,9 @@ export function FindingDetail({
         <h2 id="tr-detail-title">{finding.title}</h2>
         {unverified && (
           <p className="tr-muted" role="note">
-            Not verified yet: a verifier re-reads the code, then confirms, corrects or
-            removes it.
+            {review.status === 'reviewing'
+              ? 'Not verified yet: a verifier re-reads the code, then confirms, corrects or removes it.'
+              : 'Not verified: the review ended before a verifier confirmed it.'}
           </p>
         )}
         <div className="tr-detail-meta">

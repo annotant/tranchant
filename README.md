@@ -126,7 +126,8 @@ is a JSON file:
 Each lens names its instructions (a Markdown file, relative to the recipe)
 and the path globs it applies to; a lens whose globs the change does not
 touch is skipped. Three review agents run at a time; nothing is written in
-the reviewed repository.
+the reviewed working tree (a merge request's head is fetched when the
+checkout lacks it).
 
 In the page:
 

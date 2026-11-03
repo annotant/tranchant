@@ -52,7 +52,8 @@ PROJECT.
    `ADDED <id>`: it landed. `ADD_REFUSED <reason>`: correct what the reason
    names and add it again, once.
 4. Never change a file of PROJECT. Your Bash runs reading commands only (git's
-   reading subcommands, `cat`, `head`, `grep`…, no redirection, no `$(…)`)
+   reading subcommands, `cat`, `head`, `grep`…; no redirection but `2>&1`,
+   no `$(…)` outside single quotes, no `sort -o`)
    and `add.mjs`; a hook refuses anything else.
    Commit nothing, push nothing. Never use AskUserQuestion: nobody answers;
    leave out what you cannot settle.

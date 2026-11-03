@@ -45,8 +45,9 @@ take you outside PROJECT.
      `node SKILL/scripts/remove.mjs <id> --review REVIEW`.
 
    `VERIFY_REFUSED` or `REMOVE_REFUSED`: read the reason; a finding the
-   reviewer already decided on stays as it is.
+   person already decided on, on the page, stays as it is.
 5. Never change a file of PROJECT. Your Bash runs reading commands only (git's
-   reading subcommands, `cat`, `head`, `grep`…, no redirection, no `$(…)`)
+   reading subcommands, `cat`, `head`, `grep`…; no redirection but `2>&1`,
+   no `$(…)` outside single quotes, no `sort -o`)
    and `verify.mjs` or `remove.mjs` on your own finding; a hook refuses
    anything else. Reply with one line: your verdict and why.

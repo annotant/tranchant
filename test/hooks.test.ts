@@ -423,7 +423,10 @@ test("a fix starts the finding's agent, with hooks of its own, on the session's 
   await w.print(fix('f-01'))
 
   expect(w.spawned).toEqual([
-    expect.objectContaining({ type: 'tranchant:tr-f-01', name: 'tranchant-f-01' }),
+    expect.objectContaining({
+      type: 'tranchant:tr-f-01',
+      name: expect.stringMatching(/^tranchant-f-01-[0-9a-z]+$/),
+    }),
   ])
   expect(w.spawned[0]?.prompt).toMatch(
     new RegExp(
@@ -924,20 +927,70 @@ test("a reviewer's own words become notes in its run file", async ($, on) => {
   await w.exit(0)
 })
 
-test("a review agent's report is kept from the conversation; another session's is not", async ($, on) => {
+/** An agent's message to the conversation: its final report with `final`. */
+function peer($: Engine, from: string, body: string, final = true) {
+  const text = final
+    ? `<agent-message from="${from}">\n[Subagent hand-back] The text below is the final report of a subagent. The report follows:\n  ${body}\n</agent-message>`
+    : `<agent-message from="${from}">\n${body}\n</agent-message>`
+  return $.session.receive({ origin: { kind: 'peer' }, text })
+}
+
+test("the hooks' agents' final reports are kept from the conversation, nothing else", async ($, on) => {
   const w = world(on)
   await review($, w)
-  const report = (from: string) =>
-    $.session.receive({
-      origin: { kind: 'peer' },
-      text: `<agent-message from="${from}">\nAdded 2 findings.\n</agent-message>`,
-    })
-  expect(await report('tranchant-rv-bugs')).toEqual({
-    consumed: expect.stringContaining('tranchant-rv-bugs'),
+  const name = w.spawned[0]?.name ?? ''
+  await $.turn.complete(turnEnded('a1', 'Added 2 findings.'))
+  expect(await peer($, name, 'Added 2 findings.')).toEqual({
+    consumed: expect.stringContaining(name),
   })
-  expect(await report('someone-else')).toEqual(
-    expect.objectContaining({ text: expect.stringContaining('someone-else') }),
-  )
+  // What it says mid-run, and another session's, reach the conversation.
+  expect(await peer($, name, 'Every Bash call is refused.', false)).toEqual({
+    text: expect.stringContaining('Every Bash call is refused.'),
+  })
+  expect(await peer($, 'someone-else', 'Done.')).toEqual({
+    text: expect.stringContaining('someone-else'),
+  })
+  // A teammate's delivery names its sender in its origin.
+  expect(
+    await $.session.receive({
+      origin: { kind: 'peer', teammate: name, isVerified: true },
+      text: '[Subagent hand-back] The report follows:\n  Done.',
+    }),
+  ).toEqual({ consumed: expect.stringContaining(name) })
+  await w.exit(0)
+})
+
+test('a final report with no turn.complete ends its agent: the toast, its place freed', async ($, on) => {
+  const w = world(on, { preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n') })
+  await review($, w)
+  await peer($, w.spawned[0]?.name ?? '', 'No finding.')
+  await w.clock.settle()
+  expect(w.toasts).toContain('rv-bugs: No finding.')
+  expect(w.completed).toEqual([['--review', DIR]])
+  await w.exit(0)
+})
+
+test("a fix's agent's final report is kept from the conversation too", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'))
+  await w.clock.settle()
+  expect(await peer($, w.spawned[0]?.name ?? '', 'Fixed.')).toEqual({
+    consumed: expect.any(String),
+  })
+  expect(w.toasts).toContain('f-01: Fixed.')
+  await w.exit(0)
+})
+
+test('verifiers of long ids sharing their start get names of their own, which Claude Code takes', async ($, on) => {
+  const w = world(on, { preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n') })
+  await review($, w)
+  const long = `bugs-${'x'.repeat(57)}`
+  await w.print(`LANDED ${long}-1`, `LANDED ${long}-2`)
+  await w.clock.settle()
+  const names = w.spawned.map((one) => one.name)
+  expect(names).toHaveLength(3)
+  expect(new Set(names).size).toBe(3)
   await w.exit(0)
 })
 

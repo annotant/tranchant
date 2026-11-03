@@ -377,6 +377,20 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
   // A substitution in double quotes still runs; an unclosed quote is refused.
   for (const command of [`grep "$(rm -rf src)" src`, 'grep "a\\`rm`" src', `grep 'x src`])
     assert.match(await hook('pre', bash(command)), /^Refused: /, command)
+  // What still splits after a quoted separator, what a quote cannot hide, what writes.
+  for (const command of [
+    `grep ';' src; rm x`,
+    `grep "|" src | sed -i x src/cart.js`,
+    `grep '<<"X"' src\nrm -rf src\nX`,
+    `git diff -'-output'=src/cart.js main`,
+    `r""m -rf src`,
+    'sort -o src/cart.js evil.js',
+    'sort --out=src/cart.js evil.js',
+    'uniq evil.js src/cart.js',
+    'cat evil.js >&1x',
+    'cat evil.js > /dev/nullx',
+  ])
+    assert.match(await hook('pre', bash(command)), /^Refused: /, command)
   await hook('post', {
     tool_name: 'Read',
     tool_input: { file_path: path.join(project, 'src/cart.js') },
@@ -393,7 +407,7 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
       ...Array.from({ length: 8 }, () => ['bash', 'failed', 'a1']),
       // Its own script, the git read and the three quoted patterns.
       ...Array.from({ length: 5 }, () => ['bash', 'running', 'a1']),
-      ...Array.from({ length: 3 }, () => ['bash', 'failed', 'a1']),
+      ...Array.from({ length: 13 }, () => ['bash', 'failed', 'a1']),
       ['read', 'done', 'a1'],
     ],
   )

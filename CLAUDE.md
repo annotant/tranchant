@@ -21,7 +21,8 @@ pattern, read how annotant does it.
   `skills/tranchant/scripts/hook.mjs` (file locks, steps) around its tools.
   `/tranchant review` starts the review agents the same way: one reviewer per
   lens (`tranchant:rv-<lens>-<review>`), one verifier per finding
-  (`tranchant:vf-<id>-<review>`).
+  (`tranchant:vf-<id>-<review>`), `<review>` the review id's first 8
+  characters.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;

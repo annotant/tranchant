@@ -414,7 +414,12 @@ export default function App() {
         </div>
       )}
       <Header review={review} tally={tally} moved={moved} />
-      <ReviewAgents agents={payload?.reviewers ?? []} />
+      <ReviewAgents
+        agents={(payload?.reviewers ?? []).map((agent) =>
+          // An agent whose end step was never written ended with its review all the same.
+          review?.status === 'reviewing' ? agent : { ...agent, running: false },
+        )}
+      />
       <details
         className="tr-summary"
         open={summaryOpen}

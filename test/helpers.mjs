@@ -80,7 +80,12 @@ export async function importReview(t, name, stateDir, overrides = {}) {
   const written = await reviewFile(t, name, overrides)
   const opened = await run(
     process.execPath,
-    [path.join(SCRIPTS, 'open.mjs'), written.file],
+    // A verify review is /tranchant review's, which passes --verify.
+    [
+      path.join(SCRIPTS, 'open.mjs'),
+      written.file,
+      ...(overrides.verify ? ['--verify'] : []),
+    ],
     {
       env: { TRANCHANT_STATE_DIR: stateDir },
     },

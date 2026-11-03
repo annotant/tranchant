@@ -663,10 +663,10 @@ async function changes() {
     agents.push(`${name} ${file}`)
   }
   const agentsNow = agents.join('\n')
-  const statusChanged = status !== statusSeen || agentsNow !== agentsSeen
+  const reviewChanged = status !== statusSeen || agentsNow !== agentsSeen
   statusSeen = status
   agentsSeen = agentsNow
-  return { ids, statusChanged, latest }
+  return { ids, reviewChanged, latest }
 }
 
 /** Whether READY was printed: the hooks read it first, LANDED only after. */
@@ -693,9 +693,9 @@ function announceLanded(latest) {
  * @param {boolean} first
  */
 async function refresh(first) {
-  const { ids, statusChanged, latest } = await changes()
+  const { ids, reviewChanged, latest } = await changes()
   announceLanded(latest)
-  if (first || (!ids.length && !statusChanged)) return
+  if (first || (!ids.length && !reviewChanged)) return
   const event = `event: changed\ndata: ${JSON.stringify({ ids })}\n\n`
   for (const res of listeners) res.write(event)
 }

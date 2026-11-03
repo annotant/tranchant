@@ -285,7 +285,12 @@ export function createStore(dir) {
       let value
       try {
         value = JSON.parse(await readFile(file, 'utf8'))
-      } catch {
+      } catch (error) {
+        const why = `findings/${name}: ${error instanceof Error ? error.message : String(error)}`
+        if (!warned.has(why)) {
+          warned.add(why)
+          console.error(`tranchant: ${why}; the finding is left out`)
+        }
         continue
       }
       const finding = soundFinding(value, theirs, `findings/${name}`, id)
@@ -457,7 +462,7 @@ export function createStore(dir) {
   }
 
   /**
-   * Refuses `what` on finding `id` once the reviewer moved it from `open`.
+   * Refuses `what` on finding `id` once the person moved it from `open`.
    * @param {string} id
    * @param {string} what
    */
@@ -527,7 +532,7 @@ export function createStore(dir) {
 
     /**
      * A verifier confirms finding `id` (`verified: true`), or replaces it with
-     * `amended`, the same id, confirmed. Amending is refused once the reviewer
+     * `amended`, the same id, confirmed. Amending is refused once the person
      * decided on it.
      * @param {string} id
      * @param {any} [amended]
@@ -559,7 +564,8 @@ export function createStore(dir) {
 
     /**
      * A verifier removes finding `id`: wrong, or a duplicate of one that landed
-     * before it. Refused once the reviewer decided on it.
+     * before it. Refused once the person decided on it, or while it is inline
+     * in review.json.
      * @param {string} id
      * @returns {Promise<void>}
      */

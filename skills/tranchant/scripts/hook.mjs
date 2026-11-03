@@ -97,9 +97,6 @@ const GIT_READS = new Set([
 // git options that write a file or run a program.
 const GIT_RISKY = /^(?:--output|--ext-diff|-O|--open-files-in-pager)/
 const REVIEW_SCRIPT = /\/scripts\/(add|verify|remove)\.mjs$/
-// A quoted heredoc's body is data, never expanded: the finding a script reads.
-const QUOTED_HEREDOC =
-  /<<-?\s*(['"])([\w-]+)\1([^\n]*)\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g
 // A Bash command that writes files takes no lock: refused, the agent must use
 // Edit or Write. Best effort, on the usual forms. What an inline script writes
 // cannot be told: always refused.
@@ -168,12 +165,15 @@ async function debug(agent, finding, message) {
 const mayWorkOn = (/** @type {Entry | undefined} */ entry) =>
   entry?.state === 'queued' || entry?.state === 'working'
 
-const SUBSTITUTION = 'a redirection, a substitution or an unquoted heredoc'
+const REFUSED_SHELL = 'a redirection, a substitution or an unquoted heredoc'
+// The two redirections a reading command may keep: they write no file.
+const KEPT_REDIRECTION = /^(?:&\d|\s*\/dev\/null)(?=[\s;&|]|$)/
 
 /**
  * A command's words, by segment, split on `;`, `|`, `&` and newlines outside
- * quotes; or why it is refused: a `<`, `>` outside quotes, a substitution
- * outside single quotes. A `<<WORD` heredoc marker is no word.
+ * quotes; or why it is refused: a redirection but `2>&1` and `>/dev/null`, a
+ * substitution outside single quotes, an unquoted heredoc. A quoted heredoc's
+ * body is data, skipped: the finding a review script reads.
  * @param {string} text
  * @returns {{ segments: string[][] } | { refusal: string }}
  */
@@ -184,6 +184,8 @@ function shellWords(text) {
   // `""` is a word: whether one is under way.
   let started = false
   let quote = ''
+  /** @type {string[]} */
+  const heredocs = []
   const end = () => {
     if (started) segments.at(-1)?.push(word)
     word = ''
@@ -203,7 +205,7 @@ function shellWords(text) {
       started = true
       continue
     }
-    if (c === '`' || (c === '$' && text[i + 1] === '(')) return { refusal: SUBSTITUTION }
+    if (c === '`' || (c === '$' && text[i + 1] === '(')) return { refusal: REFUSED_SHELL }
     if (quote === '"') {
       if (c === '"') quote = ''
       else word += c
@@ -214,16 +216,34 @@ function shellWords(text) {
       started = true
       continue
     }
-    const heredoc = /^<<-?[\w-]+/.exec(text.slice(i))
-    if (heredoc) {
+    if (c === '<' && text[i + 1] === '<') {
+      const marker = /^<<-?[ \t]*(['"])([\w-]+)\1/.exec(text.slice(i))
+      if (!marker) return { refusal: REFUSED_SHELL }
+      heredocs.push(marker[2] ?? '')
       end()
-      i += heredoc[0].length - 1
+      i += marker[0].length - 1
       continue
     }
-    if (c === '<' || c === '>') return { refusal: SUBSTITUTION }
+    if (c === '<' || c === '>') {
+      const kept = c === '>' && (!started || /^\d$/.test(word))
+      const rest = kept ? KEPT_REDIRECTION.exec(text.slice(i + 1)) : null
+      if (!rest) return { refusal: REFUSED_SHELL }
+      word = ''
+      started = false
+      i += rest[0].length
+      continue
+    }
     if (/[;|&\n]/.test(c)) {
       end()
       segments.push([])
+      // The bodies start on the next line: each ends on its delimiter alone.
+      if (c === '\n')
+        for (const delimiter of heredocs.splice(0)) {
+          const line = new RegExp(String.raw`^[ \t]*${delimiter}[ \t]*$`, 'm')
+          const found = line.exec(text.slice(i + 1))
+          if (!found) return { refusal: 'a heredoc with no end' }
+          i += found.index + found[0].length
+        }
       continue
     }
     if (/\s/.test(c)) end()
@@ -233,8 +253,34 @@ function shellWords(text) {
     }
   }
   if (quote) return { refusal: 'an unclosed quote' }
+  if (heredocs.length) return { refusal: 'a heredoc with no end' }
   end()
   return { segments }
+}
+
+/**
+ * Why a reading command's arguments would write or run something, or
+ * undefined: sort's output file or compressor (GNU takes any prefix of a
+ * long option), uniq's output operand, git's.
+ * @param {string} program
+ * @param {string[]} args
+ */
+function argumentRefusal(program, args) {
+  if (program === 'sort' && args.some((arg) => /^--(?:o|co)|^-[^-]*o/.test(arg)))
+    return 'sort writes a file or runs a program with that option'
+  if (program === 'uniq') {
+    // Its counts follow -f, -s and -w; any other operand is a file, the second written.
+    const operands = args.filter(
+      (arg, i) => !arg.startsWith('-') && !/^-[fsw]$/.test(args[i - 1] ?? ''),
+    )
+    if (operands.length > 1) return 'uniq writes its second file'
+  }
+  if (program !== 'git') return undefined
+  const sub = args[0] === '-C' ? args[2] : args[0]
+  if (!sub || !GIT_READS.has(sub)) return `git ${sub ?? ''} is not a reading command`
+  if (args.some((arg) => GIT_RISKY.test(arg)))
+    return 'a git option that writes or runs a program'
+  return undefined
 }
 
 /**
@@ -245,10 +291,7 @@ function shellWords(text) {
  * @param {string} command
  */
 function reviewerRefusal(name, command) {
-  const text = command
-    .replace(QUOTED_HEREDOC, '<<$2$3')
-    .replace(/\s\d?>&\d|\s\d?>\s*\/dev\/null/g, ' ')
-  const parsed = shellWords(text)
+  const parsed = shellWords(command)
   if ('refusal' in parsed) return parsed.refusal
   for (const [program, ...args] of parsed.segments) {
     if (!program) continue
@@ -264,11 +307,8 @@ function reviewerRefusal(name, command) {
       continue
     }
     if (!READERS.has(program)) return `${program} is not a reading command`
-    if (program !== 'git') continue
-    const sub = args[0] === '-C' ? args[2] : args[0]
-    if (!sub || !GIT_READS.has(sub)) return `git ${sub ?? ''} is not a reading command`
-    if (args.some((arg) => GIT_RISKY.test(arg)))
-      return 'a git option that writes or runs a program'
+    const refused = argumentRefusal(program, args)
+    if (refused) return refused
   }
   return undefined
 }
