@@ -5,6 +5,7 @@ import type { DiffStat } from './api'
 import { type DiffFile, marksInDiff, type Section } from './diff'
 import { type Finding, type Records, STATE_DETAILS, stateLabel, stateOf } from './domain'
 import { CodeBlock, digitsOf, NO_MARKS } from './Excerpt'
+import { languageOfFile } from './syntax'
 
 const markerId = (id: string) => `tr-marker-${id}`
 export const fileId = (index: number) => `tr-file-${index}`
@@ -202,6 +203,7 @@ function FileSection({ section, index, stat, ...state }: SectionProps) {
   const status = file ? STATUS_WORDS[file.status] : 'not in the diff'
   const opened = open?.path === section.path ? open : undefined
   const marks = opened && file ? marksInDiff(opened, file) : NO_MARKS
+  const language = languageOfFile(section.path)
   const under = new Map(
     [...section.lines].map(([line, stack]) => [
       line,
@@ -239,6 +241,7 @@ function FileSection({ section, index, stat, ...state }: SectionProps) {
           anchor={opened?.line}
           marks={marks}
           under={under}
+          language={language}
         />
       ))}
     </section>

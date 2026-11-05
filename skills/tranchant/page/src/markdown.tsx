@@ -1,18 +1,21 @@
 // A renderer for the summary's Markdown: headings, paragraphs, bullet and
-// numbered lists, fenced code, bold, inline code and links. Nothing else,
-// so the page needs no library and runs no HTML the producer wrote.
+// numbered lists, fenced code (highlighted in the language its fence names,
+// when the page knows it), bold, inline code and links. Nothing else, so the
+// page needs no library and runs no HTML the producer wrote.
 import type { ReactNode } from 'react'
+import { Code, type Language, languageOfFence } from './syntax'
 
 type Block =
   | { kind: 'heading'; level: number; text: string }
   | { kind: 'paragraph'; text: string }
   | { kind: 'list'; ordered: boolean; items: string[] }
-  | { kind: 'code'; text: string }
+  | { kind: 'code'; text: string; language: Language | undefined }
 
 const BULLET = /^\s{0,3}[-*+]\s+(.*)$/
 const NUMBERED = /^\s{0,3}\d+[.)]\s+(.*)$/
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/
-const FENCE = /^\s{0,3}(```|~~~)/
+// A fence's info string starts with its language: ```` ```tsx title="a" ```` is TSX.
+const FENCE = /^\s{0,3}(```|~~~)\s*([\w+-]*)/
 
 /** Splits Markdown into blocks; a list item continues on indented lines. */
 export function parseBlocks(markdown: string): Block[] {
@@ -37,7 +40,11 @@ export function parseBlocks(markdown: string): Block[] {
         index++
       }
       index++
-      blocks.push({ kind: 'code', text: code.join('\n') })
+      blocks.push({
+        kind: 'code',
+        text: code.join('\n'),
+        language: languageOfFence(fence[2]),
+      })
       continue
     }
     const heading = HEADING.exec(line)
@@ -136,7 +143,9 @@ function renderBlock(block: Block, key: number): ReactNode {
   if (block.kind === 'code') {
     return (
       <pre key={key}>
-        <code>{block.text}</code>
+        <code>
+          <Code code={block.text} language={block.language} />
+        </code>
       </pre>
     )
   }

@@ -37,6 +37,12 @@ export const PAGE_CSS = `
   --tr-mark-line: rgba(255, 196, 0, 0.16);
   --tr-added: #e6f6ea;
   --tr-removed: #fbe9e9;
+  --tr-code-keyword: #8b2fb8;
+  --tr-code-string: #106634;
+  --tr-code-number: #9a4100;
+  --tr-code-comment: #526076;
+  --tr-code-tag: #1a5aab;
+  --tr-code-attr: #7a5000;
   --tr-radius: 6px;
 }
 @media (prefers-color-scheme: dark) {
@@ -58,10 +64,16 @@ export const PAGE_CSS = `
     --tr-warn-bg: #3a2f14;
     --tr-danger: #e9807c;
     --tr-danger-bg: #3a2222;
-    --tr-mark: rgba(255, 196, 0, 0.35);
-    --tr-mark-line: rgba(255, 196, 0, 0.12);
+    --tr-mark: rgba(255, 196, 0, 0.22);
+    --tr-mark-line: rgba(255, 196, 0, 0.09);
     --tr-added: #1f3a2a;
     --tr-removed: #3a2222;
+    --tr-code-keyword: #e0bdff;
+    --tr-code-string: #8fdca2;
+    --tr-code-number: #ffbb8a;
+    --tr-code-comment: #c4cdd8;
+    --tr-code-tag: #9ad0ff;
+    --tr-code-attr: #f2cc60;
   }
 }
 
@@ -279,11 +291,16 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-sign { color: var(--tr-muted); }
 .tr-row--added { background: var(--tr-added); }
 .tr-row--removed { background: var(--tr-removed); }
-.tr-row--removed .tr-text { color: var(--tr-muted); }
 .tr-row--header, .tr-row--meta { color: var(--tr-muted); font-style: italic; }
 .tr-row--marked .tr-text { background: var(--tr-mark-line); }
 .tr-row--anchor .tr-gutter { color: var(--tr-text); font-weight: 600; box-shadow: inset 3px 0 0 var(--tr-accent); }
 .tr-code mark { background: var(--tr-mark); color: inherit; border-radius: 2px; }
+.tr-tok--keyword { color: var(--tr-code-keyword); }
+.tr-tok--string { color: var(--tr-code-string); }
+.tr-tok--number { color: var(--tr-code-number); }
+.tr-tok--comment { color: var(--tr-code-comment); font-style: italic; }
+.tr-tok--tag, .tr-tok--key { color: var(--tr-code-tag); }
+.tr-tok--attr { color: var(--tr-code-attr); }
 .tr-callout {
   position: relative; display: flex; margin: 0 0 4px;
   padding-left: min(calc(var(--tr-digits, 2ch) + 3ch + var(--tr-sign, 0ch) + var(--tr-col, 0) * 1ch), 50%);

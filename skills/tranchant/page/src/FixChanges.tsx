@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { type ChangesPayload, fetchChanges } from './api'
 import { parseDiff } from './diff'
 import { CodeBlock, digitsOf } from './Excerpt'
+import { languageOfFile } from './syntax'
 
 interface Props {
   id: string
@@ -82,6 +83,7 @@ export function FixChanges({ id, disabled }: Props) {
       )}
       {files.map((file) => {
         const digits = digitsOf(file.hunks.flatMap((hunk) => hunk.rows))
+        const language = languageOfFile(file.path)
         return (
           <div key={file.path} className="tr-file" aria-label={`Diff of ${file.path}`}>
             <header className="tr-file-head">
@@ -91,7 +93,13 @@ export function FixChanges({ id, disabled }: Props) {
               {file.binary && <span className="tr-chip">binary</span>}
             </header>
             {file.hunks.map((hunk, at) => (
-              <CodeBlock key={at} rows={hunk.rows} signed digits={digits} />
+              <CodeBlock
+                key={at}
+                rows={hunk.rows}
+                signed
+                digits={digits}
+                language={language}
+              />
             ))}
           </div>
         )

@@ -144,7 +144,8 @@ request's head is fetched when the checkout lacks it).
 In the page:
 
 - **The diff** of the change is the main view, every finding a marker on
-  its line; **List** shows them by bucket and topic instead, and is what
+  its line, the code highlighted (TypeScript, JavaScript and JSON); **List**
+  shows them by bucket and topic instead, and is what
   you get when the diff cannot be computed (no repository, commits not
   fetched).
 - **Fix now** applies the finding to the working tree. Add context first when
