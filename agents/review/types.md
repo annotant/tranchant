@@ -126,7 +126,9 @@ what to narrow with when it has none.
 
 Plain words, one idea per sentence, no filler. Name the symbol and the line,
 never "this code". Write for the person who reads it on the page in ten
-seconds, then decides.
+seconds, then decides. `problem`, `why` and `fix` are Markdown: inline code,
+bold, links (`http`, `https`, `mailto`), a list, a fenced block; no heading,
+no HTML.
 
 - `title`: under 80 characters, the defect, not the fix: "Undefined
   tenantId crashes the people hook".
@@ -136,7 +138,8 @@ seconds, then decides.
   often.
 - `fix`: the smallest change that removes the defect, concrete enough to
   apply: the pattern the codebase already uses, by file and name, when there
-  is one. When two fixes are valid, say so and which you would choose.
+  is one; a list when it takes steps, a fenced block when a snippet says it
+  best. When two fixes are valid, say so and which you would choose.
 - `comment`, only when `ownership` is `theirs`: the whole text to post
   on the author's merge request, in one go: problem, why and fix in two to
   five sentences, direct and courteous, in the language the code's comments
