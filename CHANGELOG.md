@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.1.0 - 2026-11-04
+
 ### Added
 
 - **Settle a review from a page.** `/tranchant <review.json>` imports a review
