@@ -6,6 +6,13 @@
   findings into fixes on your branch, or comments on someone else's merge request.
 </p>
 
+<p align="center">
+  <a href="https://github.com/annotant/tranchant/actions/workflows/ci.yml"><img src="https://github.com/annotant/tranchant/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/annotant/tranchant/actions/workflows/codeql.yml"><img src="https://github.com/annotant/tranchant/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/annotant/tranchant"><img src="https://api.scorecard.dev/projects/github.com/annotant/tranchant/badge" alt="OpenSSF Scorecard"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+</p>
+
 ---
 
 A review produces findings. Tranchant shows each one on a page: the excerpt,
@@ -90,9 +97,27 @@ applies to (`*.tsx`, `*.ts`, `*.jsx`, `*.js`, `*.vue`, `*.svelte`, `*.css`,
 Requires Claude Code 2.1.287 or later (its mods), Node.js 22.12 or later,
 and `glab` logged in when you post on GitLab.
 
+Straight from GitHub, no clone needed:
+
+```sh
+claude plugin marketplace add annotant/tranchant#stable
+claude plugin install tranchant@tranchant
 ```
-/plugin install tranchant --marketplace annotant/tranchant
-```
+
+Or, inside a session: `/plugin marketplace add annotant/tranchant#stable`,
+then `/plugin install tranchant@tranchant`.
+
+The `stable` branch holds the released versions; `main` is where development
+happens and does not work without a build. Get new versions with `claude
+plugin marketplace update tranchant`, or turn on auto-update for the
+marketplace in `/plugin`; the [changelog](CHANGELOG.md) lists what each brings.
+
+Each [release](https://github.com/annotant/tranchant/releases) carries the
+plugin archive and its signed provenance (`tranchant-x.y.z.intoto.jsonl`): the
+Release workflow built it from a verified commit of `main` and its built page.
+Check it with
+`gh attestation verify tranchant-x.y.z.tar.gz -R annotant/tranchant --signer-workflow annotant/tranchant/.github/workflows/release.yml`,
+adding `--bundle tranchant-x.y.z.intoto.jsonl` to use the attached file.
 
 The page is served on 127.0.0.1 only, under a strict content security
 policy: it loads nothing from the network, and an SVG a review carries cannot
@@ -143,6 +168,12 @@ review.
   Re-run the review on the new version.
 - An agent shows no progress: `/tranchant status` names it; `/tranchant
 stop` ends everything.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: see
+[CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately, as
+[SECURITY.md](SECURITY.md) describes.
 
 ## License
 

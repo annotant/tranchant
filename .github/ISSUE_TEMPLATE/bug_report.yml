@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in Tranchant does not work as documented.
+labels: [bug, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security issues go through the [security policy](https://github.com/annotant/tranchant/security/policy), never here.**
+  - type: checkboxes
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues and this one is new.
+          required: true
+        - label: I am on the latest version (`claude plugin marketplace update tranchant`).
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tranchant version
+      description: '`version` in `.claude-plugin/plugin.json`, or `claude plugin details tranchant`.'
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. `/tranchant review` on a branch of a TypeScript project
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: Hook errors, server output, the page's browser console, the review file. Remove anything private first.
+      render: text
+  - type: input
+    id: claude-code
+    attributes:
+      label: Claude Code version
+      placeholder: claude --version
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, browser, and the glab version when posting on a merge request.
+      placeholder: macOS 26, Node 24.3, Chrome 142, glab 1.60
+    validations:
+      required: true
