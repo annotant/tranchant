@@ -228,20 +228,48 @@ export const stateOf = (records: Records, id: string): State =>
 
 export const BUCKET_LABELS: Record<Bucket, string> = {
   review: 'Needs your review',
-  auto: 'Auto-addressable',
+  auto: 'Safe to auto-fix',
 }
 
-export const STATE_LABELS: Record<State, string> = {
-  open: 'open',
-  queued: 'queued',
-  working: 'working',
-  asking: 'asking',
-  fixed: 'fixed',
-  posted: 'posted',
-  dropped: 'dropped',
-  skipped: 'skipped',
-  failed: 'failed',
-  stopped: 'stopped',
+/** What a state means to the reviewer; the page shows GROUP_LABELS, never a state's name. */
+type Group = 'toDo' | 'inProgress' | 'needsYou' | 'done' | 'setAside'
+
+// Exhaustive so a new state cannot drop out of the header unnoticed at compile time.
+const GROUP_OF: Record<State, Group> = {
+  open: 'toDo',
+  queued: 'inProgress',
+  working: 'inProgress',
+  asking: 'needsYou',
+  failed: 'needsYou',
+  fixed: 'done',
+  posted: 'done',
+  dropped: 'setAside',
+  skipped: 'setAside',
+  stopped: 'setAside',
+}
+
+export const GROUP_LABELS: Record<Group, string> = {
+  toDo: 'To do',
+  inProgress: 'In progress',
+  needsYou: 'Needs you',
+  done: 'Done',
+  setAside: 'Set aside',
+}
+
+export const stateLabel = (state: State) => GROUP_LABELS[GROUP_OF[state]]
+
+/** What the chip's group hides: which of its states the finding is in. */
+export const STATE_DETAILS: Record<State, string> = {
+  open: 'Nothing decided yet',
+  queued: 'Waiting for its agent to start',
+  working: 'An agent is fixing it',
+  asking: 'The agent asks you a question',
+  failed: 'The fix did not land',
+  fixed: 'Fixed on the working tree',
+  posted: 'Posted on the merge request',
+  dropped: 'You chose not to act on it',
+  skipped: 'Skipped for now',
+  stopped: 'You stopped its agent: it may have left changes',
 }
 
 export const tagOf = (finding: Pick<Finding, 'tag'>): Tag => finding.tag ?? 'concern'
@@ -342,39 +370,19 @@ export const orderedFindings = (findings: readonly Finding[]): Finding[] =>
     group.topics.flatMap((topic) => topic.findings),
   )
 
-type Count = 'open' | 'fixed' | 'posted' | 'dropped' | 'needsYou' | 'running'
-
-// Exhaustive so a new state cannot drop out of the header unnoticed; null counts nowhere.
-const COUNTED: Record<State, Count | null> = {
-  open: 'open',
-  fixed: 'fixed',
-  posted: 'posted',
-  dropped: 'dropped',
-  asking: 'needsYou',
-  failed: 'needsYou',
-  queued: 'running',
-  working: 'running',
-  skipped: null,
-  stopped: null,
-}
-
 /** An agent waits for an answer, or a fix did not land: the reviewer must act. */
-export const needsYou = (state: State) => COUNTED[state] === 'needsYou'
+export const needsYou = (state: State) => GROUP_OF[state] === 'needsYou'
 
-/** The header's counts: by how settled ones ended, what waits on you, what is queued or running. */
+/** The header's counts, by what each finding's state means to the reviewer. */
 export function counts(review: Pick<Review, 'findings'>, records: Records) {
-  const tally: Record<Count, number> = {
-    open: 0,
-    fixed: 0,
-    posted: 0,
-    dropped: 0,
+  const tally: Record<Group, number> = {
+    toDo: 0,
+    inProgress: 0,
     needsYou: 0,
-    running: 0,
+    done: 0,
+    setAside: 0,
   }
-  for (const finding of review.findings) {
-    const bucket = COUNTED[stateOf(records, finding.id)]
-    if (bucket) tally[bucket]++
-  }
+  for (const finding of review.findings) tally[GROUP_OF[stateOf(records, finding.id)]]++
   return tally
 }
 

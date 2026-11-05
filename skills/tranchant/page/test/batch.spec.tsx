@@ -19,11 +19,11 @@ async function renderApp(
   return server
 }
 
-test('"Fix all auto-addressable" sends one POST with exactly the open auto findings', async () => {
+test('"Fix all safe to auto-fix" sends one POST with exactly the open auto findings', async () => {
   const server = await renderApp(
     payload({ records: { 'f-04': record('fixed'), 'f-01': record('skipped') } }),
   )
-  fireEvent.click(button(/^Fix all auto-addressable/))
+  fireEvent.click(button(/^Fix all safe to auto-fix/))
   // Two findings: a confirmation first, inline.
   expect(server.posts).toEqual([])
   expect(screen.getByRole('alertdialog').textContent).toContain('Fix 2 findings?')
@@ -50,7 +50,7 @@ test('the shortcut is disabled when no auto finding is open', async () => {
       },
     }),
   )
-  expect(button(/^Fix all auto-addressable/)).toHaveProperty('disabled', true)
+  expect(button(/^Fix all safe to auto-fix/)).toHaveProperty('disabled', true)
 })
 
 test('a batch on the selection applies only to the findings the action can move', async () => {
@@ -149,11 +149,11 @@ test('ours has no Post, and never asks for the account', async () => {
   expect(askedAccount(server)).toBe(false)
 })
 
-test('"select open" and "select auto-addressable" fill the selection', async () => {
+test('"select to do" and "select safe to auto-fix" fill the selection', async () => {
   await renderApp(payload({ records: { 'f-03': record('fixed') } }))
-  fireEvent.click(button('open'))
+  fireEvent.click(button('to do'))
   expect(screen.getByText('4 findings selected')).toBeDefined()
-  fireEvent.click(button('auto-addressable'))
+  fireEvent.click(button('safe to auto-fix'))
   expect(screen.getByText('3 findings selected')).toBeDefined()
   fireEvent.click(button('none'))
   expect(screen.queryByText(/findings selected/)).toBeNull()

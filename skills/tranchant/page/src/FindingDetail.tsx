@@ -7,7 +7,8 @@ import {
   type Finding,
   type FindingRecord,
   type Review,
-  STATE_LABELS,
+  STATE_DETAILS,
+  stateLabel,
   type Step,
   stateOf,
   tagOf,
@@ -168,7 +169,7 @@ export function FindingDetail({
     decide(
       context.trim() ? { action: 'fix', context: context.trim() } : { action: 'fix' },
     )
-  const keepAndPost = () => decide({ action: 'post' })
+  const postAsWritten = () => decide({ action: 'post' })
   const editAndPost = () =>
     decide(
       comment.trim() && comment.trim() !== finding.comment
@@ -198,7 +199,9 @@ export function FindingDetail({
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}
-          <span className={`tr-chip tr-chip--${state}`}>{STATE_LABELS[state]}</span>
+          <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+            {stateLabel(state)}
+          </span>
         </div>
       </header>
 
@@ -368,9 +371,9 @@ export function FindingDetail({
                   <button
                     type="button"
                     className="tr-btn tr-btn--primary"
-                    onClick={keepAndPost}
+                    onClick={postAsWritten}
                   >
-                    Keep &amp; post
+                    Post as written
                   </button>
                   <button
                     type="button"

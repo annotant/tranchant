@@ -77,15 +77,13 @@ test('the header shows the branch, the ownership, Jira, the counts and the versi
   )
   const tally = screen.getByLabelText('Findings by state')
   expect([...tally.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual([
-    'open',
-    'fixed',
-    'posted',
-    'dropped',
+    'To do',
+    'Done',
+    'Set aside',
   ])
   expect([...tally.querySelectorAll('dd')].map((dd) => dd.textContent)).toEqual([
     '3',
     '1',
-    '0',
     '1',
   ])
   expect(screen.getByText('tranchant 0.0.0-test')).toBeDefined()
@@ -103,7 +101,9 @@ test('the header shows what needs you and what runs; Needs you opens each in tur
     }),
   )
   expect(screen.getByRole('button', { name: 'Needs you 2' })).toBeDefined()
-  expect(screen.getByText('Running').textContent).toBe('Running 1')
+  expect(screen.getByTitle('Waiting for an agent, or being fixed').textContent).toBe(
+    'In progress 1',
+  )
   expect(document.querySelector('.tr-attention .tr-spinner')).not.toBeNull()
   // List order is f-02, f-01, f-05, f-03, f-04: f-01 first, then f-03, then f-01 again.
   fireEvent.click(screen.getByRole('button', { name: 'Needs you 2' }))
@@ -135,7 +135,9 @@ test('the header counters follow a change', async () => {
   events.send('changed')
   const none = await screen.findByRole('button', { name: 'Needs you 0' })
   expect(none.hasAttribute('disabled')).toBe(true)
-  expect(screen.getByText('Running').textContent).toBe('Running 1')
+  expect(screen.getByTitle('Waiting for an agent, or being fixed').textContent).toBe(
+    'In progress 1',
+  )
 })
 
 test('Needs you 1 opens the asking finding; at zero it is muted', async () => {
@@ -258,7 +260,7 @@ test('with fixes still running or asking, the last decision says what is left', 
   fireEvent.click(
     within(screen.getByRole('article')).getByRole('button', { name: 'Skip' }),
   )
-  await screen.findByText('No open finding left: 1 need you, 1 running')
+  await screen.findByText('Nothing left to do: 1 need you, 1 in progress')
   expect(screen.queryByText('All findings settled')).toBeNull()
 })
 
@@ -535,9 +537,9 @@ test('a finding landing keeps the open detail, its draft context and the selecti
   expect(
     screen.getByRole('status', { name: 'Review in progress' }).textContent,
   ).toContain('3 findings so far')
-  // The batch counts follow: the one that landed is auto-addressable and open.
+  // The batch counts follow: the one that landed is safe to auto-fix and to do.
   expect(
-    screen.getByRole('button', { name: /^Fix all auto-addressable/ }).textContent,
+    screen.getByRole('button', { name: /^Fix all safe to auto-fix/ }).textContent,
   ).toContain('1')
   server.set(payload({ review: { status: 'complete', findings: three } }))
   events.send('changed')

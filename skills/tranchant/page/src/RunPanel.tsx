@@ -44,6 +44,17 @@ interface History {
   steps: Step[]
 }
 
+type Outcome = NonNullable<FindingRecord['runs'][number]['outcome']>
+
+// A run's own end, not its finding's state: a later run or decision moves the finding on.
+const OUTCOME_LABELS: Record<Outcome | 'running', string> = {
+  running: 'In progress',
+  fixed: 'Fixed',
+  asking: 'Asked you',
+  failed: 'Did not land',
+  stopped: 'Stopped',
+}
+
 /** The steps of the run in progress, and the runs that ended, with their history on demand. */
 export function RunPanel({ id, record, steps, disabled }: Props) {
   const [history, setHistory] = useState<History>()
@@ -108,7 +119,7 @@ export function RunPanel({ id, record, steps, disabled }: Props) {
               <span className="tr-run-id">{run.id}</span>
               {run.model && <span className="tr-muted"> · {modelName(run.model)}</span>}
               <span className={`tr-chip tr-chip--${run.outcome ?? 'working'}`}>
-                {run.outcome ?? 'running'}
+                {OUTCOME_LABELS[run.outcome ?? 'running']}
               </span>
               {run.summary && <span className="tr-run-summary"> {run.summary}</span>}
             </li>
