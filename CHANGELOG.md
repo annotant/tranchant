@@ -7,6 +7,13 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Syntax highlighting.** The diff, a finding's excerpt and hunk, a fix's
+  changes and the summary's code blocks colour TypeScript, TSX, JavaScript
+  and JSON, with annotant's highlighter; the marks stay on top. The dark
+  mark is lighter, so the text under it reads at 4.5:1.
+
 ## 0.1.0 - 2026-11-04
 
 ### Added
