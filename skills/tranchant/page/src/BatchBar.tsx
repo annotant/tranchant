@@ -6,6 +6,7 @@ import {
   canPost,
   type DecisionInput,
   type Finding,
+  hasComment,
   idsInBucket,
   plural,
   type Records,
@@ -56,6 +57,9 @@ export function BatchBar({
   const autoOpen = ordered
     .filter((finding) => finding.bucket === 'auto' && open.includes(finding.id))
     .map((finding) => finding.id)
+  // A finding with no comment yet is posted from its own editor, never in a batch.
+  const postable = (ids: string[]) => ids.filter((id) => hasComment(byId.get(id)))
+  const openToPost = postable(open)
   const actions: Action[] = posting
     ? ['fix', 'post', 'drop', 'skip']
     : ['fix', 'drop', 'skip']
@@ -114,7 +118,8 @@ export function BatchBar({
       </div>
       <div className="tr-batch-group">
         {actions.map((action) => {
-          const ids = applicable(selected, action, records, review)
+          const movable = applicable(selected, action, records, review)
+          const ids = action === 'post' ? postable(movable) : movable
           return (
             <button
               key={action}
@@ -143,11 +148,13 @@ export function BatchBar({
           <button
             type="button"
             className="tr-btn tr-btn--small tr-btn--secondary"
-            disabled={disabled || !open.length}
-            onClick={() => propose('post', open)}
+            disabled={disabled || !openToPost.length}
+            onClick={() => propose('post', openToPost)}
           >
             Post all
-            {open.length > 0 && <span className="tr-count"> {open.length}</span>}
+            {openToPost.length > 0 && (
+              <span className="tr-count"> {openToPost.length}</span>
+            )}
           </button>
         )}
       </div>

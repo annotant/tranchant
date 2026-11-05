@@ -188,7 +188,7 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
     base?: unknown
     headSha?: unknown
     ownership?: unknown
-    mr?: { diffRefs?: { baseSha?: unknown } }
+    mr?: { diffRefs?: { baseSha?: unknown; headSha?: unknown } }
   } = JSON.parse(await $.fs.read(`${dir}/review.json`))
   if (typeof file.project !== 'string' || !file.project.startsWith('/'))
     throw new Error('its project is not an absolute path')
@@ -197,8 +197,12 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
   const base = typeof file.base === 'string' ? file.base : ''
   const headSha = typeof file.headSha === 'string' ? file.headSha : ''
   const refs = file.mr?.diffRefs
+  const mrHead = typeof refs?.headSha === 'string' ? refs.headSha : ''
+  // MR refs at another head (an ours branch ahead of or behind its MR): the review's own range.
+  const atHead =
+    !!mrHead && !!headSha && (mrHead.startsWith(headSha) || headSha.startsWith(mrHead))
   const mrBase =
-    typeof refs?.baseSha === 'string' && refs.baseSha ? refs.baseSha : undefined
+    atHead && typeof refs?.baseSha === 'string' && refs.baseSha ? refs.baseSha : undefined
   return {
     headSha,
     base: mrBase ?? base,

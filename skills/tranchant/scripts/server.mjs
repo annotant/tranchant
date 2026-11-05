@@ -20,7 +20,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
-import { oneLine, statusOf } from './lib/format.mjs'
+import { oneLine, postBlocker, statusOf } from './lib/format.mjs'
 import {
   StoreRefusal,
   WRITE_KINDS,
@@ -364,20 +364,19 @@ async function ensureRepository() {
 
 /**
  * The unified diff of the change and its files: the MR's own diff refs when
- * the review has them, else what reached `headSha` since `base`.
+ * the review has them at its head, else what reached `headSha` since `base`.
  * @returns {Promise<DiffPayload>}
  */
 async function computeDiff() {
-  const refs = review.mr?.diffRefs
-  if (
-    refs &&
-    !refs.headSha.startsWith(review.headSha) &&
-    !review.headSha.startsWith(refs.headSha)
-  ) {
+  const mrRefs = review.mr?.diffRefs
+  const atHead = mrRefs && !postBlocker(review)
+  // An ours review is the local branch's, which may be ahead of or behind its MR.
+  if (mrRefs && !atHead && review.ownership === 'theirs') {
     throw new DiffUnavailable(
-      `the MR's diff refs are at ${refs.headSha}, the review at ${review.headSha}`,
+      `the MR's diff refs are at ${mrRefs.headSha}, the review at ${review.headSha}`,
     )
   }
+  const refs = atHead ? mrRefs : undefined
   const base = refs ? refs.baseSha : review.base
   const head = refs ? refs.headSha : review.headSha
   await ensureRepository()

@@ -12,6 +12,7 @@ import App from '../src/App'
 import {
   decisionsOf,
   diffPayload,
+  mergeRequest,
   fakeEvents,
   fakeServer,
   FINDINGS,
@@ -156,6 +157,13 @@ test("theirs names the author's MR and warns when the checkout moved", async () 
   const mr = screen.getByRole('link', { name: "jfdoe's MR !5746" })
   expect(mr.getAttribute('href')).toContain('/merge_requests/5746')
   expect(screen.getByText('checkout moved')).toBeDefined()
+})
+
+test('ours with an MR names it next to your branch', async () => {
+  await renderApp(payload({ review: { mr: mergeRequest() } }))
+  expect(screen.getByText('your branch')).toBeDefined()
+  const mr = screen.getByRole('link', { name: '!5746' })
+  expect(mr.getAttribute('href')).toContain('/merge_requests/5746')
 })
 
 test('the list is grouped in order and the first finding opens itself', async () => {

@@ -2,7 +2,15 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { expect, test } from 'vitest'
 import App from '../src/App'
 import type { AccountPayload } from '../src/api'
-import { decisionsOf, fakeServer, payload, record } from './fixture'
+import {
+  decisionsOf,
+  fakeServer,
+  FINDINGS,
+  mergeRequest,
+  payload,
+  record,
+  withoutComment,
+} from './fixture'
 
 const button = (name: string | RegExp) => screen.getByRole('button', { name })
 
@@ -143,10 +151,61 @@ for (const [what, account] of [
   })
 }
 
-test('ours has no Post, and never asks for the account', async () => {
+test('ours without an MR has no Post, and never asks for the account', async () => {
   const server = await renderApp()
   expect(screen.queryByRole('button', { name: /^Post/ })).toBeNull()
   expect(askedAccount(server)).toBe(false)
+})
+
+test('ours with an MR posts too, the findings with a comment only, after the confirmation', async () => {
+  const [first, ...rest] = FINDINGS
+  const server = await renderApp(
+    payload({
+      review: {
+        mr: mergeRequest(),
+        findings: [withoutComment(first!), ...rest],
+      },
+    }),
+    { username: 'me' },
+  )
+  fireEvent.click(button(/^Post all/))
+  const dialog = screen.getByRole('alertdialog')
+  await waitFor(() =>
+    expect(dialog.textContent).toContain('Post 4 comments on !5746 as me?'),
+  )
+  fireEvent.click(button('Confirm'))
+  await waitFor(() => expect(server.posts).toHaveLength(1))
+  const ids = decisionsOf(server.posts[0]).map((decision) => decision.id)
+  expect(ids).not.toContain('f-01')
+  expect(ids).toHaveLength(4)
+})
+
+test('ours with an MR marks the findings with a comment, in the list', async () => {
+  const [first, ...rest] = FINDINGS
+  await renderApp(
+    payload({
+      review: { mr: mergeRequest(), findings: [withoutComment(first!), ...rest] },
+    }),
+  )
+  const list = screen.getByRole('listbox', { name: 'Findings' })
+  expect(within(list).getAllByRole('img', { name: 'Has a comment' })).toHaveLength(
+    FINDINGS.length - 1,
+  )
+  const row = within(list).getByRole('checkbox', {
+    name: `Select ${first!.title}`,
+  }).parentElement!
+  expect(within(row).queryByRole('img', { name: 'Has a comment' })).toBeNull()
+})
+
+test('no comment mark without an MR, nor on theirs where every finding has one', async () => {
+  await renderApp()
+  expect(screen.queryByRole('img', { name: 'Has a comment' })).toBeNull()
+})
+
+test('ours with an MR at another head offers no Post', async () => {
+  await renderApp(payload({ review: { mr: mergeRequest('f'.repeat(40)) } }))
+  const bar = screen.getByRole('toolbar', { name: 'Batch actions' })
+  expect(within(bar).queryByRole('button', { name: /^Post/ })).toBeNull()
 })
 
 test('"select to do" and "select safe to auto-fix" fill the selection', async () => {

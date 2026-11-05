@@ -13,9 +13,11 @@ import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView
 import {
   allows,
   canPost,
+  commentedIds,
   counts,
   type DecisionInput,
   groupFindings,
+  hasComment,
   isReviewing,
   GROUP_LABELS,
   needsYou,
@@ -83,7 +85,19 @@ function Header({
             {review.branch} → {review.base}
           </code>
           {review.ownership === 'ours' ? (
-            <span className="tr-chip tr-chip--ours">your branch</span>
+            <>
+              <span className="tr-chip tr-chip--ours">your branch</span>
+              {review.mr && (
+                <a
+                  className="tr-chip tr-chip--ours"
+                  href={review.mr.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  !{review.mr.iid}
+                </a>
+              )}
+            </>
           ) : review.mr ? (
             <a
               className="tr-chip tr-chip--theirs"
@@ -224,6 +238,10 @@ export default function App() {
   const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
   const unverified = useMemo(
     () => (review ? unverifiedIds(review) : new Set<string>()),
+    [review],
+  )
+  const commented = useMemo(
+    () => (review ? commentedIds(review) : new Set<string>()),
     [review],
   )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
@@ -381,7 +399,11 @@ export default function App() {
       else if (event.key === 'Enter' && cursor) setOpenId(cursor)
       else if (event.key === 'x' && cursor) toggle(cursor)
       else if (action && cursor && review && !disabled) {
-        if (allows(action, stateOf(records, cursor), review)) {
+        // A finding with no comment is posted from its editor, never blind.
+        const blind =
+          action === 'post' &&
+          !hasComment(ordered.find((finding) => finding.id === cursor))
+        if (!blind && allows(action, stateOf(records, cursor), review)) {
           if (cursor === openId) void decideShown({ id: cursor, action })
           else void decide([{ id: cursor, action }])
         }
@@ -551,6 +573,7 @@ export default function App() {
                   openId={openId}
                   selected={selected}
                   unverified={unverified}
+                  commented={commented}
                   onOpen={open}
                   onToggle={toggle}
                 />
@@ -577,6 +600,7 @@ export default function App() {
                 open={current}
                 selected={selected}
                 unverified={unverified}
+                commented={commented}
                 onOpen={open}
                 onToggle={toggle}
               />

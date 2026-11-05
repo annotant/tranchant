@@ -21,6 +21,7 @@ import {
   currentRun,
   nextRunId,
   parseDecisions,
+  postBlocker,
   problemsText,
   stateWords,
   statusOf,
@@ -605,8 +606,8 @@ export function createStore(dir) {
     /**
      * The reviewer's decision on a finding: a fix (with the `context` the
      * agent follows), a post (with the `comment` as they edited it), a drop
-     * (with their `reason`) or a skip. A post needs `theirs` and the MR's
-     * `diffRefs`; a question is answered with `answer`, not decided again.
+     * (with their `reason`) or a skip. A post needs the MR's `diffRefs` at
+     * the commit reviewed, whatever the ownership; a question is answered with `answer`, not decided again.
      * @param {string} id
      * @param {{ action: 'fix' | 'post' | 'drop' | 'skip', context?: string, comment?: string, reason?: string }} decision
      * @returns {Promise<Entry>}
@@ -614,14 +615,8 @@ export function createStore(dir) {
     decide(id, { action, context, comment, reason }) {
       return changeOne(id, (entry, finding, known) => {
         if (action === 'post') {
-          if (known.ownership !== 'theirs') {
-            throw new StoreRefusal(
-              `post refused: the review is ours, there is no MR to post on`,
-            )
-          }
-          if (!known.mr?.diffRefs) {
-            throw new StoreRefusal(`post refused: the review has no mr.diffRefs`)
-          }
+          const blocker = postBlocker(known)
+          if (blocker) throw new StoreRefusal(`post refused: ${blocker}`)
           if (!comment?.trim() && !finding.comment) {
             throw new StoreRefusal(`post refused: finding ${id} has no comment`)
           }

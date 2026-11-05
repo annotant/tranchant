@@ -289,6 +289,26 @@ export const diffPayload = (): DiffPayload => ({
   diff: DIFF,
 })
 
+/** `finding` as a lens writes it on an `ours` review: no comment to post. */
+export function withoutComment(finding: Finding): Finding {
+  const copy = { ...finding }
+  delete copy.comment
+  return copy
+}
+
+/** The MR of the review, its diff refs at `headSha`. */
+export const mergeRequest = (headSha = HEAD): NonNullable<Review['mr']> => ({
+  project: 'qohash/dashboard-ui',
+  iid: 5746,
+  url: 'https://gitlab.example/qohash/dashboard-ui/-/merge_requests/5746',
+  author: 'jfdoe',
+  diffRefs: {
+    baseSha: 'b'.repeat(40),
+    headSha,
+    startSha: 'b'.repeat(40),
+  },
+})
+
 export function review(
   ownership: Ownership = 'ours',
   fields: Partial<Review> = {},
@@ -303,21 +323,7 @@ export function review(
     headSha: HEAD,
     ownership,
     title: 'Classification overview page',
-    ...(ownership === 'theirs'
-      ? {
-          mr: {
-            project: 'qohash/dashboard-ui',
-            iid: 5746,
-            url: 'https://gitlab.example/qohash/dashboard-ui/-/merge_requests/5746',
-            author: 'jfdoe',
-            diffRefs: {
-              baseSha: 'b'.repeat(40),
-              headSha: HEAD,
-              startSha: 'b'.repeat(40),
-            },
-          },
-        }
-      : {}),
+    ...(ownership === 'theirs' ? { mr: mergeRequest() } : {}),
     jira: { key: 'QO-9678', url: 'https://jira.example/browse/QO-9678' },
     summary: [
       '## Change Map',

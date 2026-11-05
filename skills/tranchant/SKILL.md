@@ -4,7 +4,8 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   --tranchant, or any tool) writes a review file of findings; "/tranchant
   <review.json>" or "/tranchant:tranchant <review.json>" imports it and opens
   the page, where the user fixes each finding on the working tree with a
-  background agent, posts it on someone else's merge request, drops or skips
+  background agent, posts it on the merge request (someone else's, or the
+  branch's own), drops or skips
   it, one at a time or in batches; "/tranchant review [<branch> | <mr url>]"
   reviews a change in the background and streams the findings to the page;
   "/tranchant status" says what runs, "/tranchant stop" ends the server and
@@ -57,10 +58,12 @@ that mods may be turned off for this session; then stop.
 A review file follows `SKILL/../../docs/review-file.md` (the `review.json`
 section): one `Finding` per issue, each with its `path`, `line`, an `excerpt`
 of the new-side text, `marks` on the exact spots, `problem`, `why`, `fix`,
-the `comment` to post when the change is someone else's, and a `diagram`
+the `comment` to post when the change is someone else's (optional when it
+is yours with an MR), and a `diagram`
 only when a flow needs proving. `ownership` is `ours` when the change has no
-MR or the MR's author is the current user, `theirs` otherwise; `theirs` needs
-`mr.diffRefs` (`glab mr view <iid> -F json` → `diff_refs`). Write the file
+MR or the MR's author is the current user, `theirs` otherwise; posting needs
+`mr.diffRefs` (`glab mr view <iid> -F json` → `diff_refs`), `ours` too, its
+`head_sha` being the `headSha` reviewed. Write the file
 outside the reviewed repository, so it can never be committed by mistake:
 `~/.cache/tranchant/inbox/<id>.json` is the convention. Then open it. To
 show the findings as they land instead, write the envelope with `"status":

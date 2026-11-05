@@ -15,6 +15,7 @@ import {
   oneLine,
   parseDecisions,
   parseReview,
+  postBlocker,
   statusOf,
   validateEnvelope,
   validateFinding,
@@ -79,9 +80,29 @@ test('names each required field of a finding that is missing', async () => {
       `${key}: ${problems.join('; ')}`,
     )
   }
-  // A comment is only required on someone else's change.
+  // A comment is only required on someone else's change, MR or not.
   const ours = await fixture('ours')
   assert.deepEqual(validateReview(ours), [])
+  const { mr } = await fixture('theirs')
+  assert.deepEqual(validateReview({ ...ours, mr }), [])
+})
+
+test('postBlocker: posting needs the MR’s diff refs at the commit reviewed', async () => {
+  const theirs = await fixture('theirs')
+  assert.equal(postBlocker(theirs), undefined)
+  assert.equal(
+    postBlocker({ ...theirs, headSha: theirs.headSha.slice(0, 12) }),
+    undefined,
+  )
+  assert.equal(postBlocker(await fixture('ours')), 'the review has no mr.diffRefs')
+  assert.equal(
+    postBlocker({ ...theirs, headSha: 'f'.repeat(40) }),
+    'the MR moved past the commit reviewed: review it again',
+  )
+  assert.equal(
+    postBlocker({ ...theirs, ownership: 'ours', headSha: 'f'.repeat(40) }),
+    "push your branch first: the MR's head is not the one reviewed",
+  )
 })
 
 test('a review may have no finding only while it is reviewing', async () => {
