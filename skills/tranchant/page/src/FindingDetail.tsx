@@ -16,6 +16,7 @@ import {
 import { Excerpt } from './Excerpt'
 import { FixChanges } from './FixChanges'
 import { RunPanel } from './RunPanel'
+import { languageOfFile } from './syntax'
 
 interface Props {
   review: Review
@@ -211,6 +212,7 @@ export function FindingDetail({
         marks={finding.marks}
         anchor={finding.line}
         label={`Excerpt of ${finding.path}`}
+        language={languageOfFile(finding.path)}
       />
 
       <dl className="tr-pwf">
@@ -235,6 +237,7 @@ export function FindingDetail({
                 marks={related.marks}
                 anchor={related.line}
                 label={`Excerpt of ${related.path}`}
+                language={languageOfFile(related.path)}
               />
             </div>
           ))}

@@ -25,7 +25,7 @@ test('headings, paragraphs, lists and fenced code become blocks', () => {
     { kind: 'paragraph', text: 'One line and the next.' },
     { kind: 'list', ordered: false, items: ['first', 'second continued'] },
     { kind: 'list', ordered: true, items: ['one', 'two'] },
-    { kind: 'code', text: 'const a = 1' },
+    { kind: 'code', text: 'const a = 1', language: 'ts' },
     { kind: 'paragraph', text: 'tail' },
   ])
 })

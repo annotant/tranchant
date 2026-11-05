@@ -2,6 +2,7 @@
 /* oxlint-disable react/no-array-index-key */
 import type { ReactNode } from 'react'
 import type { Excerpt as ExcerptText, Mark } from './domain'
+import { type Language, sliceTokens, spans, type Token, tokens } from './syntax'
 
 type RowKind = 'context' | 'added' | 'removed' | 'header' | 'meta'
 
@@ -92,11 +93,26 @@ interface RowsProps {
   signed: boolean
   /** By new-side line, what to show under its row: the diff view's markers. */
   under?: ReadonlyMap<number, ReactNode> | undefined
+  /** The language to highlight the rows in; none leaves them plain. */
+  language?: Language | undefined
 }
 
-// No syntax highlighting, deliberately: the marks are the only colour the
-// code carries, so the eye lands on them.
-function CodeRows({ rows, marks = NO_MARKS, anchor, signed, under }: RowsProps) {
+/** A row's tokens: a hunk's header and meta rows stay plain, like a file of another language. */
+const tokensOf = (row: Row, language: Language | undefined): Token[] =>
+  language && row.kind !== 'header' && row.kind !== 'meta'
+    ? tokens(row.text, language)
+    : [{ text: row.text }]
+
+// The syntax is coloured under the marks, never over them: a mark's background
+// and the anchor's gutter are what the eye lands on first.
+function CodeRows({
+  rows,
+  marks = NO_MARKS,
+  anchor,
+  signed,
+  under,
+  language,
+}: RowsProps) {
   return (
     <>
       {rows.map((row, index) => {
@@ -104,6 +120,8 @@ function CodeRows({ rows, marks = NO_MARKS, anchor, signed, under }: RowsProps) 
           row.number === undefined ? [] : marks.filter((mark) => mark.line === row.number)
         const wholeLine = lineMarks.some((mark) => !isColumnMark(mark))
         const columns = lineMarks.filter(isColumnMark)
+        const lineTokens = tokensOf(row, language)
+        let column = 0
         const classes = [
           'tr-row',
           `tr-row--${row.kind}`,
@@ -123,14 +141,19 @@ function CodeRows({ rows, marks = NO_MARKS, anchor, signed, under }: RowsProps) 
                   <span className="tr-sign">{signOf(row)}</span>
                 )}
                 {columns.length
-                  ? segments(row.text, columns).map((segment, at) =>
-                      segment.marked ? (
-                        <mark key={at}>{segment.text}</mark>
+                  ? segments(row.text, columns).map((segment, at) => {
+                      const from = column
+                      column += segment.text.length
+                      const inner = spans(sliceTokens(lineTokens, from, column))
+                      return segment.marked ? (
+                        <mark key={at}>{inner}</mark>
                       ) : (
-                        <span key={at}>{segment.text}</span>
-                      ),
-                    )
-                  : row.text || ' '}
+                        <span key={at}>{inner}</span>
+                      )
+                    })
+                  : row.text
+                    ? spans(lineTokens)
+                    : ' '}
               </span>
             </div>
             {lineMarks
@@ -183,9 +206,11 @@ interface Props {
   /** The finding's line, set apart in the gutter. */
   anchor?: number | undefined
   label?: string
+  /** The language to highlight the code in; none leaves it plain. */
+  language?: Language | undefined
 }
 
-export function Excerpt({ excerpt, hunk, marks, anchor, label }: Props) {
+export function Excerpt({ excerpt, hunk, marks, anchor, label, language }: Props) {
   return (
     <CodeBlock
       rows={hunk ? parseHunk(hunk) : plainRows(excerpt)}
@@ -193,6 +218,7 @@ export function Excerpt({ excerpt, hunk, marks, anchor, label }: Props) {
       marks={marks}
       anchor={anchor}
       label={label}
+      language={language}
     />
   )
 }
