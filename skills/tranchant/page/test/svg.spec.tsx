@@ -39,6 +39,23 @@ test('a style with an external url is dropped; a plain one stays', () => {
   expect(clean).toContain('<rect/>')
 })
 
+test('a local url() in a style stays; an external one, quoted or escaped, does not', () => {
+  const clean = sanitizeSvg(
+    [
+      '<svg xmlns="http://www.w3.org/2000/svg">',
+      '<style>#d .node rect { stroke: url(#d-gradient) }</style>',
+      '<style>rect { fill: url( "#ok" ) } circle { fill: url("https://x") }</style>',
+      '<style>rect { fill: \\75rl(https://x) }</style>',
+      '<rect style="stroke: url(#d-gradient)"/>',
+      '</svg>',
+    ].join(''),
+  )
+  expect(clean).toContain('<style>#d .node rect { stroke: url(#d-gradient) }</style>')
+  expect(clean).not.toContain('https://x')
+  expect(clean).not.toContain('75rl')
+  expect(clean).toContain('<rect style="stroke: url(#d-gradient)"/>')
+})
+
 test('what is not SVG is refused', () => {
   expect(sanitizeSvg('<div>hi</div>')).toBeUndefined()
   expect(sanitizeSvg('<svg><rect')).toBeUndefined()

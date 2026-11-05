@@ -47,7 +47,7 @@ const SECURE = [
   'suppressErrorRendering',
   // An HTML label draws in a foreignObject, which the sanitizer drops with its text.
   'htmlLabels',
-  // elk is a stub (build.mjs): it would throw.
+  // Mermaid 11 bundles no elk layout: dagre draws every graph.
   'layout',
   // The page's palette, and CSS that would reach the whole page.
   'theme',
@@ -66,7 +66,6 @@ function configure(palette: Palette, dark: boolean) {
     secure: SECURE,
     htmlLabels: false,
     flowchart: { htmlLabels: false },
-    // elk is not bundled: `flowchart-elk` fails with its error, everything else is dagre.
     layout: 'dagre',
     theme: 'base',
     fontFamily: palette.font,

@@ -6,6 +6,10 @@ const REFERENCE_ATTRIBUTES = ['href', 'xlink:href']
 
 const isLocal = (reference: string) => reference.trim().startsWith('#')
 
+// A `url(#…)` points into the SVG (Mermaid's gradients); any other loads, and an escape could spell one.
+const unsafeCss = (css: string) =>
+  /@import|expression\(|\\/i.test(css) || /url\(\s*(?!['"]?#)/i.test(css)
+
 const XML_ENTITIES = new Set(['amp', 'lt', 'gt', 'quot', 'apos'])
 
 /** HTML's named entities (`&nbsp;`…), which XML does not define, as numeric ones. */
@@ -57,10 +61,7 @@ export function sanitizeSvg(source: string): string | undefined {
       element.remove()
       continue
     }
-    if (
-      element.localName === 'style' &&
-      /url\(|@import/i.test(element.textContent ?? '')
-    ) {
+    if (element.localName === 'style' && unsafeCss(element.textContent ?? '')) {
       element.remove()
       continue
     }
@@ -70,7 +71,7 @@ export function sanitizeSvg(source: string): string | undefined {
       if (
         name.startsWith('on') ||
         (REFERENCE_ATTRIBUTES.includes(name) && !isLocal(attribute.value)) ||
-        (name === 'style' && /url\(|expression\(/i.test(attribute.value))
+        (name === 'style' && unsafeCss(attribute.value))
       ) {
         element.removeAttribute(attribute.name)
       }

@@ -19,22 +19,6 @@ const { version } = JSON.parse(
   readFileSync(new URL('../../../.claude-plugin/plugin.json', import.meta.url), 'utf8'),
 )
 
-// Mermaid's elk layout is EPL-2.0, which the dependency review refuses: a stub.
-/** @type {import('esbuild').Plugin} */
-const noElk = {
-  name: 'no-elk',
-  setup(elk) {
-    elk.onResolve({ filter: /^elkjs(\/|$)/ }, (args) => ({
-      path: args.path,
-      namespace: 'no-elk',
-    }))
-    elk.onLoad({ filter: /.*/, namespace: 'no-elk' }, () => ({
-      contents:
-        "export default class { constructor() { throw new Error('The elk layout is not bundled') } }",
-    }))
-  },
-}
-
 /** @type {import('esbuild').BuildOptions & { metafile: true }} */
 const buildOptions = {
   // page.js, and the chunks it loads on demand (Mermaid) in chunks/, which the server serves.
@@ -57,7 +41,6 @@ const buildOptions = {
   banner: {
     js: '/* tranchant page: served by the tranchant skill on 127.0.0.1 only */',
   },
-  plugins: [noElk],
 }
 const PAGE = path.join(options.outdir, 'page.js')
 const CHUNKS = path.join(options.outdir, 'chunks')
@@ -69,7 +52,6 @@ if (options.watch) {
     // rebuild, and the server would serve no page until the next good one.
     write: false,
     plugins: [
-      noElk,
       {
         name: 'rebuilt',
         setup(rebuilt) {
@@ -112,6 +94,23 @@ if (options.watch) {
 }
 
 /**
+ * A package's license: its license file, else its README's License section
+ * (fastdom ships no file); undefined when it has neither.
+ * @param {string} dir
+ */
+function licenseText(dir) {
+  const files = readdirSync(dir)
+  const licenseFile = files.find((file) => /^licen[cs]e(\.|$)/i.test(file))
+  if (licenseFile) return readFileSync(path.join(dir, licenseFile), 'utf8').trim()
+  const readme = files.find((file) => /^readme(\.|$)/i.test(file))
+  if (!readme) return undefined
+  const section = /^(#+)\s*licen[cs]e\s*$([\s\S]*?)(?=^#{1,6}\s|(?![\s\S]))/im.exec(
+    readFileSync(path.join(dir, readme), 'utf8'),
+  )
+  return section?.[2]?.trim() || undefined
+}
+
+/**
  * Writes THIRD_PARTY_LICENSES.txt next to the bundle.
  * @param {import('esbuild').Metafile} metafile
  */
@@ -125,11 +124,8 @@ function writeLicenses(metafile) {
     .toSorted((a, b) => a.localeCompare(b))
     .map((dir) => {
       const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'))
-      const licenseFile = readdirSync(dir).find((file) => /^licen[cs]e(\.|$)/i.test(file))
-      if (!licenseFile) {
-        throw new Error(`${pkg.name} is bundled but ships no license file`)
-      }
-      const text = readFileSync(path.join(dir, licenseFile), 'utf8').trim()
+      const text = licenseText(dir)
+      if (!text) throw new Error(`${pkg.name} is bundled but ships no license text`)
       // Some (khroma) name no license in package.json: their license file says it.
       const name = pkg.license ? ` (${pkg.license})` : ''
       return `${pkg.name} ${pkg.version}${name}\n\n${text}\n`
