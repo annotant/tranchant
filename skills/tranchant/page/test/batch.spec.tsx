@@ -157,7 +157,7 @@ test('ours without an MR has no Post, and never asks for the account', async () 
   expect(askedAccount(server)).toBe(false)
 })
 
-test('ours with an MR posts too, the findings with a comment only, after the confirmation', async () => {
+test('ours with an MR posts every open finding, one without a comment written from its problem and fix', async () => {
   const [first, ...rest] = FINDINGS
   const server = await renderApp(
     payload({
@@ -171,13 +171,55 @@ test('ours with an MR posts too, the findings with a comment only, after the con
   fireEvent.click(button(/^Post all/))
   const dialog = screen.getByRole('alertdialog')
   await waitFor(() =>
-    expect(dialog.textContent).toContain('Post 4 comments on !5746 as me?'),
+    expect(dialog.textContent).toContain(
+      `Post ${FINDINGS.length} comments on !5746 as me?`,
+    ),
   )
+  const drafted = within(dialog).getByText(first!.title).closest('li')
+  expect(drafted?.textContent).toContain('written from its problem and fix')
   fireEvent.click(button('Confirm'))
   await waitFor(() => expect(server.posts).toHaveLength(1))
-  const ids = decisionsOf(server.posts[0]).map((decision) => decision.id)
-  expect(ids).not.toContain('f-01')
-  expect(ids).toHaveLength(4)
+  const decisions = decisionsOf(server.posts[0])
+  expect(decisions).toHaveLength(FINDINGS.length)
+  expect(decisions.find((decision) => decision.id === first!.id)).toEqual({
+    id: first!.id,
+    action: 'post',
+    comment: `${first!.problem}\n\n${first!.fix}`,
+  })
+  // A finding's own comment goes as is: the store posts it.
+  expect(decisions.find((decision) => decision.id === rest[0]!.id)).toEqual({
+    id: rest[0]!.id,
+    action: 'post',
+  })
+})
+
+test('Post counts every selected finding but the posted, and asks even for one', async () => {
+  const [first, second] = FINDINGS
+  const server = await renderApp(
+    payload({
+      review: {
+        mr: mergeRequest(),
+        findings: [withoutComment(first!), ...FINDINGS.slice(1)],
+      },
+      records: { [second!.id]: record('posted') },
+    }),
+    { username: 'me' },
+  )
+  for (const finding of [first!, second!]) {
+    fireEvent.click(screen.getByRole('checkbox', { name: `Select ${finding.title}` }))
+  }
+  const post = button(/^Post\b(?! all)/)
+  expect(post.textContent).toBe('Post 1')
+  fireEvent.click(post)
+  await waitFor(() =>
+    expect(screen.getByRole('alertdialog').textContent).toContain(
+      'Post 1 comment on !5746 as me?',
+    ),
+  )
+  expect(server.posts).toEqual([])
+  fireEvent.click(button('Confirm'))
+  await waitFor(() => expect(server.posts).toHaveLength(1))
+  expect(decisionsOf(server.posts[0]).map((decision) => decision.id)).toEqual([first!.id])
 })
 
 test('ours with an MR marks the findings with a comment, in the list', async () => {

@@ -11,8 +11,10 @@ released to the `stable` branch.
 
 - **Post on your own MR.** `/tranchant review` on a branch looks for its
   open merge request with `glab`; found, the page offers **Post a comment**
-  next to **Fix now**, names the MR in the header, and the batch bar posts the
-  findings that carry a comment. Posting waits until the MR's head is the commit reviewed.
+  next to **Fix now**, names the MR in the header, and the batch bar posts
+  every selected finding not posted yet: one with no comment posts the text
+  written from its problem and fix, which the confirmation names. Posting
+  waits until the MR's head is the commit reviewed.
 - **Syntax highlighting.** The diff, a finding's excerpt and hunk, a fix's
   changes and the summary's code blocks colour TypeScript, TSX, JavaScript
   and JSON, with annotant's highlighter; the marks stay on top. The dark
