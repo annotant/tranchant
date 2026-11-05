@@ -38,6 +38,7 @@ describe('languages', () => {
     expect(languageOfFile('README')).toBeUndefined()
     expect(languageOfFile('.ts')).toBeUndefined()
     expect(languageOfFile('src.ts/README')).toBeUndefined()
+    expect(languageOfFile('x.__proto__')).toBeUndefined()
   })
 
   test("reads a fence's word", () => {
@@ -48,7 +49,6 @@ describe('languages', () => {
     ).toEqual(['ts', 'ts', 'tsx', 'js', 'js', 'js', 'json', 'json'])
     expect(languageOfFence('python')).toBeUndefined()
     expect(languageOfFence('constructor')).toBeUndefined()
-    expect(languageOfFile('x.__proto__')).toBeUndefined()
     expect(languageOfFence('')).toBeUndefined()
     expect(languageOfFence(undefined)).toBeUndefined()
   })
@@ -65,63 +65,181 @@ describe('tokens', () => {
       ).toBe(line)
   })
 
-  test('color TypeScript keywords, strings, numbers and comments', () => {
+  test('color control words, storage words, types, numbers, operators and comments', () => {
     expect(colored("export const size: number = 0x1F + 2.5e3 // in 'px'", 'ts')).toEqual([
       'keyword:export',
-      'keyword:const',
-      'keyword:number',
+      'storage:const',
+      'type:number',
+      'operator:=',
       'number:0x1F',
+      'operator:+',
       'number:2.5e3',
       "comment:// in 'px'",
     ])
-    expect(colored('type A = `a ${b}` | "c" /* d */', 'ts')).toEqual([
-      'keyword:type',
-      'string:`a ${b}`',
+    expect(colored('if (!user) return a ?? b', 'js')).toEqual([
+      'keyword:if',
+      'operator:!',
+      'keyword:return',
+      'operator:??',
+    ])
+  })
+
+  test('color strings, and the code inside a template literal', () => {
+    expect(colored('type A = `a ${b.c(1)}` | "c" /* d */', 'ts')).toEqual([
+      'storage:type',
+      'type:A',
+      'operator:=',
+      'string:`a ',
+      'operator:${',
+      'function:c',
+      'number:1',
+      'operator:}',
+      'string:`',
+      'operator:|',
       'string:"c"',
       'comment:/* d */',
+    ])
+    expect(colored('`${a}${b} and ${c', 'js')).toEqual([
+      'string:`',
+      'operator:${',
+      'operator:}',
+      'operator:${',
+      'operator:}',
+      'string: and ${c',
+    ])
+  })
+
+  test("color a function's name, called or declared, a method's when called", () => {
+    expect(
+      colored('function guard(user: User): boolean { return check(user) }', 'ts'),
+    ).toEqual([
+      'storage:function',
+      'function:guard',
+      'type:User',
+      'type:boolean',
+      'keyword:return',
+      'function:check',
+    ])
+    expect(colored('items.map((item) => item.id).join()', 'js')).toEqual([
+      'function:map',
+      'storage:=>',
+      'function:join',
+    ])
+  })
+
+  test("color a type's name: declared, built, extended, in capitals, in a type position", () => {
+    expect(
+      colored('class Drawer extends React.Component<Props> implements Thing {}', 'tsx'),
+    ).toEqual([
+      'storage:class',
+      'type:Drawer',
+      'keyword:extends',
+      'type:React',
+      'type:Props',
+      'keyword:implements',
+      'type:Thing',
+    ])
+    expect(colored('const d = new Date(); const n = Number(x)', 'js')).toEqual([
+      'storage:const',
+      'operator:=',
+      'keyword:new',
+      'type:Date',
+      'storage:const',
+      'operator:=',
+      'function:Number',
+    ])
+  })
+
+  test('color constants: literals, and names in capitals', () => {
+    expect(colored('x = y ?? null || MAX_LINE * TAX', 'js')).toEqual([
+      'operator:=',
+      'operator:??',
+      'constant:null',
+      'operator:||',
+      'constant:MAX_LINE',
+      'operator:*',
+      'constant:TAX',
+    ])
+    expect(colored('return this.value === true', 'ts')).toEqual([
+      'keyword:return',
+      'variable:this',
+      'operator:===',
+      'constant:true',
     ])
   })
 
   test("read a TypeScript type's < > as no tag", () => {
     expect(colored('const a = <T>(b: Array<string>) => b', 'ts')).toEqual([
-      'keyword:const',
-      'keyword:string',
+      'storage:const',
+      'operator:=',
+      'type:T',
+      'type:Array',
+      'type:string',
+      'storage:=>',
     ])
-    expect(colored('useState<string>(x)', 'tsx')).toEqual(['keyword:string'])
+    expect(colored('useState<string>(x)', 'tsx')).toEqual([
+      'function:useState',
+      'type:string',
+    ])
   })
 
-  test('color JSX tags and attributes, in TSX and JavaScript', () => {
+  test('color JSX tags, components and attributes, in TSX and JavaScript', () => {
     const line = 'return <Button aria-label="Close" onClick={close}>Hi</Button>'
     const expected = [
       'keyword:return',
-      'tag:Button',
+      'component:Button',
       'attr:aria-label',
+      'operator:=',
       'string:"Close"',
       'attr:onClick',
-      'tag:Button',
+      'operator:=',
+      'component:Button',
     ]
     expect(colored(line, 'tsx')).toEqual(expected)
     expect(colored(line, 'js')).toEqual(expected)
+    expect(colored('<div className="cart"><Row key={item.id} /></div>', 'tsx')).toEqual([
+      'tag:div',
+      'attr:className',
+      'operator:=',
+      'string:"cart"',
+      'component:Row',
+      'attr:key',
+      'operator:=',
+      'tag:div',
+    ])
     // An attribute on a line of its own, its tag opened on a line before.
-    expect(colored("  className='row'", 'js')).toEqual(['attr:className', "string:'row'"])
+    expect(colored("  className='row'", 'js')).toEqual([
+      'attr:className',
+      'operator:=',
+      "string:'row'",
+    ])
   })
 
   test('read a comparison as no tag, JSX text or a keyword before a tag as none', () => {
     expect(colored('for (let i = 0; i < len; i++)', 'js')).toEqual([
       'keyword:for',
-      'keyword:let',
+      'storage:let',
+      'operator:=',
       'number:0',
+      'operator:++',
     ])
     expect(colored('if (a < b) x', 'tsx')).toEqual(['keyword:if'])
-    expect(colored('  Shop <span>Hi</span>', 'tsx')).toEqual(['tag:span', 'tag:span'])
-    expect(colored('x < new Date()', 'js')).toEqual(['keyword:new'])
+    expect(colored('  Shop <span>Hi there</span>', 'tsx')).toEqual([
+      'tag:span',
+      'tag:span',
+    ])
+    expect(colored('x < new Date()', 'js')).toEqual(['keyword:new', 'type:Date'])
     expect(colored('return <div>', 'tsx')).toEqual(['keyword:return', 'tag:div'])
-    expect(colored('ok ? <A /> : <B/>', 'js')).toEqual(['tag:A', 'tag:B'])
+    expect(colored('ok ? <A /> : <B/>', 'js')).toEqual([
+      'operator:?',
+      'component:A',
+      'component:B',
+    ])
   })
 
   test('read an apostrophe in JSX text as prose, no string', () => {
     expect(colored("<p>Don't save</p>", 'tsx')).toEqual(['tag:p', 'tag:p'])
-    expect(colored("f('a')", 'js')).toEqual(["string:'a'"])
+    expect(colored("f('a')", 'js')).toEqual(['function:f', "string:'a'"])
   })
 
   test("keep TypeScript's own words plain as keys", () => {
@@ -136,7 +254,7 @@ describe('tokens', () => {
   test('take linear time on a long hyphenated line, and leave a longer one plain', () => {
     const run = 'a-'.repeat(900)
     const start = performance.now()
-    expect(colored(run, 'tsx')).toEqual([])
+    expect(colored(run, 'tsx')).toEqual(['operator:-'])
     // Backtracking over 1800 characters would take seconds; a slow runner, not.
     expect(performance.now() - start).toBeLessThan(1000)
     const long = `const a = '${'x'.repeat(2000)}'`
@@ -144,30 +262,47 @@ describe('tokens', () => {
   })
 
   test('read a minus after a name as no hyphenated word', () => {
-    expect(colored('items[items.length-1] + n-i', 'js')).toEqual(['number:1'])
+    expect(colored('items[items.length-1] + n-i', 'js')).toEqual([
+      'operator:-',
+      'number:1',
+      'operator:+',
+    ])
     expect(colored('<a data-x={n-1} />', 'tsx')).toEqual([
       'tag:a',
       'attr:data-x',
+      'operator:=',
+      'operator:-',
       'number:1',
     ])
   })
 
   test("keep TypeScript's own words plain in JavaScript", () => {
-    expect(colored('let type = interface', 'js')).toEqual(['keyword:let'])
+    expect(colored('let type = interface as any', 'js')).toEqual([
+      'storage:let',
+      'operator:=',
+    ])
   })
 
   test("keep a property named like a keyword plain, not a spread's", () => {
-    expect(colored('node.type === a?.default', 'ts')).toEqual([])
-    expect(colored('f(...this)', 'ts')).toEqual(['keyword:this'])
+    expect(colored('node.type === a?.default', 'ts')).toEqual([
+      'operator:===',
+      'operator:?.',
+    ])
+    expect(colored('f(...this)', 'ts')).toEqual([
+      'function:f',
+      'operator:...',
+      'variable:this',
+    ])
   })
 
   test('color a string or a comment cut by the end of the line up to it', () => {
     expect(colored('const a = "never closed', 'ts')).toEqual([
-      'keyword:const',
+      'storage:const',
+      'operator:=',
       'string:"never closed',
     ])
-    expect(colored("x('ends on \\", 'js')).toEqual(["string:'ends on \\"])
-    expect(colored('a = `line one', 'ts')).toEqual(['string:`line one'])
+    expect(colored("x('ends on \\", 'js')).toEqual(['function:x', "string:'ends on \\"])
+    expect(colored('a = `line one', 'ts')).toEqual(['operator:=', 'string:`line one'])
     expect(colored('b /* open', 'js')).toEqual(['comment:/* open'])
     expect(colored('"key": "cut', 'json')).toEqual(['key:"key"', 'string:"cut'])
   })
@@ -175,6 +310,7 @@ describe('tokens', () => {
   test("color an escaped quote as its string's", () => {
     expect(colored(String.raw`'it\'s' + 1`, 'js')).toEqual([
       String.raw`string:'it\'s'`,
+      'operator:+',
       'number:1',
     ])
   })
@@ -188,9 +324,9 @@ describe('tokens', () => {
       'key:"n"',
       'number:-1.5e2',
       'key:"ok"',
-      'keyword:true',
+      'constant:true',
       'key:"x"',
-      'keyword:null',
+      'constant:null',
       'comment:// why',
     ])
   })
@@ -199,14 +335,20 @@ describe('tokens', () => {
 describe('sliceTokens', () => {
   test("cut a line's tokens at columns, a token astride a cut on both sides", () => {
     const line = tokens('const total = 1234 + x', 'ts')
-    expect(sliceTokens(line, 0, 5)).toEqual([{ text: 'const', kind: 'keyword' }])
+    expect(sliceTokens(line, 0, 5)).toEqual([{ text: 'const', kind: 'storage' }])
     expect(sliceTokens(line, 16, 18)).toEqual([{ text: '34', kind: 'number' }])
     expect(sliceTokens(line, 3, 16)).toEqual([
-      { text: 'st', kind: 'keyword' },
-      { text: ' total = ' },
+      { text: 'st', kind: 'storage' },
+      { text: ' total ' },
+      { text: '=', kind: 'operator' },
+      { text: ' ' },
       { text: '12', kind: 'number' },
     ])
-    expect(sliceTokens(line, 18, 99)).toEqual([{ text: ' + x' }])
+    expect(sliceTokens(line, 18, 99)).toEqual([
+      { text: ' ' },
+      { text: '+', kind: 'operator' },
+      { text: ' x' },
+    ])
     expect(sliceTokens(line, 7, 7)).toEqual([])
   })
 })
@@ -225,9 +367,10 @@ describe('Code', () => {
         (span) => `${span.className}:${span.textContent}`,
       ),
     ).toEqual([
-      'tr-tok tr-tok--keyword:const',
+      'tr-tok tr-tok--storage:const',
+      'tr-tok tr-tok--operator:=',
       'tr-tok tr-tok--string:"<b>x</b>"',
-      'tr-tok tr-tok--keyword:let',
+      'tr-tok tr-tok--storage:let',
     ])
   })
 
@@ -252,6 +395,7 @@ test('the summary highlights a block its fence marks ts, tsx, js, jsx or json, n
   expect(ts?.textContent).toBe('const a = 1')
   expect([...(ts?.querySelectorAll('.tr-tok') ?? [])].map((t) => t.textContent)).toEqual([
     'const',
+    '=',
     '1',
   ])
   expect(python?.textContent).toBe('import os')

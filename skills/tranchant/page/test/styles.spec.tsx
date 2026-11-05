@@ -45,7 +45,22 @@ const palette = (scheme: 'light' | 'dark') => {
 }
 
 /** The kinds `tokens` gives, each with a `.tr-tok--<kind>` rule. */
-const KINDS = ['keyword', 'string', 'number', 'comment', 'tag', 'attr', 'key']
+const KINDS = [
+  'keyword',
+  'storage',
+  'constant',
+  'number',
+  'variable',
+  'function',
+  'type',
+  'string',
+  'comment',
+  'tag',
+  'component',
+  'attr',
+  'operator',
+  'key',
+]
 
 /** By token kind, the `--tr-code-*` variable its rule colours it with. */
 const ruleVariables = () => {
@@ -69,21 +84,21 @@ for (const scheme of ['light', 'dark'] as const)
   test(`the ${scheme} token colours read at 4.5:1 on every code surface, under a mark too`, () => {
     const get = palette(scheme)
     const surfaces = ['bg', 'bg-2', 'added', 'removed'].map((name) => rgb(get(name))[0])
-    // A column mark over a line marked whole stacks both: not a case the test holds the
-    // dark palette to, where it would push every colour to white.
+    // Under a column mark the text takes the page's colour: the tokens' colours are
+    // held to the surfaces and the whole-line mark, the text's to the column mark too.
+    const marked = surfaces.map((surface) => over(get('mark'), surface))
     const backgrounds = surfaces.flatMap((surface) => [
       surface,
-      over(get('mark'), surface),
       over(get('mark-line'), surface),
     ])
     const colours = [...new Set(ruleVariables().values())].map(
-      (variable) => [variable, rgb(get(variable))[0]] as const,
+      (variable) => [variable, rgb(get(variable))[0], backgrounds] as const,
     )
-    const failing = [...colours, ['text', rgb(get('text'))[0]] as const].flatMap(
-      ([name, colour]) =>
-        backgrounds
-          .filter((background) => contrast(colour, background) < 4.5)
-          .map((background) => `${name} on ${background.map(Math.round).join(',')}`),
+    const text = ['text', rgb(get('text'))[0], [...backgrounds, ...marked]] as const
+    const failing = [...colours, text].flatMap(([name, colour, under]) =>
+      under
+        .filter((background) => contrast(colour, background) < 4.5)
+        .map((background) => `${name} on ${background.map(Math.round).join(',')}`),
     )
     expect(failing).toEqual([])
   })

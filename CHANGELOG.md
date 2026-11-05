@@ -11,8 +11,11 @@ released to the `stable` branch.
 
 - **Syntax highlighting.** The diff, a finding's excerpt and hunk, a fix's
   changes and the summary's code blocks colour TypeScript, TSX, JavaScript
-  and JSON, with annotant's highlighter; the marks stay on top. The dark
-  mark is lighter, so the text under it reads at 4.5:1.
+  and JSON after Monokai: control and storage words, constants, `this`,
+  functions, types, strings, comments, tags, components, attributes and
+  operators, the code inside a template literal's `${}` too. The marks stay
+  on top: under one the text takes the page's colour. The dark mark is
+  lighter, so that text reads at 4.5:1.
 
 ## 0.1.0 - 2026-11-04
 

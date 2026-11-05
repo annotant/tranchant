@@ -48,7 +48,7 @@ test("the excerpt is highlighted in the language of the finding's path", () => {
     name: 'Excerpt of src/people/usePeople.ts',
   })
   expect(
-    excerpt.querySelector('.tr-row[data-line="42"] .tr-tok--keyword')?.textContent,
+    excerpt.querySelector('.tr-row[data-line="42"] .tr-tok--storage')?.textContent,
   ).toBe('const')
 })
 

@@ -54,7 +54,14 @@ test('the code is highlighted in the language given, under the marks', () => {
   expect(row?.querySelector('.tr-text')?.textContent).toBe('const total = 1234 + x')
   // The mark cuts the number: its span, with the number's colour on each side and inside.
   expect(row?.querySelector('mark')?.textContent).toBe('23')
-  expect(tokensOf(row)).toEqual(['keyword:const', 'number:1', 'number:23', 'number:4'])
+  expect(tokensOf(row)).toEqual([
+    'storage:const',
+    'operator:=',
+    'number:1',
+    'number:23',
+    'number:4',
+    'operator:+',
+  ])
   expect(tokensOf(row?.querySelector('mark') ?? null)).toEqual(['number:23'])
   expect(tokensOf(rowOf(container, 2))).toEqual(['comment:// sum'])
 })
@@ -77,7 +84,7 @@ test('the code stays plain without a language, and a hunk header stays plain wit
   expect(tokensOf(container.querySelector('.tr-row--header'))).toEqual([])
   expect(tokensOf(container.querySelector('.tr-row--removed'))).toEqual([
     'keyword:return',
-    'keyword:false',
+    'constant:false',
   ])
 })
 

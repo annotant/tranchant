@@ -37,12 +37,13 @@ export const PAGE_CSS = `
   --tr-mark-line: rgba(255, 196, 0, 0.16);
   --tr-added: #e6f6ea;
   --tr-removed: #fbe9e9;
-  --tr-code-keyword: #8b2fb8;
-  --tr-code-string: #106634;
-  --tr-code-number: #9a4100;
-  --tr-code-comment: #526076;
-  --tr-code-tag: #1a5aab;
-  --tr-code-attr: #7a5000;
+  --tr-code-keyword: #c5074a;
+  --tr-code-storage: #0d6b7d;
+  --tr-code-constant: #742aff;
+  --tr-code-variable: #935000;
+  --tr-code-function: #4b6a0d;
+  --tr-code-string: #6b6212;
+  --tr-code-comment: #666251;
   --tr-radius: 6px;
 }
 @media (prefers-color-scheme: dark) {
@@ -68,12 +69,13 @@ export const PAGE_CSS = `
     --tr-mark-line: rgba(255, 196, 0, 0.09);
     --tr-added: #1f3a2a;
     --tr-removed: #3a2222;
-    --tr-code-keyword: #e0bdff;
-    --tr-code-string: #8fdca2;
-    --tr-code-number: #ffbb8a;
-    --tr-code-comment: #c4cdd8;
-    --tr-code-tag: #9ad0ff;
-    --tr-code-attr: #f2cc60;
+    --tr-code-keyword: #fc90b6;
+    --tr-code-storage: #66d9ef;
+    --tr-code-constant: #c3a1ff;
+    --tr-code-variable: #fd9a26;
+    --tr-code-function: #a6e22e;
+    --tr-code-string: #e6db74;
+    --tr-code-comment: #b4b1a1;
   }
 }
 
@@ -295,12 +297,16 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-row--marked .tr-text { background: var(--tr-mark-line); }
 .tr-row--anchor .tr-gutter { color: var(--tr-text); font-weight: 600; box-shadow: inset 3px 0 0 var(--tr-accent); }
 .tr-code mark { background: var(--tr-mark); color: inherit; border-radius: 2px; }
-.tr-tok--keyword { color: var(--tr-code-keyword); }
+.tr-tok--keyword, .tr-tok--operator, .tr-tok--tag { color: var(--tr-code-keyword); }
+.tr-tok--storage { color: var(--tr-code-storage); font-style: italic; }
+.tr-tok--constant, .tr-tok--number { color: var(--tr-code-constant); }
+.tr-tok--variable { color: var(--tr-code-variable); }
+.tr-tok--function, .tr-tok--component, .tr-tok--attr { color: var(--tr-code-function); }
+.tr-tok--type, .tr-tok--key { color: var(--tr-code-storage); }
 .tr-tok--string { color: var(--tr-code-string); }
-.tr-tok--number { color: var(--tr-code-number); }
 .tr-tok--comment { color: var(--tr-code-comment); font-style: italic; }
-.tr-tok--tag, .tr-tok--key { color: var(--tr-code-tag); }
-.tr-tok--attr { color: var(--tr-code-attr); }
+/* Under a mark the text takes the page's colour: the mark is what the eye lands on. */
+.tr-code mark .tr-tok { color: inherit; font-style: normal; }
 .tr-callout {
   position: relative; display: flex; margin: 0 0 4px;
   padding-left: min(calc(var(--tr-digits, 2ch) + 3ch + var(--tr-sign, 0ch) + var(--tr-col, 0) * 1ch), 50%);

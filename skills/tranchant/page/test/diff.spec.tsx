@@ -166,7 +166,7 @@ test('the view draws markers under their lines, notes on the header, and the ope
   expect(row42?.classList.contains('tr-row--anchor')).toBe(true)
   expect(row42?.querySelector('mark')?.textContent).toBe('people')
   // A .ts file's code is highlighted, its marks over the colours.
-  expect(row42?.querySelector('.tr-tok--keyword')?.textContent).toBe('const')
+  expect(row42?.querySelector('.tr-tok--storage')?.textContent).toBe('const')
   expect(screen.getByRole('note').textContent).toContain(
     'undefined when the drawer opens',
   )
@@ -260,7 +260,7 @@ test('the view highlights a file in the language of its extension, another stays
     screen.getByRole('region', { name: 'src/a.css' }).querySelector('.tr-tok'),
   ).toBeNull()
   expect(
-    screen.getByRole('region', { name: 'src/b.ts' }).querySelector('.tr-tok--keyword')
+    screen.getByRole('region', { name: 'src/b.ts' }).querySelector('.tr-tok--storage')
       ?.textContent,
   ).toBe('const')
 })
