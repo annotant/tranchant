@@ -198,7 +198,7 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
   const headSha = typeof file.headSha === 'string' ? file.headSha : ''
   const refs = file.mr?.diffRefs
   const mrHead = typeof refs?.headSha === 'string' ? refs.headSha : ''
-  // An ours review's branch may be ahead of or behind its MR: then its own range.
+  // MR refs at another head (an ours branch ahead of or behind its MR): the review's own range.
   const atHead =
     !!mrHead && !!headSha && (mrHead.startsWith(headSha) || headSha.startsWith(mrHead))
   const mrBase =

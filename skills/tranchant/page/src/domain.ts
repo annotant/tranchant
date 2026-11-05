@@ -63,7 +63,7 @@ export interface Finding {
   problem: string
   why: string
   fix: string
-  /** The text to post, whole; required when the review is `theirs`, optional on `ours`. */
+  /** The text to post, whole; required when the review is `theirs`, optional on `ours` with an `mr`. */
   comment?: string
   diagram?: Diagram
   related?: Related[]
@@ -290,23 +290,24 @@ export const plural = (count: number, noun: string) =>
   `${count} ${noun}${count === 1 ? '' : 's'}`
 
 /** What decides posting: the MR and the commit reviewed. */
-export type PostScope = Pick<Review, 'mr' | 'headSha'>
+export type PostScope = Pick<Review, 'ownership' | 'mr' | 'headSha'>
 
 /**
- * Why posting is off on a review with an MR, as the store refuses it: a
- * positioned comment needs the MR's head to be the commit reviewed.
+ * Why a review with an MR cannot post, as the store words it; undefined when
+ * it can, or has no MR to post on at all (no reason worth showing then).
  */
-export function postBlocker(review: PostScope): string | undefined {
+export function staleMrReason(review: PostScope): string | undefined {
   const head = review.mr?.diffRefs?.headSha
-  if (!head) return undefined
-  return head.startsWith(review.headSha) || review.headSha.startsWith(head)
-    ? undefined
+  if (!head || head.startsWith(review.headSha) || review.headSha.startsWith(head))
+    return undefined
+  return review.ownership === 'theirs'
+    ? 'the MR moved past the commit reviewed: review it again'
     : "push your branch first: the MR's head is not the one reviewed"
 }
 
 /** Posting needs an MR, whoever's, and its diff at the commit reviewed. */
 export const canPost = (review: PostScope) =>
-  !!review.mr?.diffRefs && !postBlocker(review)
+  !!review.mr?.diffRefs && !staleMrReason(review)
 
 /** A finding a batch or a shortcut may post as is: it has its text. */
 export const hasComment = (finding: Pick<Finding, 'comment'> | undefined) =>

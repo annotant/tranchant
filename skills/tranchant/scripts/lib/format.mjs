@@ -179,7 +179,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} problem Markdown, like `why` and `fix`; a heading renders as bold text.
  * @property {string} why
  * @property {string} fix
- * @property {string} [comment] The text to post, whole; required when `ownership` is `theirs`.
+ * @property {string} [comment] The text to post, whole; required when `ownership` is `theirs`, optional with an `mr` otherwise.
  * @property {Diagram} [diagram]
  * @property {Related[]} [related] Up to 4.
  * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
@@ -297,7 +297,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @typedef {object} Entry
  * @property {State} state
  * @property {Decision} [decision]
- * @property {string} [comment] `theirs`: the text as posted, when the reviewer edited it.
+ * @property {string} [comment] A post: the text as posted, when the reviewer edited it.
  * @property {Question} [question]
  * @property {Answer} [answer]
  * @property {string} [reason] `dropped`: the reviewer's words; `failed`: the error.
@@ -334,14 +334,16 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
 /**
  * Why the review's comments cannot be posted, or undefined when they can:
  * a positioned comment needs the MR's diff refs at the commit reviewed.
- * @param {{ headSha: string, mr?: { diffRefs?: { headSha: string } } }} review
+ * @param {{ headSha: string, ownership?: string, mr?: { diffRefs?: { headSha: string } } }} review
  * @returns {string | undefined}
  */
 export function postBlocker(review) {
   const head = review.mr?.diffRefs?.headSha
   if (!head) return 'the review has no mr.diffRefs'
   if (!head.startsWith(review.headSha) && !review.headSha.startsWith(head))
-    return "push your branch first: the MR's head is not the one reviewed"
+    return review.ownership === 'theirs'
+      ? 'the MR moved past the commit reviewed: review it again'
+      : "push your branch first: the MR's head is not the one reviewed"
   return undefined
 }
 

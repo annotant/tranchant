@@ -8,9 +8,9 @@ import {
   idsInBucket,
   openIds,
   orderedFindings,
-  postBlocker,
   type State,
   stateLabel,
+  staleMrReason,
 } from '../src/domain'
 import { FINDINGS, mergeRequest, ORDER, record, review } from './fixture'
 
@@ -74,10 +74,14 @@ test('post needs diff refs at the head reviewed, from open, dropped, skipped or 
   )
   const ahead = review('ours', { mr: mergeRequest('f'.repeat(40)) })
   expect(allows('post', 'open', ahead)).toBe(false)
-  expect(postBlocker(ahead)).toBe(
+  expect(staleMrReason(ahead)).toBe(
     "push your branch first: the MR's head is not the one reviewed",
   )
-  expect(postBlocker(ours)).toBeUndefined()
+  expect(staleMrReason(ours)).toBeUndefined()
+  expect(staleMrReason(review('ours'))).toBeUndefined()
+  expect(staleMrReason(review('theirs', { mr: mergeRequest('f'.repeat(40)) }))).toBe(
+    'the MR moved past the commit reviewed: review it again',
+  )
   const noRefs = { ...review('theirs'), mr: { project: 'x', iid: 1, url: 'https://x' } }
   expect(allows('post', 'open', noRefs)).toBe(false)
 })

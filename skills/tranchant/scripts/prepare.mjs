@@ -25,6 +25,8 @@ import { SKILL_DIR, STATE_ROOT } from './lib/project.mjs'
 
 const DEFAULT_RECIPE = path.join(SKILL_DIR, '..', '..', 'agents', 'review', 'recipe.json')
 const LENS_NAME = /^[\w-]{1,40}$/
+// The branch's MR is optional: an unreachable GitLab must not hold the review.
+const GLAB_TIMEOUT_MS = 20_000
 const MAX_LENSES = 12
 const run = promisify(execFile)
 
@@ -215,28 +217,45 @@ function skip(reason) {
 async function branchMergeRequest(project, branch) {
   const glab = process.env.TRANCHANT_GLAB || 'glab'
   if (branch === 'HEAD') return skip('HEAD is detached')
+  // GitLab knows the branch by its own name, not by the remote's ref.
+  const name = branch.replace(/^origin\//, '')
   let mr
   try {
     // From the project: glab takes the GitLab host from the checkout's remote.
-    const { stdout } = await run(glab, ['mr', 'view', branch, '-F', 'json'], {
+    const { stdout } = await run(glab, ['mr', 'view', name, '-F', 'json'], {
       cwd: project,
       maxBuffer: 16 * 1024 * 1024,
+      timeout: GLAB_TIMEOUT_MS,
     })
     mr = JSON.parse(stdout)
   } catch (error) {
-    return skip(`glab found none for ${branch}: ${firstWords(error)}`)
+    const killed = error && typeof error === 'object' && 'killed' in error && error.killed
+    return skip(
+      killed
+        ? `glab did not answer for ${branch} within ${GLAB_TIMEOUT_MS / 1000} s`
+        : `glab cannot say for ${branch}: ${firstWords(error)}`,
+    )
   }
   if (mr?.state !== 'opened') return skip(`the merge request of ${branch} is not open`)
-  if (mr.source_branch !== branch.replace(/^origin\//, ''))
+  if (mr.source_branch !== name)
     return skip(`glab answered the merge request of ${mr?.source_branch}`)
   const refs = mr.diff_refs
   const sha = /^[0-9a-f]{7,64}$/
   if (
     !Number.isInteger(mr.iid) ||
     typeof mr.web_url !== 'string' ||
+    !/^https?:\/\//.test(mr.web_url) ||
     ![refs?.base_sha, refs?.head_sha, refs?.start_sha].every((one) => sha.test(one))
   )
-    return skip(`glab read the merge request of ${branch} without its iid or diff_refs`)
+    return skip(
+      `glab read the merge request of ${branch} without its iid, url or diff_refs`,
+    )
+  // The diff runs from the MR's base: a checkout behind the target branch lacks it.
+  if (!(await commitOf(project, refs.base_sha))) {
+    await git(project, ['fetch', '--quiet', 'origin', refs.base_sha]).catch(() => {})
+    if (!(await commitOf(project, refs.base_sha)))
+      return skip(`commit ${refs.base_sha}, the base of !${mr.iid}, is not in ${project}`)
+  }
   const where = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/\d+/.exec(mr.web_url)
   return {
     project: where?.[1] ?? mr.project_id,

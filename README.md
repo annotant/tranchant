@@ -3,7 +3,7 @@
 <p align="center">
   <strong>Settle a code review, one finding at a time, from a page.</strong><br>
   A <a href="https://claude.com/claude-code">Claude Code</a> plugin that turns a review's
-  findings into fixes on your branch, or comments on someone else's merge request.
+  findings into fixes on your branch, or comments on a merge request, yours or someone else's.
 </p>
 
 <p align="center">
@@ -81,7 +81,8 @@ lenses review a change against the project's conventions and general
 front-end knowledge, not against one organisation's rulebook. Each finding
 is anchored on its line with an excerpt and marks on the exact spots, worded
 as a problem, why it matters and a fix, with the comment to post when the
-change is someone else's.
+change is someone else's, or when it is yours with an MR and the finding is
+worth posting.
 
 The verifier (`agents/review/verifier.md`) re-reads the code behind every
 finding, checks the anchor and the claim, removes what it cannot confirm,
@@ -158,8 +159,8 @@ In the page:
 - **Post as written** / **Edit & post** put the comment on the MR, as suggested or
   as you rewrote it. The author sees your name: the comment is posted with
   your `glab` login. On your own branch with an MR, **Post a comment** opens
-  the comment to write or edit first, prefilled from the finding when it has
-  none; it is disabled until the MR's head is the commit reviewed (push your
+  the comment to write or edit first, prefilled from its problem and fix when the
+  finding has no comment; it is disabled until the MR's head is the commit reviewed (push your
   branch, then review again).
 - **Drop** records why the finding is wrong or intentional; **Skip** defers
   it.

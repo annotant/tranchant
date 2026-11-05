@@ -303,10 +303,29 @@ test('prepare.mjs keeps a branch ours, with its open merge request when glab fin
   await writeFile(failing, '#!/bin/sh\necho "no open merge request" >&2\nexit 1\n')
   await chmod(failing, 0o755)
   const cases = {
-    none: [failing, 'glab found none for feature/cart: no open merge request'],
+    none: [failing, 'glab cannot say for feature/cart: no open merge request'],
     closed: [await fake('glab-closed', { ...mr, state: 'merged' }), 'is not open'],
-    missing: [path.join(bin, 'nowhere'), 'glab found none for feature/cart'],
+    missing: [path.join(bin, 'nowhere'), 'glab cannot say for feature/cart'],
+    another: [
+      await fake('glab-another', { ...mr, source_branch: 'other' }),
+      'glab answered the merge request of other',
+    ],
+    unfetched: [
+      await fake('glab-unfetched', {
+        ...mr,
+        diff_refs: { ...mr.diff_refs, base_sha: 'c'.repeat(40) },
+      }),
+      `commit ${'c'.repeat(40)}, the base of !14, is not in`,
+    ],
   }
+  // A remote's ref names the branch as GitLab knows it.
+  await git('update-ref', 'refs/remotes/origin/feature/cart', head)
+  const remote = await prepare(dir, ['origin/feature/cart'], {
+    TRANCHANT_GLAB: await fake('glab-remote', mr),
+  })
+  assert.equal(remote.code, 0, remote.stdout + remote.stderr)
+  assert.equal((await prepared(remote.stdout)).envelope.mr?.iid, 14)
+
   for (const [name, [glab, why]] of Object.entries(cases)) {
     const ran = await prepare(dir, [], { TRANCHANT_GLAB: glab })
     assert.equal(ran.code, 0, `${name}: ${ran.stdout}${ran.stderr}`)

@@ -6,8 +6,8 @@ import {
   type DecisionInput,
   type Finding,
   type FindingRecord,
-  postBlocker,
   postsFrom,
+  staleMrReason,
   type Review,
   STATE_DETAILS,
   stateLabel,
@@ -166,7 +166,7 @@ export function FindingDetail({
   const theirs = review.ownership === 'theirs'
   // Ours with an MR: fixing comes first, posting is the secondary choice.
   const oursWithMr = !theirs && !!review.mr?.diffRefs
-  const blocker = postBlocker(review)
+  const blocker = staleMrReason(review)
   const blocked = !!blocker && !disabled && postsFrom(state)
   const tag = tagOf(finding)
   const lastRun = record?.runs.at(-1)
