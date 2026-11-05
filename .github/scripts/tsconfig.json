@@ -1,0 +1,4 @@
+{
+  "extends": "../../skills/tranchant/scripts/tsconfig.json",
+  "include": ["**/*.mjs"]
+}
