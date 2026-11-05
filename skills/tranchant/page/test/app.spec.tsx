@@ -342,6 +342,11 @@ test('a fixed finding shows the files its fix wrote and their diff on demand', a
     within(changes).getByLabelText('Diff of src/api/guard.ts').textContent,
   ).toContain('if (admin && sameTenant) return')
   expect(within(changes).getByText('new file')).toBeDefined()
+  expect(
+    within(changes)
+      .getByLabelText('Diff of src/api/new.ts')
+      .querySelector('.tr-tok--keyword')?.textContent,
+  ).toBe('export')
   fireEvent.click(within(changes).getByRole('button', { name: 'Hide changes' }))
   expect(screen.queryByRole('region', { name: 'Changes of the fix' })).toBeNull()
 })

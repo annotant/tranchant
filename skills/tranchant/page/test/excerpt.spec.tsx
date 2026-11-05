@@ -11,7 +11,12 @@ const rowOf = (container: HTMLElement, line: number) =>
 
 test('a column mark highlights exactly its columns', () => {
   const { container } = render(
-    <Excerpt excerpt={bug.excerpt} marks={bug.marks} anchor={bug.line} />,
+    <Excerpt
+      excerpt={bug.excerpt}
+      marks={bug.marks}
+      anchor={bug.line}
+      language={undefined}
+    />,
   )
   const row = rowOf(container, 42)
   expect(row?.querySelector('mark')?.textContent).toBe('people')
@@ -22,7 +27,9 @@ test('a column mark highlights exactly its columns', () => {
 })
 
 test('a whole-line mark marks the row, and a note is a callout under its line', () => {
-  const { container } = render(<Excerpt excerpt={bug.excerpt} marks={bug.marks} />)
+  const { container } = render(
+    <Excerpt excerpt={bug.excerpt} marks={bug.marks} language={undefined} />,
+  )
   expect(rowOf(container, 44)?.classList.contains('tr-row--marked')).toBe(true)
   expect(rowOf(container, 44)?.querySelector('mark')).toBeNull()
   const note = screen.getByRole('note')
@@ -41,21 +48,25 @@ const tokensOf = (row: Element | null) =>
 test('the code is highlighted in the language given, under the marks', () => {
   const excerpt = { startLine: 1, lines: ['const total = 1234 + x', '// sum'] }
   const { container } = render(
-    <Excerpt excerpt={excerpt} marks={[{ line: 1, from: 16, to: 18 }]} language="ts" />,
+    <Excerpt excerpt={excerpt} marks={[{ line: 1, from: 15, to: 17 }]} language="ts" />,
   )
   const row = rowOf(container, 1)
   expect(row?.querySelector('.tr-text')?.textContent).toBe('const total = 1234 + x')
-  // The mark cuts the number: its span, then the number's colour on each side.
-  expect(row?.querySelector('mark')?.textContent).toBe('34')
-  expect(tokensOf(row)).toEqual(['keyword:const', 'number:12', 'number:34'])
-  expect(tokensOf(row?.querySelector('mark') ?? null)).toEqual(['number:34'])
+  // The mark cuts the number: its span, with the number's colour on each side and inside.
+  expect(row?.querySelector('mark')?.textContent).toBe('23')
+  expect(tokensOf(row)).toEqual(['keyword:const', 'number:1', 'number:23', 'number:4'])
+  expect(tokensOf(row?.querySelector('mark') ?? null)).toEqual(['number:23'])
   expect(tokensOf(rowOf(container, 2))).toEqual(['comment:// sum'])
 })
 
 test('the code stays plain without a language, and a hunk header stays plain with one', () => {
   const excerpt = { startLine: 1, lines: ['const a = 1'] }
   const plain = render(
-    <Excerpt excerpt={excerpt} marks={[{ line: 1, from: 0, to: 5 }]} />,
+    <Excerpt
+      excerpt={excerpt}
+      marks={[{ line: 1, from: 0, to: 5 }]}
+      language={undefined}
+    />,
   )
   expect(plain.container.querySelector('.tr-tok')).toBeNull()
   expect(plain.container.querySelector('mark')?.textContent).toBe('const')
@@ -71,7 +82,7 @@ test('the code stays plain without a language, and a hunk header stays plain wit
 })
 
 test('the gutter starts at the excerpt start line', () => {
-  const { container } = render(<Excerpt excerpt={bug.excerpt} />)
+  const { container } = render(<Excerpt excerpt={bug.excerpt} language={undefined} />)
   const numbers = [...container.querySelectorAll('.tr-gutter')].map((g) => g.textContent)
   expect(numbers[0]).toBe('36')
   expect(numbers.at(-1)).toBe('46')
@@ -125,6 +136,7 @@ test('a hunk is shown instead of the excerpt, coloured, with marks by new-side l
       hunk={guard.hunk}
       marks={guard.marks}
       anchor={guard.line}
+      language={undefined}
     />,
   )
   const added = container.querySelectorAll('.tr-row--added')

@@ -44,17 +44,40 @@ const palette = (scheme: 'light' | 'dark') => {
   }
 }
 
+/** The kinds `tokens` gives, each with a `.tr-tok--<kind>` rule. */
+const KINDS = ['keyword', 'string', 'number', 'comment', 'tag', 'attr', 'key']
+
+/** By token kind, the `--tr-code-*` variable its rule colours it with. */
+const ruleVariables = () => {
+  const byKind = new Map<string, string>()
+  for (const [, kinds, variable] of PAGE_CSS.matchAll(
+    /((?:\.tr-tok--\w+(?:,\s*)?)+)\s*\{[^}]*color:\s*var\(--tr-([\w-]+)\)/g,
+  ))
+    for (const [, kind] of kinds!.matchAll(/\.tr-tok--(\w+)/g))
+      byKind.set(kind!, variable!)
+  return byKind
+}
+
+test('every token kind has a rule, and the rules name the palette variables', () => {
+  const rules = ruleVariables()
+  expect([...rules.keys()].toSorted()).toEqual(KINDS.toSorted())
+  for (const scheme of ['light', 'dark'] as const)
+    for (const variable of rules.values()) expect(palette(scheme)(variable)).toBeTruthy()
+})
+
 for (const scheme of ['light', 'dark'] as const)
   test(`the ${scheme} token colours read at 4.5:1 on every code surface, under a mark too`, () => {
     const get = palette(scheme)
     const surfaces = ['bg', 'bg-2', 'added', 'removed'].map((name) => rgb(get(name))[0])
-    // The line's mark under a column's: a mark on a line marked whole.
-    const backgrounds = surfaces.flatMap((surface) => {
-      const line = over(get('mark-line'), surface)
-      return [surface, over(get('mark'), surface), line, over(get('mark'), line)]
-    })
-    const colours = ['keyword', 'string', 'number', 'comment', 'tag', 'attr'].map(
-      (kind) => [`code-${kind}`, rgb(get(`code-${kind}`))[0]] as const,
+    // A column mark over a line marked whole stacks both: not a case the test holds the
+    // dark palette to, where it would push every colour to white.
+    const backgrounds = surfaces.flatMap((surface) => [
+      surface,
+      over(get('mark'), surface),
+      over(get('mark-line'), surface),
+    ])
+    const colours = [...new Set(ruleVariables().values())].map(
+      (variable) => [variable, rgb(get(variable))[0]] as const,
     )
     const failing = [...colours, ['text', rgb(get('text'))[0]] as const].flatMap(
       ([name, colour]) =>

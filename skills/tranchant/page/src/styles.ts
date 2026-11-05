@@ -64,16 +64,16 @@ export const PAGE_CSS = `
     --tr-warn-bg: #3a2f14;
     --tr-danger: #e9807c;
     --tr-danger-bg: #3a2222;
-    --tr-mark: rgba(255, 196, 0, 0.25);
+    --tr-mark: rgba(255, 196, 0, 0.22);
     --tr-mark-line: rgba(255, 196, 0, 0.09);
     --tr-added: #1f3a2a;
     --tr-removed: #3a2222;
-    --tr-code-keyword: #eedbff;
-    --tr-code-string: #c0ecca;
-    --tr-code-number: #ffdbc0;
-    --tr-code-comment: #dde2e9;
-    --tr-code-tag: #c8e5ff;
-    --tr-code-attr: #f7e09c;
+    --tr-code-keyword: #e0bdff;
+    --tr-code-string: #8fdca2;
+    --tr-code-number: #ffbb8a;
+    --tr-code-comment: #c4cdd8;
+    --tr-code-tag: #9ad0ff;
+    --tr-code-attr: #f2cc60;
   }
 }
 
@@ -291,7 +291,6 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-sign { color: var(--tr-muted); }
 .tr-row--added { background: var(--tr-added); }
 .tr-row--removed { background: var(--tr-removed); }
-.tr-row--removed .tr-text { color: var(--tr-muted); }
 .tr-row--header, .tr-row--meta { color: var(--tr-muted); font-style: italic; }
 .tr-row--marked .tr-text { background: var(--tr-mark-line); }
 .tr-row--anchor .tr-gutter { color: var(--tr-text); font-weight: 600; box-shadow: inset 3px 0 0 var(--tr-accent); }

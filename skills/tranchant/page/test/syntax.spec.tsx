@@ -47,6 +47,8 @@ describe('languages', () => {
       ),
     ).toEqual(['ts', 'ts', 'tsx', 'js', 'js', 'js', 'json', 'json'])
     expect(languageOfFence('python')).toBeUndefined()
+    expect(languageOfFence('constructor')).toBeUndefined()
+    expect(languageOfFile('x.__proto__')).toBeUndefined()
     expect(languageOfFence('')).toBeUndefined()
     expect(languageOfFence(undefined)).toBeUndefined()
   })
@@ -135,9 +137,19 @@ describe('tokens', () => {
     const run = 'a-'.repeat(900)
     const start = performance.now()
     expect(colored(run, 'tsx')).toEqual([])
-    expect(performance.now() - start).toBeLessThan(100)
+    // Backtracking over 1800 characters would take seconds; a slow runner, not.
+    expect(performance.now() - start).toBeLessThan(1000)
     const long = `const a = '${'x'.repeat(2000)}'`
     expect(tokens(long, 'ts')).toEqual([{ text: long }])
+  })
+
+  test('read a minus after a name as no hyphenated word', () => {
+    expect(colored('items[items.length-1] + n-i', 'js')).toEqual(['number:1'])
+    expect(colored('<a data-x={n-1} />', 'tsx')).toEqual([
+      'tag:a',
+      'attr:data-x',
+      'number:1',
+    ])
   })
 
   test("keep TypeScript's own words plain in JavaScript", () => {

@@ -40,12 +40,15 @@ const BY_FENCE: Readonly<Record<string, Language>> = {
 export function languageOfFile(path: string): Language | undefined {
   const name = path.slice(path.lastIndexOf('/') + 1)
   const dot = name.lastIndexOf('.')
-  return dot > 0 ? BY_EXTENSION[name.slice(dot + 1).toLowerCase()] : undefined
+  const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+  // `hasOwn`: `.constructor` or ```` ```__proto__ ```` would read a prototype's property as a language.
+  return Object.hasOwn(BY_EXTENSION, extension) ? BY_EXTENSION[extension] : undefined
 }
 
 /** The language a code block's fence names (```` ```tsx ````); none for any other. */
 export function languageOfFence(word: string | undefined): Language | undefined {
-  return word ? BY_FENCE[word.toLowerCase()] : undefined
+  const name = word?.toLowerCase() ?? ''
+  return Object.hasOwn(BY_FENCE, name) ? BY_FENCE[name] : undefined
 }
 
 const KEYWORDS = new Set(
@@ -70,7 +73,7 @@ const TS_KEYWORDS = new Set(
 )
 
 // A comment, or a string, runs to the end of the line when it is not closed there:
-// a diff's line may be cut in the middle of either.
+// one over several lines is seen one line at a time.
 const COMMENT = String.raw`\/\/.*|\/\*(?:[^*]|\*(?!\/))*(?:\*\/|$)`
 const QUOTED = (quote: string) =>
   String.raw`${quote}(?:[^${quote}\\]|\\.)*(?:${quote}|\\?$)`
@@ -82,8 +85,8 @@ const NUMBER = String.raw`\b(?:0[xXbBoO][\da-fA-F_]+n?|\d[\d_]*(?:\.[\d_]*)?(?:[
  * One line of JavaScript or TypeScript: a comment, a string (a template
  * literal up to its next backtick, `${}` included; a quote in a regular
  * expression's literal opens one too), with JSX a `<` or `</` and the name after
- * it (`tokens` tells a tag from a comparison or a type), a number, then a
- * word, with JSX its hyphens included (`aria-label`). A word is matched whole,
+ * it (`opensTag` tells a tag from a type; a comparison's `<` has a space after it), a number, then a
+ * word, with JSX its hyphens included (`aria-label`, never `length-1`). A word is matched whole,
  * never retried from inside: one pass over the line, however long.
  */
 const script = (jsx: boolean) =>
@@ -94,7 +97,9 @@ const script = (jsx: boolean) =>
       // Without JSX, the same groups, never matched (`(?!)` always fails).
       String.raw`${jsx ? '' : '(?!)'}(<\/?)([A-Za-z][\w.:-]*)`,
       `(${NUMBER})`,
-      jsx ? String.raw`([A-Za-z_$][\w$]*(?:-[\w$]+)*)` : String.raw`([A-Za-z_$][\w$]*)`,
+      jsx
+        ? String.raw`([A-Za-z_$][\w$]*(?:-[A-Za-z_$][\w$]*)*)`
+        : String.raw`([A-Za-z_$][\w$]*)`,
     ].join('|'),
     'g',
   )
@@ -175,7 +180,8 @@ function opensTag(line: string, at: number) {
 
 /**
  * Whether `word`, at `at` in `line`, is a keyword: not a property's name after
- * `.`, nor TypeScript's word as a key before `:` (`{ type: 'a' }`).
+ * `.` (a spread's `...this` is one), nor TypeScript's own word as a key before
+ * `:` (`{ type: 'a' }`), where `default:` stays a keyword.
  */
 function isKeyword(word: string, language: Language, line: string, at: number) {
   if (line[at - 1] === '.' && line[at - 2] !== '.') return false

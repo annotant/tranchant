@@ -42,6 +42,16 @@ function renderDetail({
 
 const button = (name: string | RegExp) => screen.queryByRole('button', { name })
 
+test("the excerpt is highlighted in the language of the finding's path", () => {
+  renderDetail()
+  const excerpt = screen.getByRole('figure', {
+    name: 'Excerpt of src/people/usePeople.ts',
+  })
+  expect(
+    excerpt.querySelector('.tr-row[data-line="42"] .tr-tok--keyword')?.textContent,
+  ).toBe('const')
+})
+
 test('ours offers Fix now, Drop and Skip, never a post', () => {
   renderDetail()
   expect(button('Fix now')).not.toBeNull()

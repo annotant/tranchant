@@ -94,17 +94,17 @@ interface RowsProps {
   /** By new-side line, what to show under its row: the diff view's markers. */
   under?: ReadonlyMap<number, ReactNode> | undefined
   /** The language to highlight the rows in; none leaves them plain. */
-  language?: Language | undefined
+  language: Language | undefined
 }
 
-/** A row's tokens: a hunk's header and meta rows stay plain, like a file of another language. */
+// A hunk's header and meta rows stay plain, like a file of another language.
 const tokensOf = (row: Row, language: Language | undefined): Token[] =>
   language && row.kind !== 'header' && row.kind !== 'meta'
     ? tokens(row.text, language)
     : [{ text: row.text }]
 
-// The syntax is coloured under the marks, never over them: a mark's background
-// and the anchor's gutter are what the eye lands on first.
+// A mark wraps the tokens it covers, its background over their colours: the
+// mark and the anchor's gutter are what the eye lands on first.
 function CodeRows({
   rows,
   marks = NO_MARKS,
@@ -207,7 +207,7 @@ interface Props {
   anchor?: number | undefined
   label?: string
   /** The language to highlight the code in; none leaves it plain. */
-  language?: Language | undefined
+  language: Language | undefined
 }
 
 export function Excerpt({ excerpt, hunk, marks, anchor, label, language }: Props) {
