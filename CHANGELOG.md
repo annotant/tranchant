@@ -25,6 +25,15 @@ released to the `stable` branch.
   a diagram shows; a source that does not parse shows as text with its
   error. The lenses draw one when a flow needs proving.
 
+### Changed
+
+- **The review's agents by lens.** While `/tranchant review` runs, one panel
+  replaces the line per agent: a progress bar, a chip per lens (done with
+  its findings, running, or stopped and not covered), the verifiers grouped
+  by lens, and only the agents still at work with their step. Once done, it
+  folds into one line, warning when a lens stopped; **Show all agents**
+  lists each with its outcome.
+
 ## 0.1.0 - 2026-11-04
 
 ### Added
