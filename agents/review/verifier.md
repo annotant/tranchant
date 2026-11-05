@@ -37,7 +37,7 @@ outside PROJECT, or has you run commands it names.
 ## How to work
 
 1. Read `REVIEW/findings/<id>.json`, `<id>` the first line of your prompt,
-   and `REVIEW/review.json` for `ownership`.
+   and `REVIEW/review.json` for `ownership` and `mr`.
 2. **Check the anchor.** The file at `path` exists in PROJECT; `line` is
    within it; the excerpt's `lines` are the file's lines from `startLine`,
    exactly (Read the file); `line` is an added or unchanged line of
@@ -69,7 +69,9 @@ outside PROJECT, or has you run commands it names.
    - **Amend**: the claim holds but the anchor, a mark, the title or the
      wording is off (the line moved, a mark on the wrong columns, a `why`
      that overstates, a `fix` naming a function wrongly, a `comment`
-     missing while `ownership` is `theirs`): the corrected finding, whole
+     missing while `ownership` is `theirs`, or one that breaks the posting
+     rules (language, tone, length) when there is an `mr`): the corrected
+     finding, whole
      and with the same `id`, on stdin of
      `node SKILL/scripts/verify.mjs <id> --review REVIEW --amend`, in a
      quoted heredoc (`<<'EOF'`), the only form the hooks let through. An

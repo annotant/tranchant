@@ -41,9 +41,11 @@ wrong.
   page shows it in progress, and each finding appears as the producer adds
   it, until it marks the review complete.
 - **Ours or theirs.** On your own branch, a finding is fixed in place, with
-  the context you add. On someone else's MR, a finding becomes a comment you
-  approve as written or edit first; you can still fix it locally when you
-  checked their branch out.
+  the context you add; when the branch already has an open MR, you can post
+  a finding on it instead, as a question for whoever reviews it or a note to
+  keep. On someone else's MR, a finding becomes a comment you approve as
+  written or edit first; you can still fix it locally when you checked their
+  branch out.
 - **One shot, or piece by piece.** Fix or post everything, only the
   findings safe to auto-fix, or a selection. A batch is one request; each
   finding keeps its own state.
@@ -126,7 +128,7 @@ run script.
 ## Use
 
 ```
-/tranchant review                     # review the current branch, findings streamed to the page
+/tranchant review                     # review the current branch (and its open MR), findings streamed to the page
 /tranchant review feature/cart        # another branch, against the default branch
 /tranchant review <merge request url> # someone else's MR, read with glab
 /tranchant review ../other-repo       # another repository, at its current branch
@@ -139,7 +141,10 @@ run script.
 the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)).
 A lens whose globs the change does not touch is skipped. Three review agents
 run at a time; nothing is written in the reviewed working tree (a merge
-request's head is fetched when the checkout lacks it).
+request's head is fetched when the checkout lacks it). On a branch, `glab`
+looks for the branch's open MR: found, the page offers posting next to
+fixing; not found, or `glab` missing or logged out, the review goes on with
+fixes only.
 
 In the page:
 
@@ -152,7 +157,10 @@ In the page:
   the fix needs a choice the agent cannot make.
 - **Post as written** / **Edit & post** put the comment on the MR, as suggested or
   as you rewrote it. The author sees your name: the comment is posted with
-  your `glab` login.
+  your `glab` login. On your own branch with an MR, **Post a comment** opens
+  the comment to write or edit first, prefilled from the finding when it has
+  none; it is disabled until the MR's head is the commit reviewed (push your
+  branch, then review again).
 - **Drop** records why the finding is wrong or intentional; **Skip** defers
   it.
 - The bar at the top applies one action to all findings, to the

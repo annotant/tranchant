@@ -2,7 +2,8 @@
 // prepare.mjs [<branch> | <merge request url>] [--recipe <recipe.json>]
 // What `/tranchant review` runs first, from the session's folder: finds the
 // change (the current branch, or <branch>, against the repository's default
-// branch, `ours`; a merge request read with `glab mr view`, `theirs`), reads
+// branch, `ours`, with the branch's open merge request when glab finds one;
+// a merge request read with `glab mr view`, `theirs`), reads
 // the recipe (the plugin's agents/review/recipe.json unless --recipe), writes
 // the review's envelope, `reviewing` with no finding yet, to
 // <state>/inbox/<id>.json and prints `INBOX <file>`, then one `LENS <json>`
@@ -198,9 +199,61 @@ async function mergeRequest(project, url) {
   }
 }
 
+/** Says on stderr why the branch's review has no MR to post on. @param {string} reason */
+function skip(reason) {
+  console.error(`no merge request to post on: ${oneLine(reason)}`)
+  return undefined
+}
+
+/**
+ * The open merge request whose source branch is `branch`, as `glab mr view`
+ * reads it; undefined, with the reason on stderr, when there is none or glab
+ * cannot say: the review then goes on without it.
+ * @param {string} project
+ * @param {string} branch
+ */
+async function branchMergeRequest(project, branch) {
+  const glab = process.env.TRANCHANT_GLAB || 'glab'
+  if (branch === 'HEAD') return skip('HEAD is detached')
+  let mr
+  try {
+    // From the project: glab takes the GitLab host from the checkout's remote.
+    const { stdout } = await run(glab, ['mr', 'view', branch, '-F', 'json'], {
+      cwd: project,
+      maxBuffer: 16 * 1024 * 1024,
+    })
+    mr = JSON.parse(stdout)
+  } catch (error) {
+    return skip(`glab found none for ${branch}: ${firstWords(error)}`)
+  }
+  if (mr?.state !== 'opened') return skip(`the merge request of ${branch} is not open`)
+  if (mr.source_branch !== branch.replace(/^origin\//, ''))
+    return skip(`glab answered the merge request of ${mr?.source_branch}`)
+  const refs = mr.diff_refs
+  const sha = /^[0-9a-f]{7,64}$/
+  if (
+    !Number.isInteger(mr.iid) ||
+    typeof mr.web_url !== 'string' ||
+    ![refs?.base_sha, refs?.head_sha, refs?.start_sha].every((one) => sha.test(one))
+  )
+    return skip(`glab read the merge request of ${branch} without its iid or diff_refs`)
+  const where = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/\d+/.exec(mr.web_url)
+  return {
+    project: where?.[1] ?? mr.project_id,
+    iid: mr.iid,
+    url: mr.web_url,
+    author: String(mr.author?.username || 'unknown'),
+    diffRefs: {
+      baseSha: refs.base_sha,
+      headSha: refs.head_sha,
+      startSha: refs.start_sha,
+    },
+  }
+}
+
 /**
  * The branch to review against the default branch: `given`, else the
- * current one.
+ * current one; with its open merge request, when it has one.
  * @param {string} project
  * @param {string | undefined} given
  */
@@ -210,7 +263,9 @@ async function branchChange(project, given) {
     ((await gitOr(project, ['symbolic-ref', '--quiet', '--short', 'HEAD'])) || 'HEAD')
   const headSha = await commitOf(project, branch)
   if (!headSha) return refuse(`${branch} is not a branch or a commit of ${project}`)
-  return { title: branch, branch, base: await defaultBranch(project), headSha }
+  const base = await defaultBranch(project)
+  const mr = await branchMergeRequest(project, branch)
+  return { title: branch, branch, base, headSha, ...(mr && { mr }) }
 }
 
 let parsed

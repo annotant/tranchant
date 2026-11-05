@@ -209,10 +209,10 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} branch
  * @property {string} base
  * @property {string} headSha What was reviewed.
- * @property {Ownership} ownership `ours`: fixes only; `theirs`: posting too.
+ * @property {Ownership} ownership The default action: `ours` fix first, `theirs` post first.
  * @property {Status} [status] `complete` when absent: every producer that wrote a whole review keeps working.
  * @property {string} title
- * @property {MergeRequest} [mr] Required to post.
+ * @property {MergeRequest} [mr] Required to post, with its `diffRefs` at `headSha`.
  * @property {{ key: string, url: string }} [jira]
  * @property {string} summary Markdown, shown above the findings.
  * @property {string[]} strengths
@@ -330,6 +330,20 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} [agent]
  * @property {string} [model] `start` only.
  */
+
+/**
+ * Why the review's comments cannot be posted, or undefined when they can:
+ * a positioned comment needs the MR's diff refs at the commit reviewed.
+ * @param {{ headSha: string, mr?: { diffRefs?: { headSha: string } } }} review
+ * @returns {string | undefined}
+ */
+export function postBlocker(review) {
+  const head = review.mr?.diffRefs?.headSha
+  if (!head) return 'the review has no mr.diffRefs'
+  if (!head.startsWith(review.headSha) && !review.headSha.startsWith(head))
+    return "push your branch first: the MR's head is not the one reviewed"
+  return undefined
+}
 
 /**
  * `text` on one line: the hooks read one event per line, and a line break in

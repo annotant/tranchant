@@ -8,10 +8,11 @@ import {
   idsInBucket,
   openIds,
   orderedFindings,
+  postBlocker,
   type State,
   stateLabel,
 } from '../src/domain'
-import { FINDINGS, ORDER, record, review } from './fixture'
+import { FINDINGS, mergeRequest, ORDER, record, review } from './fixture'
 
 test('findings group by bucket, then topic, then path:line', () => {
   const groups = groupFindings(FINDINGS)
@@ -64,9 +65,19 @@ test('fix is allowed from open, dropped, skipped, failed and stopped; never agai
   expect(from('fix', 'theirs')).toEqual(from('fix', 'ours'))
 })
 
-test('post needs theirs with diff refs, from open, dropped, skipped or failed', () => {
+test('post needs diff refs at the head reviewed, from open, dropped, skipped or failed', () => {
   expect(from('post', 'ours')).toEqual([])
   expect(from('post', 'theirs')).toEqual(['open', 'dropped', 'skipped', 'failed'])
+  const ours = review('ours', { mr: mergeRequest() })
+  expect(STATES.filter((state) => allows('post', state, ours))).toEqual(
+    from('post', 'theirs'),
+  )
+  const ahead = review('ours', { mr: mergeRequest('f'.repeat(40)) })
+  expect(allows('post', 'open', ahead)).toBe(false)
+  expect(postBlocker(ahead)).toBe(
+    "push your branch first: the MR's head is not the one reviewed",
+  )
+  expect(postBlocker(ours)).toBeUndefined()
   const noRefs = { ...review('theirs'), mr: { project: 'x', iid: 1, url: 'https://x' } }
   expect(allows('post', 'open', noRefs)).toBe(false)
 })

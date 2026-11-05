@@ -489,6 +489,23 @@ test('a base that reads as a git option is refused, and git writes nothing', asy
   assert.deepEqual(await readdir(out), [])
 })
 
+test('an ours review whose MR is at another head shows its own branch’s diff', async (t) => {
+  const placed = await playground(t, 'ours')
+  const head = 'f'.repeat(40)
+  const mr = {
+    project: 'shop/web',
+    iid: 3,
+    url: 'https://gitlab.example.com/shop/web/-/merge_requests/3',
+    author: 'me',
+    diffRefs: { baseSha: head, headSha: head, startSha: head },
+  }
+  const server = await startServer(t, { name: 'ours', overrides: { ...placed, mr } })
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200, JSON.stringify(body))
+  assert.equal(body.base, 'main')
+  assert.equal(body.head, placed.headSha)
+})
+
 test('refuses diff refs of another head than the review’s', async (t) => {
   const placed = await playground(t, 'theirs')
   const other = placed.mr?.diffRefs?.baseSha ?? ''

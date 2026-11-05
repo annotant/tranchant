@@ -59,8 +59,8 @@ section): one `Finding` per issue, each with its `path`, `line`, an `excerpt`
 of the new-side text, `marks` on the exact spots, `problem`, `why`, `fix`,
 the `comment` to post when the change is someone else's, and a `diagram`
 only when a flow needs proving. `ownership` is `ours` when the change has no
-MR or the MR's author is the current user, `theirs` otherwise; `theirs` needs
-`mr.diffRefs` (`glab mr view <iid> -F json` → `diff_refs`). Write the file
+MR or the MR's author is the current user, `theirs` otherwise; posting needs
+`mr.diffRefs` (`glab mr view <iid> -F json` → `diff_refs`), `ours` too. Write the file
 outside the reviewed repository, so it can never be committed by mistake:
 `~/.cache/tranchant/inbox/<id>.json` is the convention. Then open it. To
 show the findings as they land instead, write the envelope with `"status":

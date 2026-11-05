@@ -63,7 +63,7 @@ export interface Finding {
   problem: string
   why: string
   fix: string
-  /** The text to post, whole; required when the review is `theirs`. */
+  /** The text to post, whole; required when the review is `theirs`, optional on `ours`. */
   comment?: string
   diagram?: Diagram
   related?: Related[]
@@ -289,9 +289,28 @@ export const isReviewing = (review: Pick<Review, 'status'>) =>
 export const plural = (count: number, noun: string) =>
   `${count} ${noun}${count === 1 ? '' : 's'}`
 
-/** Posting needs the author's MR and the diff it was reviewed at. */
-export const canPost = (review: Pick<Review, 'ownership' | 'mr'>) =>
-  review.ownership === 'theirs' && !!review.mr?.diffRefs
+/** What decides posting: the MR and the commit reviewed. */
+export type PostScope = Pick<Review, 'mr' | 'headSha'>
+
+/**
+ * Why posting is off on a review with an MR, as the store refuses it: a
+ * positioned comment needs the MR's head to be the commit reviewed.
+ */
+export function postBlocker(review: PostScope): string | undefined {
+  const head = review.mr?.diffRefs?.headSha
+  if (!head) return undefined
+  return head.startsWith(review.headSha) || review.headSha.startsWith(head)
+    ? undefined
+    : "push your branch first: the MR's head is not the one reviewed"
+}
+
+/** Posting needs an MR, whoever's, and its diff at the commit reviewed. */
+export const canPost = (review: PostScope) =>
+  !!review.mr?.diffRefs && !postBlocker(review)
+
+/** A finding a batch or a shortcut may post as is: it has its text. */
+export const hasComment = (finding: Pick<Finding, 'comment'> | undefined) =>
+  !!finding?.comment?.trim()
 
 const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stopped'])
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
@@ -300,10 +319,13 @@ const UNDECIDED: readonly State[] = ['open', 'queued', 'asking', 'failed', 'stop
 const DROP_FROM = new Set<State>([...UNDECIDED, 'skipped'])
 const SKIP_FROM = new Set<State>([...UNDECIDED, 'dropped'])
 
+/** Whether a post may leave `state`, the review aside. */
+export const postsFrom = (state: State) => POST_FROM.has(state)
+
 /** A move the page offers: the store's, `answer` being sent by the asking form. */
 export type Move = Action | 'stop' | 'answer'
 
-type Rule = (state: State, review: Pick<Review, 'ownership' | 'mr'>) => boolean
+type Rule = (state: State, review: PostScope) => boolean
 
 /** The store's moves table: a `fixed` or `posted` finding is final. */
 const MOVES: Record<Move, Rule> = {
@@ -316,11 +338,8 @@ const MOVES: Record<Move, Rule> = {
 }
 
 /** Whether the store accepts `move` on a finding in `state`. */
-export const allows = (
-  move: Move,
-  state: State,
-  review: Pick<Review, 'ownership' | 'mr'>,
-): boolean => MOVES[move](state, review)
+export const allows = (move: Move, state: State, review: PostScope): boolean =>
+  MOVES[move](state, review)
 
 interface TopicGroup {
   topic: string
@@ -391,7 +410,7 @@ export const applicable = (
   ids: Iterable<string>,
   action: Action,
   records: Records,
-  review: Pick<Review, 'ownership' | 'mr'>,
+  review: PostScope,
 ): string[] => [...ids].filter((id) => allows(action, stateOf(records, id), review))
 
 /** Ids of the findings in `bucket`. */

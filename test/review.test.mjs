@@ -65,7 +65,12 @@ async function repository(t) {
 const prepare = (cwd, args = [], env = {}) =>
   run(process.execPath, [PREPARE, ...args], {
     cwd,
-    env: { TRANCHANT_STATE_DIR: stateDir, ...env },
+    // No glab unless a test fakes one: the branch's MR is never the machine's.
+    env: {
+      TRANCHANT_STATE_DIR: stateDir,
+      TRANCHANT_GLAB: path.join(stateDir, 'no-glab'),
+      ...env,
+    },
   })
 
 /** The envelope and the lenses prepare.mjs printed. @param {string} stdout */
@@ -249,6 +254,68 @@ test('prepare.mjs reads a merge request with glab: theirs, its diff refs, or the
     unknown.stdout,
     `REVIEW_REFUSED glab cannot read ${url}9: ERROR: 404 Not Found\n`,
   )
+})
+
+test('prepare.mjs keeps a branch ours, with its open merge request when glab finds one', async (t) => {
+  const { dir, git } = await repository(t)
+  const base = await git('rev-parse', 'main')
+  const head = await git('rev-parse', 'feature/cart')
+  const bin = await tempDir(t)
+  const url = 'https://gitlab.example.com/shop/web/-/merge_requests/14'
+  /** A fake glab answering `mr view feature/cart` with `mr`, else failing. */
+  const fake = async (/** @type {string} */ name, /** @type {object} */ mr) => {
+    const glab = path.join(bin, name)
+    await writeFile(
+      glab,
+      [
+        '#!/bin/sh',
+        `if [ "$1 $2 $3" != "mr view feature/cart" ]; then echo "no open merge request" >&2; exit 1; fi`,
+        `printf '%s' '${JSON.stringify(mr)}'`,
+        '',
+      ].join('\n'),
+    )
+    await chmod(glab, 0o755)
+    return glab
+  }
+  const mr = {
+    iid: 14,
+    state: 'opened',
+    web_url: url,
+    source_branch: 'feature/cart',
+    author: { username: 'me' },
+    diff_refs: { base_sha: base, head_sha: head, start_sha: base },
+  }
+  const found = await prepare(dir, [], { TRANCHANT_GLAB: await fake('glab', mr) })
+  assert.equal(found.code, 0, found.stdout + found.stderr)
+  const { envelope } = await prepared(found.stdout)
+  assert.equal(envelope.ownership, 'ours')
+  assert.equal(envelope.title, 'feature/cart')
+  assert.equal(envelope.base, 'main')
+  assert.deepEqual(envelope.mr, {
+    project: 'shop/web',
+    iid: 14,
+    url,
+    author: 'me',
+    diffRefs: { baseSha: base, headSha: head, startSha: base },
+  })
+
+  const failing = path.join(bin, 'glab-failing')
+  await writeFile(failing, '#!/bin/sh\necho "no open merge request" >&2\nexit 1\n')
+  await chmod(failing, 0o755)
+  const cases = {
+    none: [failing, 'glab found none for feature/cart: no open merge request'],
+    closed: [await fake('glab-closed', { ...mr, state: 'merged' }), 'is not open'],
+    missing: [path.join(bin, 'nowhere'), 'glab found none for feature/cart'],
+  }
+  for (const [name, [glab, why]] of Object.entries(cases)) {
+    const ran = await prepare(dir, [], { TRANCHANT_GLAB: glab })
+    assert.equal(ran.code, 0, `${name}: ${ran.stdout}${ran.stderr}`)
+    const { envelope: plain } = await prepared(ran.stdout)
+    assert.equal(plain.ownership, 'ours', name)
+    assert.equal(plain.mr, undefined, name)
+    assert.ok(ran.stderr.includes(`no merge request to post on: `), name)
+    assert.ok(ran.stderr.includes(why), `${name}: ${ran.stderr}`)
+  }
 })
 
 /** A review `reviewing`, verified, with the fixture's first two findings. */

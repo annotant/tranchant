@@ -1,9 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import App from '../src/App'
-import type { FindingRecord, Ownership, State } from '../src/domain'
+import type { FindingRecord, Ownership, Review, State } from '../src/domain'
 import { FindingDetail } from '../src/FindingDetail'
-import { fakeServer, FINDINGS, payload, record, review } from './fixture'
+import {
+  fakeServer,
+  FINDINGS,
+  mergeRequest,
+  payload,
+  record,
+  review,
+  withoutComment,
+} from './fixture'
 
 const bug = FINDINGS[0]!
 
@@ -13,19 +21,21 @@ function renderDetail({
   fields = {},
   disabled = false,
   finding = bug,
+  reviewFields = {},
 }: {
   ownership?: Ownership
   state?: State
   fields?: Partial<FindingRecord>
   disabled?: boolean
   finding?: typeof bug
+  reviewFields?: Partial<Review>
 } = {}) {
   const onDecide = vi.fn()
   const onAnswer = vi.fn()
   const onStop = vi.fn()
   render(
     <FindingDetail
-      review={review(ownership)}
+      review={review(ownership, reviewFields)}
       finding={finding}
       record={
         state === 'open' && !Object.keys(fields).length
@@ -98,6 +108,47 @@ test('ours offers Fix now, Drop and Skip, never a post', () => {
   expect(button('Drop')).not.toBeNull()
   expect(button('Skip')).not.toBeNull()
   expect(button(/post/i)).toBeNull()
+})
+
+test('ours with an MR offers Fix now first, and Post a comment as a regular button', () => {
+  const { onDecide } = renderDetail({ reviewFields: { mr: mergeRequest() } })
+  const fix = button('Fix now')!
+  const post = button('Post a comment')!
+  expect(fix.className).toContain('tr-btn--primary')
+  expect(post.className).not.toContain('tr-btn--primary')
+  expect(
+    post.compareDocumentPosition(fix) & Node.DOCUMENT_POSITION_PRECEDING,
+  ).toBeTruthy()
+  expect(button('Post as written')).toBeNull()
+  fireEvent.click(post)
+  const box = screen.getByLabelText<HTMLTextAreaElement>('Comment to post')
+  expect(box.value).toBe(bug.comment)
+  fireEvent.click(button('Post')!)
+  expect(onDecide).toHaveBeenLastCalledWith([{ id: 'f-01', action: 'post' }])
+})
+
+test('ours with an MR prefills a finding with no comment from its problem and fix', () => {
+  const { onDecide } = renderDetail({
+    reviewFields: { mr: mergeRequest() },
+    finding: withoutComment(bug),
+  })
+  fireEvent.click(button('Post a comment')!)
+  const box = screen.getByLabelText<HTMLTextAreaElement>('Comment to post')
+  expect(box.value).toBe(`${bug.problem}\n\n${bug.fix}`)
+  fireEvent.click(button('Post')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'post', comment: `${bug.problem}\n\n${bug.fix}` },
+  ])
+})
+
+test('ours with an MR at another head disables posting, says why, and still fixes', () => {
+  renderDetail({ reviewFields: { mr: mergeRequest('f'.repeat(40)) } })
+  const post = button('Post a comment')!
+  expect(post).toHaveProperty('disabled', true)
+  const why = "push your branch first: the MR's head is not the one reviewed"
+  expect(post.getAttribute('title')).toBe(why)
+  expect(screen.getByText(/^Posting is off:/).textContent).toContain(why)
+  expect(button('Fix now')).toHaveProperty('disabled', false)
 })
 
 test('theirs offers Post as written, Edit & post, Fix now and Drop', () => {

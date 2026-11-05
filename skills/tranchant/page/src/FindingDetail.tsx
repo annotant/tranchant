@@ -6,6 +6,8 @@ import {
   type DecisionInput,
   type Finding,
   type FindingRecord,
+  postBlocker,
+  postsFrom,
   type Review,
   STATE_DETAILS,
   stateLabel,
@@ -154,12 +156,18 @@ export function FindingDetail({
   const [mode, setMode] = useState<Mode>('idle')
   const [showContext, setShowContext] = useState(false)
   const [context, setContext] = useState('')
-  const [comment, setComment] = useState(record?.comment ?? finding.comment ?? '')
+  const [comment, setComment] = useState(
+    record?.comment ?? finding.comment ?? `${finding.problem}\n\n${finding.fix}`,
+  )
   const [reason, setReason] = useState('')
 
   const can = (move: Parameters<typeof allows>[0]) =>
     !disabled && allows(move, state, review)
   const theirs = review.ownership === 'theirs'
+  // Ours with an MR: fixing comes first, posting is the secondary choice.
+  const oursWithMr = !theirs && !!review.mr?.diffRefs
+  const blocker = postBlocker(review)
+  const blocked = !!blocker && !disabled && postsFrom(state)
   const tag = tagOf(finding)
   const lastRun = record?.runs.at(-1)
 
@@ -403,6 +411,17 @@ export function FindingDetail({
                   Fix now
                 </button>
               )}
+              {oursWithMr && (can('post') || blocked) && (
+                <button
+                  type="button"
+                  className="tr-btn"
+                  disabled={blocked}
+                  title={blocked ? blocker : undefined}
+                  onClick={() => setMode('editing')}
+                >
+                  Post a comment
+                </button>
+              )}
               {can('drop') && (
                 <button
                   type="button"
@@ -422,6 +441,11 @@ export function FindingDetail({
                 </button>
               )}
             </div>
+            {blocked && (
+              <p className="tr-muted" role="note">
+                Posting is off: {blocker}.
+              </p>
+            )}
             {can('fix') && (
               <div className="tr-context">
                 <button

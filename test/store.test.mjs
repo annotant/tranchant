@@ -10,7 +10,7 @@ import {
   historyPath,
   progressPath,
 } from '../skills/tranchant/scripts/lib/store.mjs'
-import { importReview, tempDir } from './helpers.mjs'
+import { fixture, importReview, tempDir } from './helpers.mjs'
 
 /** @type {string} */
 let stateDir
@@ -227,11 +227,11 @@ test('stop: from queued, and from working with what the run changed', async (t) 
   assert.equal(resent.cancellation?.run, 'r1')
 })
 
-test('post: needs theirs and the MR’s diffRefs, and keeps the reviewer’s edit', async (t) => {
+test('post: needs the MR’s diffRefs, and keeps the reviewer’s edit', async (t) => {
   const ours = await setUp(t, 'ours')
   await assert.rejects(
-    ours.store.decide('f-01', { action: 'post' }),
-    /post refused: the review is ours, there is no MR to post on/,
+    ours.store.decide('f-01', { action: 'post', comment: 'Words' }),
+    /post refused: the review has no mr.diffRefs/,
   )
   const theirs = await setUp(t, 'theirs')
   const { mr } = theirs.review
@@ -288,6 +288,36 @@ test('post: needs theirs and the MR’s diffRefs, and keeps the reviewer’s edi
   const again = await theirs.store.decide('f-02', { action: 'post' })
   assert.equal(again.comment, undefined)
   assert.equal(again.reason, undefined)
+})
+
+test('post on an ours review with an MR: its comment or the reviewer’s, at the MR’s head only', async (t) => {
+  const { mr } = await fixture('theirs')
+  const ours = await setUp(t, 'ours', {
+    id: '5e1f0a2b-6c7d-4e8f-9a0b-1c2d3e4f5a6b',
+    mr: { ...mr, author: 'me' },
+  })
+  assert.equal(ours.review.headSha, mr.diffRefs.headSha)
+  await assert.rejects(
+    ours.store.decide('f-01', { action: 'post' }),
+    /post refused: finding f-01 has no comment/,
+  )
+  const queued = await ours.store.decide('f-01', {
+    action: 'post',
+    comment: 'Worth a talk',
+  })
+  assert.equal(queued.state, 'queued')
+  assert.equal(queued.comment, 'Worth a talk')
+  assert.equal((await ours.store.decide('f-02', { action: 'fix' })).state, 'queued')
+
+  const ahead = await setUp(t, 'ours', {
+    id: '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d',
+    mr: { ...mr, diffRefs: { ...mr.diffRefs, headSha: 'f'.repeat(40) } },
+  })
+  await assert.rejects(
+    ahead.store.decide('f-01', { action: 'post', comment: 'Worth a talk' }),
+    /post refused: push your branch first: the MR's head is not the one reviewed/,
+  )
+  assert.equal((await ahead.store.decide('f-01', { action: 'fix' })).state, 'queued')
 })
 
 test('drop and skip from the undecided states only: never while working, fixed or posted', async (t) => {
