@@ -12,11 +12,13 @@ function renderDetail({
   state = 'open',
   fields = {},
   disabled = false,
+  finding = bug,
 }: {
   ownership?: Ownership
   state?: State
   fields?: Partial<FindingRecord>
   disabled?: boolean
+  finding?: typeof bug
 } = {}) {
   const onDecide = vi.fn()
   const onAnswer = vi.fn()
@@ -24,7 +26,7 @@ function renderDetail({
   render(
     <FindingDetail
       review={review(ownership)}
-      finding={bug}
+      finding={finding}
       record={
         state === 'open' && !Object.keys(fields).length
           ? undefined
@@ -50,6 +52,44 @@ test("the excerpt is highlighted in the language of the finding's path", () => {
   expect(
     excerpt.querySelector('.tr-row[data-line="42"] .tr-tok--keyword')?.textContent,
   ).toBe('const')
+})
+
+test('problem, why and fix render as Markdown, without headings', () => {
+  renderDetail({
+    finding: {
+      ...bug,
+      problem: '# Not a heading',
+      why: 'Plain words, no markup at all.',
+      fix: [
+        '## Guard `tenantId` first:',
+        '- return early',
+        '- then query',
+        '```ts',
+        'if (!tenantId) return',
+        '```',
+        'See [the hook](https://example.com/hook) and [run](javascript:alert(1)).',
+      ].join('\n'),
+    },
+  })
+  const [problem, why, fix] = Array.from(document.querySelectorAll('.tr-pwf dd'))
+  expect(document.querySelector('.tr-pwf :is(h1, h2, h3, h4, h5, h6)')).toBeNull()
+  expect(problem?.querySelector('strong')?.textContent).toBe('Not a heading')
+  expect(fix?.querySelector('p strong code')?.textContent).toBe('tenantId')
+  expect(why?.innerHTML).toBe(
+    '<div class="tr-md"><p>Plain words, no markup at all.</p></div>',
+  )
+  expect(fix?.querySelector('p code')?.textContent).toBe('tenantId')
+  expect(
+    Array.from(fix?.querySelectorAll('ul li') ?? []).map((item) => item.textContent),
+  ).toEqual(['return early', 'then query'])
+  expect(fix?.querySelector('pre code')?.textContent).toBe('if (!tenantId) return')
+  const links = Array.from(fix?.querySelectorAll('a') ?? [])
+  expect(links.map((link) => link.getAttribute('href'))).toEqual([
+    'https://example.com/hook',
+  ])
+  expect(links[0]?.getAttribute('target')).toBe('_blank')
+  expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer')
+  expect(fix?.textContent).toContain('run')
 })
 
 test('ours offers Fix now, Drop and Skip, never a post', () => {

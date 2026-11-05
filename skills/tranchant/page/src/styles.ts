@@ -163,6 +163,8 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-summary-body h3 { font-size: 13px; margin-bottom: 4px; }
 .tr-summary-body ul { margin: 0; padding-left: 20px; }
 .tr-md > * { margin: 0 0 8px; }
+.tr-md > :last-child { margin-bottom: 0; }
+.tr-md ul, .tr-md ol { padding-left: 20px; }
 .tr-md h2, .tr-md h3, .tr-md h4 { font-size: 13px; margin-top: 8px; }
 .tr-md pre { padding: 8px 10px; background: var(--tr-bg-2); border: 1px solid var(--tr-border); border-radius: var(--tr-radius); overflow: auto; font-size: 12.5px; }
 .tr-md li { margin: 2px 0; }

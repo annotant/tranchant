@@ -176,7 +176,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Excerpt} excerpt
  * @property {string} [hunk] A unified-diff hunk covering `line`, shown instead of the excerpt.
  * @property {Mark[]} [marks]
- * @property {string} problem
+ * @property {string} problem Markdown, like `why` and `fix`; a heading renders as bold text.
  * @property {string} why
  * @property {string} fix
  * @property {string} [comment] The text to post, whole; required when `ownership` is `theirs`.

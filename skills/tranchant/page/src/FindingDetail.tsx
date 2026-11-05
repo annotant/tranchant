@@ -15,6 +15,7 @@ import {
 } from './domain'
 import { Excerpt } from './Excerpt'
 import { FixChanges } from './FixChanges'
+import { Markdown } from './markdown'
 import { RunPanel } from './RunPanel'
 import { languageOfFile } from './syntax'
 
@@ -217,11 +218,17 @@ export function FindingDetail({
 
       <dl className="tr-pwf">
         <dt>Problem</dt>
-        <dd>{finding.problem}</dd>
+        <dd>
+          <Markdown source={finding.problem} headings={false} />
+        </dd>
         <dt>Why</dt>
-        <dd>{finding.why}</dd>
+        <dd>
+          <Markdown source={finding.why} headings={false} />
+        </dd>
         <dt>Fix</dt>
-        <dd>{finding.fix}</dd>
+        <dd>
+          <Markdown source={finding.fix} headings={false} />
+        </dd>
       </dl>
 
       {finding.related && finding.related.length > 0 && (
