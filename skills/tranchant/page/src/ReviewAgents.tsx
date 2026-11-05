@@ -38,6 +38,7 @@ const Cross = () => (
 )
 
 const NOT_COVERED = 'The agent stopped before it finished: its lens is not covered'
+const NOT_VERIFIED = 'A verifier stopped before it finished: its finding stays unverified'
 
 function Chip({
   lens,
@@ -73,11 +74,7 @@ const notCovered = (lenses: readonly string[]) =>
     ? `${lenses[0]} stopped: that lens is not covered`
     : `${lenses.join(', ')} stopped: those lenses are not covered`
 
-/**
- * Where the review stands, by lens: its reviewers, its verifiers grouped by
- * the lens of their finding, and the agents still at work; folded into one
- * line once the review is done.
- */
+/** Where the review stands, by lens; one line once it is done. */
 export function ReviewAgents({
   agents,
   reviewing,
@@ -155,6 +152,7 @@ export function ReviewAgents({
                       lens={group.lens}
                       state={group.state}
                       count={verifyCount(group)}
+                      title={group.state === 'failed' ? NOT_VERIFIED : undefined}
                     />
                   ))}
                 </ul>

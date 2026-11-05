@@ -120,3 +120,14 @@ test('a stopped verifier marks its group failed once none of it runs', () => {
     { lens: 'bugs', state: 'failed', done: 2, total: 2 },
   ])
 })
+
+test('a stopped verifier keeps its group failed whatever the order, until one runs', () => {
+  const ids = ['bugs-1', 'bugs-2']
+  const stop = stopped('vf-bugs-1', [end('failed')])
+  expect(
+    progressOf([ended('rv-bugs'), stop, ended('vf-bugs-2')], ids).verifying[0]!.state,
+  ).toBe('failed')
+  expect(
+    progressOf([ended('rv-bugs'), stop, running('vf-bugs-2')], ids).verifying[0]!.state,
+  ).toBe('running')
+})

@@ -4,7 +4,7 @@ import type { ReviewAgent, Step } from './domain'
 
 type Outcome = 'running' | 'done' | 'failed'
 
-/** A lens's reviewer: its state and the findings that bear its lens. */
+/** A lens's reviewer: its state and how many of the findings still standing bear its lens. */
 export interface LensProgress {
   lens: string
   state: Outcome
@@ -45,16 +45,13 @@ export interface ReviewProgress {
   stopped: string[]
 }
 
-/** The lens of a verifier whose finding no lens claims. */
+/** The group of a verifier whose finding matches no reviewer's lens. */
 export const OTHER = 'other'
 
 const stateOf = (agent: ReviewAgent): Outcome =>
   agent.running ? 'running' : agent.outcome === 'failed' ? 'failed' : 'done'
 
-/**
- * The lens a finding id bears: reviewers name theirs `<lens>-<n>`, and the
- * longest match wins so `a-b-1` goes to lens `a-b`, not `a`.
- */
+/** A finding id's lens: reviewers name theirs `<lens>-<n>`; the longest wins, `a-b-1` is `a-b`'s. */
 export function lensOf(id: string, lenses: readonly string[]): string | undefined {
   let found: string | undefined
   for (const lens of lenses)
@@ -77,10 +74,7 @@ function doing(steps: readonly Step[]) {
   return step && step.kind !== 'end' ? activityOf(step) : 'Starting'
 }
 
-/**
- * The review's progress from its agents (`rv-<lens>`, `vf-<finding id>`) and
- * the ids of the findings that stand.
- */
+/** The review's progress from its agents (`rv-<lens>`, `vf-<finding id>`) and its findings' ids. */
 export function progressOf(
   agents: readonly ReviewAgent[],
   findingIds: readonly string[],
