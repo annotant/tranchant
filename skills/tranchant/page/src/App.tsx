@@ -13,6 +13,7 @@ import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView
 import {
   allows,
   canPost,
+  commentedIds,
   counts,
   type DecisionInput,
   groupFindings,
@@ -237,6 +238,10 @@ export default function App() {
   const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
   const unverified = useMemo(
     () => (review ? unverifiedIds(review) : new Set<string>()),
+    [review],
+  )
+  const commented = useMemo(
+    () => (review ? commentedIds(review) : new Set<string>()),
     [review],
   )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
@@ -568,6 +573,7 @@ export default function App() {
                   openId={openId}
                   selected={selected}
                   unverified={unverified}
+                  commented={commented}
                   onOpen={open}
                   onToggle={toggle}
                 />
@@ -594,6 +600,7 @@ export default function App() {
                 open={current}
                 selected={selected}
                 unverified={unverified}
+                commented={commented}
                 onOpen={open}
                 onToggle={toggle}
               />

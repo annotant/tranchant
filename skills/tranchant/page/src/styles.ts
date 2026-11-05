@@ -260,6 +260,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-marker .tr-check { margin: 0; }
 .tr-marker-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; font: 13px/1.4 var(--tr-font); }
 .tr-marker-title { font-weight: 500; }
+.tr-comment-mark { display: inline-flex; flex: none; color: var(--tr-accent); }
 .tr-marker-note { color: var(--tr-warn); font-size: 12px; }
 .tr-detail { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 32px; max-width: 1100px; }
 .tr-detail-head h2 { font-size: 17px; }

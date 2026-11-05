@@ -3,6 +3,7 @@ import {
   type Action,
   allows,
   applicable,
+  commentedIds,
   counts,
   groupFindings,
   idsInBucket,
@@ -84,6 +85,16 @@ test('post needs diff refs at the head reviewed, from open, dropped, skipped or 
   )
   const noRefs = { ...review('theirs'), mr: { project: 'x', iid: 1, url: 'https://x' } }
   expect(allows('post', 'open', noRefs)).toBe(false)
+})
+
+test('only ours with a postable MR marks the findings with a comment', () => {
+  const ids = FINDINGS.map((finding) => finding.id)
+  expect([...commentedIds(review('ours', { mr: mergeRequest() }))].toSorted()).toEqual(
+    ids.toSorted(),
+  )
+  expect(commentedIds(review('ours')).size).toBe(0)
+  expect(commentedIds(review('theirs')).size).toBe(0)
+  expect(commentedIds(review('ours', { mr: mergeRequest('f'.repeat(40)) })).size).toBe(0)
 })
 
 test('drop and skip are refused while working, once fixed or posted, and on a finding already there', () => {

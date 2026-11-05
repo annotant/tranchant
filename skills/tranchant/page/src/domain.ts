@@ -313,6 +313,17 @@ export const canPost = (review: PostScope) =>
 export const hasComment = (finding: Pick<Finding, 'comment'> | undefined) =>
   !!finding?.comment?.trim()
 
+/**
+ * The findings to mark as having a comment: only on your own MR, where a
+ * finding may have none; someone else's review has one on every finding.
+ */
+export const commentedIds = (review: PostScope & Pick<Review, 'findings'>) =>
+  new Set(
+    review.ownership === 'ours' && canPost(review)
+      ? review.findings.filter(hasComment).map((finding) => finding.id)
+      : [],
+  )
+
 const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stopped'])
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
 // Nothing has landed in these states: a reviewer may still drop or skip.

@@ -180,6 +180,28 @@ test('ours with an MR posts too, the findings with a comment only, after the con
   expect(ids).toHaveLength(4)
 })
 
+test('ours with an MR marks the findings with a comment, in the list', async () => {
+  const [first, ...rest] = FINDINGS
+  await renderApp(
+    payload({
+      review: { mr: mergeRequest(), findings: [withoutComment(first!), ...rest] },
+    }),
+  )
+  const list = screen.getByRole('listbox', { name: 'Findings' })
+  expect(within(list).getAllByRole('img', { name: 'Has a comment' })).toHaveLength(
+    FINDINGS.length - 1,
+  )
+  const row = within(list).getByRole('checkbox', {
+    name: `Select ${first!.title}`,
+  }).parentElement!
+  expect(within(row).queryByRole('img', { name: 'Has a comment' })).toBeNull()
+})
+
+test('no comment mark without an MR, nor on theirs where every finding has one', async () => {
+  await renderApp()
+  expect(screen.queryByRole('img', { name: 'Has a comment' })).toBeNull()
+})
+
 test('ours with an MR at another head offers no Post', async () => {
   await renderApp(payload({ review: { mr: mergeRequest('f'.repeat(40)) } }))
   const bar = screen.getByRole('toolbar', { name: 'Batch actions' })
