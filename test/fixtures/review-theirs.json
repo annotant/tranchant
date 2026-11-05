@@ -67,8 +67,8 @@
       "fix": "Return early while `tenantId` is undefined, as `useFiles` does three lines above its query: pass `enabled: tenantId !== undefined` to `useQuery`.",
       "comment": "`tenantId.length` throws when `tenantId` is still undefined: the drawer mounts this hook before the tenant query resolves, so the first open lands on the error boundary. `useFiles` guards the same case with `enabled: tenantId !== undefined`; the same here would do.",
       "diagram": {
-        "kind": "svg",
-        "source": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 600 240\" font-family=\"sans-serif\" font-size=\"12\"><g stroke=\"#777\" fill=\"none\"><line x1=\"100\" y1=\"40\" x2=\"100\" y2=\"220\"/><line x1=\"300\" y1=\"40\" x2=\"300\" y2=\"220\"/><line x1=\"500\" y1=\"40\" x2=\"500\" y2=\"220\"/></g><g text-anchor=\"middle\" fill=\"#222\"><text x=\"100\" y=\"28\">PersonDrawer</text><text x=\"300\" y=\"28\">usePeople</text><text x=\"500\" y=\"28\">tenant query</text></g><g stroke=\"#1a7f5a\" fill=\"none\"><line x1=\"100\" y1=\"70\" x2=\"300\" y2=\"70\"/><line x1=\"300\" y1=\"110\" x2=\"500\" y2=\"110\"/></g><g fill=\"#222\" text-anchor=\"middle\"><text x=\"200\" y=\"62\">mount: tenantId undefined</text><text x=\"400\" y=\"102\">fetch tenant</text><text x=\"200\" y=\"152\" fill=\"#c0392b\">tenantId.length → TypeError</text><text x=\"400\" y=\"200\">settles too late</text></g><line x1=\"300\" y1=\"160\" x2=\"100\" y2=\"160\" stroke=\"#c0392b\"/><line x1=\"500\" y1=\"208\" x2=\"300\" y2=\"208\" stroke=\"#999\" stroke-dasharray=\"4 3\"/></svg>",
+        "kind": "mermaid",
+        "source": "sequenceDiagram\n  participant D as PersonDrawer\n  participant H as usePeople\n  participant Q as tenant query\n  D->>H: mount (tenantId undefined)\n  H->>Q: fetch tenant\n  H--xD: tenantId.length → TypeError\n  Q-->>H: settles too late",
         "caption": "The drawer mounts before the tenant query resolves: the hook reads tenantId too early."
       },
       "related": [

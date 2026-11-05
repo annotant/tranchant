@@ -241,7 +241,7 @@ test('checks the anchor against the excerpt, the hunk and the marks', async () =
     ['findings[4].related: up to 4 excerpts'],
   )
   assert.deepEqual(await problemsWith((r) => (r.findings[0].diagram.kind = 'png')), [
-    'findings[0].diagram.kind: svg or text',
+    'findings[0].diagram.kind: mermaid, svg or text',
   ])
   assert.deepEqual(await problemsWith((r) => delete r.mr.diffRefs.startSha), [
     'mr.diffRefs.startSha: a sha is required',

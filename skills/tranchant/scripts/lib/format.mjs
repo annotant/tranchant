@@ -157,9 +157,9 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  */
 
 /**
- * A flow the finding proves: inline SVG the page sanitizes, or preformatted text.
+ * A flow the finding proves: Mermaid source the page draws, inline SVG it sanitizes, or preformatted text.
  * @typedef {object} Diagram
- * @property {'svg' | 'text'} kind
+ * @property {'mermaid' | 'svg' | 'text'} kind
  * @property {string} source Up to 64 KiB.
  * @property {string} [caption]
  */
@@ -557,8 +557,8 @@ function checkFinding(finding, where, theirs, problems) {
   }
   const { diagram, related } = finding
   if (diagram !== undefined) {
-    if (!isObject(diagram) || !['svg', 'text'].includes(diagram.kind)) {
-      problems.push(`${where}.diagram.kind: svg or text`)
+    if (!isObject(diagram) || !['mermaid', 'svg', 'text'].includes(diagram.kind)) {
+      problems.push(`${where}.diagram.kind: mermaid, svg or text`)
     } else if (!isText(diagram.source, MAX_DIAGRAM)) {
       problems.push(`${where}.diagram.source: up to 64 KiB are required`)
     } else if (diagram.caption !== undefined && !isText(diagram.caption, MAX_NOTE)) {

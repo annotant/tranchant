@@ -155,6 +155,11 @@ no HTML.
   fix in two to five sentences, direct and courteous, in the language the
   code's comments and commit messages use. The reviewer posts it as is, or
   edits it. No `mr`, no `comment`.
+- `diagram`, only when a flow needs proving (who calls whom, in what
+  order, which branch the code takes): `{ "kind": "mermaid", "source":
+  "sequenceDiagram…", "caption": "…" }`, a `sequenceDiagram` or a
+  `flowchart` of the few steps that matter, named after the code's symbols.
+  Most findings have none.
 - `tag`: `concern` (a defect, the default); `question` when the code
   may be right for a reason you cannot see and the author can settle it in a
   sentence (then word `problem` as the question); `suggestion` for an

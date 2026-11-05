@@ -115,8 +115,8 @@ arrives. A producer that writes the whole review at once needs none of this:
   "comment": "This crashes when … (the full text to post on the MR, in the author's language)",
   "diagram": {
     // optional, only when a flow needs proving
-    "kind": "svg", // "svg" or "text"
-    "source": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 600 240\">…</svg>",
+    "kind": "mermaid", // "mermaid", "svg" or "text"
+    "source": "sequenceDiagram\n  PersonDrawer->>usePeople: mount (tenantId undefined)\n  …",
     "caption": "The drawer mounts before the tenant query resolves.",
   },
   "related": [
@@ -147,7 +147,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `marks[].note`               | string, optional                    | Up to 300 characters, shown beside the line.                                                                                                                                                     |
 | `problem`, `why`, `fix`      | string                              | Markdown (inline code, bold, links, lists, fenced code), in plain words: one idea per sentence. No heading (one renders as bold text), no HTML (it stays text); only `http`, `https` and `mailto` links are links. |
 | `comment`                    | string, optional                    | The text to post, whole. Required when `ownership` is `theirs`; optional on an `ours` review with an `mr`, where the page prefills the editor from `problem` and `fix` when it is absent. Up to 4000 characters. |
-| `diagram.kind`               | `svg` or `text`                     | `svg`: inline SVG, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference); `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
+| `diagram.kind`               | `mermaid`, `svg` or `text`          | `mermaid`: [Mermaid](https://mermaid.js.org) source the page draws in its own colours, the way to show a sequence or a flow (`sequenceDiagram`, `flowchart`, `stateDiagram`); strict: no click, no HTML label, and a directive (`%%{init}%%`, front matter) cannot change the security level, the labels, the layout (`flowchart-elk` is not available), the theme, its CSS or its font; a source that does not parse shows as text with the parser's message. `svg`: inline SVG drawn by hand, for what Mermaid cannot draw, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference). `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
 | `related[]`                  | object[], optional                  | Up to 4. Same shape as `path`, `line`, `excerpt`, `marks`.                                                                                                                                       |
 | `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs` or `add.mjs`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
 | `verified`                   | boolean, optional                   | Set by `verify.mjs` once a verifier confirmed or amended it; read only when the review's `verify` is true. Like `addedAt`, left out when two findings are compared.                             |

@@ -6,6 +6,20 @@ const REFERENCE_ATTRIBUTES = ['href', 'xlink:href']
 
 const isLocal = (reference: string) => reference.trim().startsWith('#')
 
+const XML_ENTITIES = new Set(['amp', 'lt', 'gt', 'quot', 'apos'])
+
+/** HTML's named entities (`&nbsp;`…), which XML does not define, as numeric ones. */
+export function numericEntities(markup: string): string {
+  const decoder = document.createElement('textarea')
+  return markup.replace(/&([a-z][a-z0-9]*);/gi, (entity: string, name: string) => {
+    if (XML_ENTITIES.has(name)) return entity
+    decoder.innerHTML = entity
+    const text = decoder.value
+    if (text === entity) return `&amp;${name};`
+    return text.replace(/[\s\S]/gu, (char) => `&#${char.codePointAt(0)};`)
+  })
+}
+
 /**
  * The SVG with every script, event handler, `foreignObject`, `image` and
  * external reference removed; undefined when it does not parse as one.
@@ -62,5 +76,6 @@ export function sanitizeSvg(source: string): string | undefined {
       }
     }
   }
-  return new XMLSerializer().serializeToString(root)
+  // Some serializers write U+00A0 back as `&nbsp;`: the page parses this as XML again.
+  return numericEntities(new XMLSerializer().serializeToString(root))
 }

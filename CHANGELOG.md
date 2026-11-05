@@ -17,6 +17,11 @@ released to the `stable` branch.
   changes and the summary's code blocks colour TypeScript, TSX, JavaScript
   and JSON, with annotant's highlighter; the marks stay on top. The dark
   mark is lighter, so the text under it reads at 4.5:1.
+- **Mermaid diagrams.** A finding's `diagram` can be `mermaid`: the page
+  draws a sequence or a flow from its source, arrows included, in the
+  page's colours, light and dark. Mermaid is bundled and loads only when such
+  a diagram shows; a source that does not parse shows as text with its
+  error. The lenses draw one when a flow needs proving.
 
 ## 0.1.0 - 2026-11-04
 

@@ -32,3 +32,5 @@ jobs:
           allow-licenses: >-
             0BSD, Apache-2.0, BlueOak-1.0.0, BSD-2-Clause, BSD-3-Clause, CC0-1.0, ISC,
             MIT, Unlicense
+          # Mermaid's elk layout (EPL-2.0): installed, never bundled (page/build.mjs).
+          allow-dependencies-licenses: pkg:npm/elkjs

@@ -34,7 +34,7 @@ export interface Mark {
 }
 
 export interface Diagram {
-  kind: 'svg' | 'text'
+  kind: 'svg' | 'text' | 'mermaid'
   source: string
   caption?: string
 }

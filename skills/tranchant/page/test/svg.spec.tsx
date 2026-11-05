@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { Diagram } from '../src/Diagram'
-import { sanitizeSvg } from '../src/svg'
+import { numericEntities, sanitizeSvg } from '../src/svg'
 import { SVG_WITH_SCRIPT } from './fixture'
 
 function parse(svg: string) {
@@ -59,4 +59,26 @@ test('a text diagram is preformatted', () => {
   )
   expect(container.querySelector('pre')?.textContent).toBe('a → b\n  → c')
   expect(container.querySelector('figcaption')).toBeNull()
+})
+
+test('an SVG diagram is drawn as the sanitizer read it, past a self-closing element', () => {
+  const { container } = render(
+    <Diagram
+      diagram={{
+        kind: 'svg',
+        source:
+          '<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="9" y2="0"/><text>after</text></svg>',
+      }}
+    />,
+  )
+  const svg = container.querySelector('.tr-diagram-svg svg')
+  expect(svg?.namespaceURI).toBe('http://www.w3.org/2000/svg')
+  expect(svg?.querySelector('line')?.childNodes).toHaveLength(0)
+  expect(svg?.querySelector('text')?.textContent).toBe('after')
+})
+
+test('HTML entities become numeric ones XML reads; XML’s own and unknown ones stay text', () => {
+  expect(numericEntities('a&nbsp;b &amp; &lt;x&gt; &copy; &nosuch;')).toBe(
+    'a&#160;b &amp; &lt;x&gt; &#169; &amp;nosuch;',
+  )
 })

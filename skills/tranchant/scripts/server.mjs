@@ -63,6 +63,9 @@ if (!existsSync(PAGE)) {
   console.log(`PAGE_MISSING run \`npm ci && npm run build\` in ${PLUGIN_ROOT}`)
   process.exit(2)
 }
+// The parts of the page it loads on demand (Mermaid), next to it: a name, never a path.
+const CHUNKS = path.join(path.dirname(PAGE), 'chunks')
+const CHUNK = /^\/chunks\/([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\.js$/
 const POST = path.join(SKILL_DIR, 'scripts', 'post.mjs')
 const port = Number(process.env.TRANCHANT_PORT ?? 0)
 // The re-read behind the folder watches, for the mounts whose writes they miss.
@@ -657,8 +660,15 @@ async function handle(req, res) {
     return res.end(SHELL)
   }
 
-  if (req.method === 'GET' && url.pathname === '/page.js') {
-    const source = await readFile(PAGE, 'utf8')
+  const chunk = CHUNK.exec(url.pathname)?.[1]
+  if (req.method === 'GET' && (url.pathname === '/page.js' || chunk)) {
+    let source
+    try {
+      source = await readFile(chunk ? path.join(CHUNKS, `${chunk}.js`) : PAGE, 'utf8')
+    } catch (error) {
+      if (!chunk || errorCode(error) !== 'ENOENT') throw error
+      return send(res, 404, { error: 'not found' })
+    }
     res.writeHead(200, {
       'content-type': 'text/javascript; charset=utf-8',
       'x-content-type-options': 'nosniff',
