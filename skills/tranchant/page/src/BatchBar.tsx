@@ -9,6 +9,7 @@ import {
   hasComment,
   idsInBucket,
   plural,
+  postInput,
   type Records,
   type Review,
   stateOf,
@@ -57,17 +58,15 @@ export function BatchBar({
   const autoOpen = ordered
     .filter((finding) => finding.bucket === 'auto' && open.includes(finding.id))
     .map((finding) => finding.id)
-  // A finding with no comment yet is posted from its own editor, never in a batch.
-  const postable = (ids: string[]) => ids.filter((id) => hasComment(byId.get(id)))
-  const openToPost = postable(open)
+  const openToPost = applicable(open, 'post', records, review)
   const actions: Action[] = posting
     ? ['fix', 'post', 'drop', 'skip']
     : ['fix', 'drop', 'skip']
 
-  // One request for the batch; a single finding needs no confirmation.
+  // One request for the batch; a single finding needs no confirmation, but a post leaves the page.
   function propose(action: Action, ids: string[]) {
     if (!ids.length) return
-    if (ids.length === 1) {
+    if (ids.length === 1 && action !== 'post') {
       onDecide(ids.map((id) => ({ id, action })))
       setPending(undefined)
     } else setPending({ action, ids })
@@ -75,7 +74,14 @@ export function BatchBar({
 
   function confirm() {
     if (!pending) return
-    onDecide(pending.ids.map((id) => ({ id, action: pending.action })))
+    onDecide(
+      pending.ids.map((id) => {
+        const finding = byId.get(id)
+        return pending.action === 'post' && finding
+          ? postInput(finding, records[id])
+          : { id, action: pending.action }
+      }),
+    )
     setPending(undefined)
   }
 
@@ -118,8 +124,7 @@ export function BatchBar({
       </div>
       <div className="tr-batch-group">
         {actions.map((action) => {
-          const movable = applicable(selected, action, records, review)
-          const ids = action === 'post' ? postable(movable) : movable
+          const ids = applicable(selected, action, records, review)
           return (
             <button
               key={action}
@@ -167,9 +172,20 @@ export function BatchBar({
                 {account ?? 'your glab account'}?
               </span>
               <ul aria-label="Comments to post">
-                {pending.ids.map((id) => (
-                  <li key={id}>{byId.get(id)?.title ?? id}</li>
-                ))}
+                {pending.ids.map((id) => {
+                  const finding = byId.get(id)
+                  return (
+                    <li key={id}>
+                      {finding?.title ?? id}
+                      {!records[id]?.comment && !hasComment(finding) && (
+                        <span className="tr-muted">
+                          {' '}
+                          · written from its problem and fix
+                        </span>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           ) : (

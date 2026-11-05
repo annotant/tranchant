@@ -27,5 +27,8 @@
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
     "prettier": "3.9.10"
+  },
+  "overrides": {
+    "katex": "0.18.11"
   }
 }

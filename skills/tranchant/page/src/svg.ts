@@ -6,6 +6,24 @@ const REFERENCE_ATTRIBUTES = ['href', 'xlink:href']
 
 const isLocal = (reference: string) => reference.trim().startsWith('#')
 
+// A `url(#…)` points into the SVG (Mermaid's gradients); any other loads, and an escape could spell one.
+const unsafeCss = (css: string) =>
+  /@import|expression\(|\\/i.test(css) || /url\(\s*(?!['"]?#)/i.test(css)
+
+const XML_ENTITIES = new Set(['amp', 'lt', 'gt', 'quot', 'apos'])
+
+/** HTML's named entities (`&nbsp;`…), which XML does not define, as numeric ones. */
+export function numericEntities(markup: string): string {
+  const decoder = document.createElement('textarea')
+  return markup.replace(/&([a-z][a-z0-9]*);/gi, (entity: string, name: string) => {
+    if (XML_ENTITIES.has(name)) return entity
+    decoder.innerHTML = entity
+    const text = decoder.value
+    if (text === entity) return `&amp;${name};`
+    return text.replace(/[\s\S]/gu, (char) => `&#${char.codePointAt(0)};`)
+  })
+}
+
 /**
  * The SVG with every script, event handler, `foreignObject`, `image` and
  * external reference removed; undefined when it does not parse as one.
@@ -43,10 +61,7 @@ export function sanitizeSvg(source: string): string | undefined {
       element.remove()
       continue
     }
-    if (
-      element.localName === 'style' &&
-      /url\(|@import/i.test(element.textContent ?? '')
-    ) {
+    if (element.localName === 'style' && unsafeCss(element.textContent ?? '')) {
       element.remove()
       continue
     }
@@ -56,11 +71,12 @@ export function sanitizeSvg(source: string): string | undefined {
       if (
         name.startsWith('on') ||
         (REFERENCE_ATTRIBUTES.includes(name) && !isLocal(attribute.value)) ||
-        (name === 'style' && /url\(|expression\(/i.test(attribute.value))
+        (name === 'style' && unsafeCss(attribute.value))
       ) {
         element.removeAttribute(attribute.name)
       }
     }
   }
-  return new XMLSerializer().serializeToString(root)
+  // Some serializers write U+00A0 back as `&nbsp;`: the page parses this as XML again.
+  return numericEntities(new XMLSerializer().serializeToString(root))
 }

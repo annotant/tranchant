@@ -34,7 +34,7 @@ export interface Mark {
 }
 
 export interface Diagram {
-  kind: 'svg' | 'text'
+  kind: 'svg' | 'text' | 'mermaid'
   source: string
   caption?: string
 }
@@ -312,6 +312,26 @@ export const canPost = (review: PostScope) =>
 /** A finding a batch or a shortcut may post as is: it has its text. */
 export const hasComment = (finding: Pick<Finding, 'comment'> | undefined) =>
   !!finding?.comment?.trim()
+
+type Draftable = Pick<Finding, 'comment' | 'problem' | 'fix'>
+
+/** The text a post sends: as last rewritten, else the finding's, else drafted from its problem and fix. */
+export const draftComment = (
+  finding: Draftable,
+  record?: Pick<FindingRecord, 'comment'>,
+) => record?.comment ?? finding.comment ?? `${finding.problem}\n\n${finding.fix}`
+
+/** A post as a batch sends it: the finding's own comment goes as is, anything else with its text. */
+export function postInput(
+  finding: Draftable & Pick<Finding, 'id'>,
+  record?: Pick<FindingRecord, 'comment'>,
+): DecisionInput {
+  const text =
+    record?.comment ?? (hasComment(finding) ? undefined : draftComment(finding))
+  return text?.trim()
+    ? { id: finding.id, action: 'post', comment: text.trim() }
+    : { id: finding.id, action: 'post' }
+}
 
 /**
  * The findings to mark as having a comment: only on your own MR, where a

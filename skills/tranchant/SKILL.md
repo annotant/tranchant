@@ -60,7 +60,7 @@ section): one `Finding` per issue, each with its `path`, `line`, an `excerpt`
 of the new-side text, `marks` on the exact spots, `problem`, `why`, `fix`,
 the `comment` to post when the change is someone else's (optional when it
 is yours with an MR), and a `diagram`
-only when a flow needs proving. `ownership` is `ours` when the change has no
+(Mermaid) only when a flow needs proving. `ownership` is `ours` when the change has no
 MR or the MR's author is the current user, `theirs` otherwise; posting needs
 `mr.diffRefs` (`glab mr view <iid> -F json` → `diff_refs`), `ours` too, its
 `head_sha` being the `headSha` reviewed. Write the file

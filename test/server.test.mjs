@@ -40,6 +40,11 @@ before(async (t) => {
   stateDir = await tempDir(t)
   page = path.join(await tempDir(t), 'page.js')
   await writeFile(page, "/* tranchant page (test) */ console.log('page')\n")
+  await mkdir(path.join(path.dirname(page), 'chunks'))
+  await writeFile(
+    path.join(path.dirname(page), 'chunks', 'mermaid-AB12.js'),
+    'export {}\n',
+  )
   glabDir = await tempDir(t)
   glab = path.join(glabDir, 'glab')
   await writeFile(
@@ -226,6 +231,17 @@ test('serves the page shell with the review’s title, and the bundle', async ()
   assert.equal(bundle.status, 200)
   assert.match(bundle.headers.get('content-type') ?? '', /javascript/)
   assert.equal(await bundle.text(), await readFile(page, 'utf8'))
+})
+
+test('serves the chunks the page loads on demand, by name only', async () => {
+  const chunk = await fetch(`${main.base}/chunks/mermaid-AB12.js`)
+  assert.equal(chunk.status, 200)
+  assert.match(chunk.headers.get('content-type') ?? '', /javascript/)
+  assert.equal(await chunk.text(), 'export {}\n')
+  assert.equal((await fetch(`${main.base}/chunks/missing-0000.js`)).status, 404)
+  for (const escape of ['/chunks/..%2Fpage.js', '/chunks/.hidden.js', '/chunks/a/b.js']) {
+    assert.equal((await fetch(`${main.base}${escape}`)).status, 404, escape)
+  }
 })
 
 test('answers the review, its decisions, its runs and the heads', async () => {

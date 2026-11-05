@@ -2,6 +2,7 @@ import { type FormEvent, useState } from 'react'
 import { Diagram } from './Diagram'
 import {
   allows,
+  draftComment,
   BUCKET_LABELS,
   type DecisionInput,
   type Finding,
@@ -156,9 +157,7 @@ export function FindingDetail({
   const [mode, setMode] = useState<Mode>('idle')
   const [showContext, setShowContext] = useState(false)
   const [context, setContext] = useState('')
-  const [comment, setComment] = useState(
-    record?.comment ?? finding.comment ?? `${finding.problem}\n\n${finding.fix}`,
-  )
+  const [comment, setComment] = useState(() => draftComment(finding, record))
   const [reason, setReason] = useState('')
 
   const can = (move: Parameters<typeof allows>[0]) =>

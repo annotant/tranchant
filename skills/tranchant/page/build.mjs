@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
@@ -21,8 +21,11 @@ const { version } = JSON.parse(
 
 /** @type {import('esbuild').BuildOptions & { metafile: true }} */
 const buildOptions = {
-  entryPoints: ['src/main.tsx'],
-  outfile: path.join(options.outdir, 'page.js'),
+  // page.js, and the chunks it loads on demand (Mermaid) in chunks/, which the server serves.
+  entryPoints: { page: 'src/main.tsx' },
+  outdir: options.outdir,
+  chunkNames: 'chunks/[name]-[hash]',
+  splitting: true,
   bundle: true,
   format: 'esm',
   target: 'es2022',
@@ -39,6 +42,8 @@ const buildOptions = {
     js: '/* tranchant page: served by the tranchant skill on 127.0.0.1 only */',
   },
 }
+const PAGE = path.join(options.outdir, 'page.js')
+const CHUNKS = path.join(options.outdir, 'chunks')
 
 if (options.watch) {
   const ctx = await context({
@@ -52,9 +57,11 @@ if (options.watch) {
         setup(rebuilt) {
           rebuilt.onEnd((result) => {
             if (result.errors.length || !result.metafile || !result.outputFiles) return
+            // Old chunks stay: an open page, never reloaded, still imports them by name.
+            mkdirSync(CHUNKS, { recursive: true })
             for (const file of result.outputFiles) writeFileSync(file.path, file.contents)
             writeLicenses(result.metafile)
-            console.log(`REBUILT ${buildOptions.outfile}`)
+            console.log(`REBUILT ${PAGE}`)
           })
         },
       },
@@ -82,7 +89,25 @@ if (options.watch) {
     })
   }
 } else {
+  rmSync(CHUNKS, { recursive: true, force: true })
   writeLicenses((await build(buildOptions)).metafile)
+}
+
+/**
+ * A package's license: its license file, else its README's License section
+ * (fastdom ships no file); undefined when it has neither.
+ * @param {string} dir
+ */
+function licenseText(dir) {
+  const files = readdirSync(dir)
+  const licenseFile = files.find((file) => /^licen[cs]e(\.|$)/i.test(file))
+  if (licenseFile) return readFileSync(path.join(dir, licenseFile), 'utf8').trim()
+  const readme = files.find((file) => /^readme(\.|$)/i.test(file))
+  if (!readme) return undefined
+  const section = /^(#+)\s*licen[cs]e\s*$([\s\S]*?)(?=^#{1,6}\s|(?![\s\S]))/im.exec(
+    readFileSync(path.join(dir, readme), 'utf8'),
+  )
+  return section?.[2]?.trim() || undefined
 }
 
 /**
@@ -99,16 +124,15 @@ function writeLicenses(metafile) {
     .toSorted((a, b) => a.localeCompare(b))
     .map((dir) => {
       const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'))
-      const licenseFile = readdirSync(dir).find((file) => /^licen[cs]e(\.|$)/i.test(file))
-      if (!licenseFile) {
-        throw new Error(`${pkg.name} is bundled but ships no license file`)
-      }
-      const text = readFileSync(path.join(dir, licenseFile), 'utf8').trim()
-      return `${pkg.name} ${pkg.version} (${pkg.license})\n\n${text}\n`
+      const text = licenseText(dir)
+      if (!text) throw new Error(`${pkg.name} is bundled but ships no license text`)
+      // Some (khroma) name no license in package.json: their license file says it.
+      const name = pkg.license ? ` (${pkg.license})` : ''
+      return `${pkg.name} ${pkg.version}${name}\n\n${text}\n`
     })
   writeFileSync(
     path.join(options.outdir, 'THIRD_PARTY_LICENSES.txt'),
-    `The Tranchant page (page.js) bundles the following packages.\n\n${notices.join(
+    `The Tranchant page (page.js and chunks/) bundles the following packages.\n\n${notices.join(
       `\n${'-'.repeat(80)}\n\n`,
     )}`,
   )
