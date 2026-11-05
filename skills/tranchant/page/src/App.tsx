@@ -498,6 +498,9 @@ export default function App() {
           // An agent whose end step was never written ended with its review all the same.
           review?.status === 'reviewing' ? agent : { ...agent, running: false },
         )}
+        reviewing={review?.status === 'reviewing'}
+        findings={review?.findings ?? []}
+        verify={review?.verify === true}
       />
       <details
         className="tr-summary"
