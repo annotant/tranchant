@@ -139,7 +139,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-chip--live { background: var(--tr-accent-weak); color: var(--tr-accent); gap: 6px; }
 .tr-chip--live .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
 .tr-unverified { opacity: 0.55; }
-.tr-progress { display: flex; flex-direction: column; gap: 10px; margin: 0 0 12px; padding: 0 0 10px; border-bottom: 1px solid var(--tr-border); font-size: 13px; }
+.tr-progress { display: flex; flex-direction: column; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--tr-border); font-size: 13px; }
 .tr-progress-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .tr-progress-title { font-weight: 700; }
 .tr-progress-ok { color: var(--tr-auto); flex: none; }
