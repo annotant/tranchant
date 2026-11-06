@@ -214,7 +214,9 @@ test('prints READY with the review and the project, and answers the health check
     `READY ${main.base} review=${main.review.id} project=${main.project}`,
   )
   const health = await json(await fetch(`${main.base}/api/health`))
-  assert.deepEqual(health, { ok: true, review: main.review.id, version: '0.1.0' })
+  const plugin = new URL('../.claude-plugin/plugin.json', import.meta.url)
+  const { version } = JSON.parse(await readFile(plugin, 'utf8'))
+  assert.deepEqual(health, { ok: true, review: main.review.id, version })
 })
 
 test('serves the page shell with the review’s title, and the bundle', async () => {
