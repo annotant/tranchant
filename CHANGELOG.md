@@ -9,6 +9,10 @@ released to the `stable` branch.
 
 ### Added
 
+- **Light or dark, your pick.** A sun or moon in the header switches the
+  page to the other theme, diff, code colours and diagrams included. The
+  page follows the system until the first click; the pick is remembered in
+  the browser and set before the page draws, so a reload never flashes.
 - **Post on your own MR.** `/tranchant review` on a branch looks for its
   open merge request with `glab`; found, the page offers **Post a comment**
   next to **Fix now**, names the MR in the header, and the batch bar posts
