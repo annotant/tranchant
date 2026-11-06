@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type DiffState,
   postAnswer,
+  postDiscuss,
   postDecisions,
   postStop,
   useDiff,
@@ -314,6 +315,21 @@ export default function App() {
     [reload],
   )
 
+  const discuss = useCallback(
+    async (id: string, text: string) => {
+      try {
+        await postDiscuss(id, text)
+        setNotice(undefined)
+      } catch (failure) {
+        setNotice(
+          failure instanceof Error ? failure.message : 'The message was not sent.',
+        )
+      }
+      await reload()
+    },
+    [reload],
+  )
+
   const stop = useCallback(
     async (id: string) => {
       try {
@@ -445,6 +461,7 @@ export default function App() {
       finding={current}
       record={records[current.id]}
       steps={payload?.runs[current.id] ?? []}
+      discussion={payload?.discussions?.[current.id]}
       unverified={unverified.has(current.id)}
       disabled={disabled}
       onDecide={(decisions) => {
@@ -454,6 +471,7 @@ export default function App() {
       }}
       onAnswer={(id, text, choices) => void answer(id, text, choices)}
       onStop={(id) => void stop(id)}
+      onDiscuss={(id, text) => void discuss(id, text)}
     />
   ) : (
     <p className="tr-muted">

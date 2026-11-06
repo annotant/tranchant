@@ -424,6 +424,16 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-input { flex: 1; min-width: 240px; height: 30px; padding: 0 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
 .tr-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); resize: vertical; }
 .tr-input:focus, .tr-textarea:focus { outline: none; border-color: var(--tr-accent); }
+.tr-discussion { display: flex; flex-direction: column; gap: 8px; }
+.tr-discussion-title { margin: 0; font-size: 14px; }
+.tr-messages { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.tr-message { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--tr-radius); background: var(--tr-bg-2); }
+.tr-message--reviewer { background: var(--tr-accent-weak); }
+.tr-message-by { font-size: 12px; font-weight: 600; color: var(--tr-muted); }
+.tr-message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tr-proposals { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.tr-proposal { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 6px 8px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
+.tr-proposal-label { font-size: 12px; font-weight: 600; color: var(--tr-muted); }
 .tr-ask { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--tr-warn-bg); border-radius: var(--tr-radius); }
 .tr-ask-text { font-weight: 600; }
 .tr-options { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }

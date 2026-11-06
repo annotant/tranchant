@@ -164,6 +164,13 @@ In the page:
   branch, then review again).
 - **Drop** records why the finding is wrong or intentional; **Skip** defers
   it.
+- **Discuss** opens a thread under the finding when you doubt it or its fix:
+  ask ("is this really reachable?", "what about doing X instead?") and an
+  agent answers from the code, which it reads and never changes. Its answer
+  may propose another fix, a comment or a reason to drop: **Fix with this**,
+  **Post this** (it fills the comment editor) or **Drop with this reason**
+  turn it into a decision in one click. A discussion decides nothing; it
+  survives a reload, and reads as it stands once the finding is settled.
 - The bar at the top selects every finding, a group (To do, Safe to
   auto-fix) or none, then applies one action to the selection; Post all to do
   posts every open finding at once.

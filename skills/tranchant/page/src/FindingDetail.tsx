@@ -1,10 +1,13 @@
 import { type FormEvent, useState } from 'react'
 import { Diagram } from './Diagram'
+import { Discussion } from './Discussion'
 import {
   allows,
   draftComment,
   BUCKET_LABELS,
   type DecisionInput,
+  discussable,
+  type Discussion as Thread,
   type Finding,
   type FindingRecord,
   postsFrom,
@@ -28,12 +31,15 @@ interface Props {
   finding: Finding
   record: FindingRecord | undefined
   steps: readonly Step[]
+  /** Its discussion with an agent, if any. */
+  discussion?: Thread | undefined
   /** No verifier confirmed it yet. */
   unverified?: boolean
   disabled: boolean
   onDecide: (decisions: DecisionInput[]) => void
   onAnswer: (id: string, text: string, choices: string[]) => void
   onStop: (id: string) => void
+  onDiscuss: (id: string, text: string) => void
 }
 
 type Mode = 'idle' | 'editing' | 'dropping'
@@ -144,11 +150,13 @@ export function FindingDetail({
   finding,
   record,
   steps,
+  discussion,
   unverified = false,
   disabled,
   onDecide,
   onAnswer,
   onStop,
+  onDiscuss,
 }: Props) {
   const state = stateOf(
     { [finding.id]: record ?? { state: 'open', runs: [], events: [] } },
@@ -160,6 +168,7 @@ export function FindingDetail({
   const [context, setContext] = useState('')
   const [comment, setComment] = useState(() => draftComment(finding, record))
   const [reason, setReason] = useState('')
+  const [discussing, setDiscussing] = useState(false)
 
   const can = (move: Parameters<typeof allows>[0]) =>
     !disabled && allows(move, state, review)
@@ -169,6 +178,8 @@ export function FindingDetail({
   const blocker = staleMrReason(review)
   const blocked = !!blocker && !disabled && postsFrom(state)
   const tag = tagOf(finding)
+  const writable = discussable(state)
+  const threadShown = discussing || !!discussion?.messages.length
   const lastRun = record?.runs.at(-1)
 
   const decide = (input: Omit<DecisionInput, 'id'>) => {
@@ -440,6 +451,16 @@ export function FindingDetail({
                   Skip
                 </button>
               )}
+              {!threadShown && writable && !disabled && (
+                <button
+                  type="button"
+                  className="tr-btn"
+                  title="Ask an agent about this finding before you decide"
+                  onClick={() => setDiscussing(true)}
+                >
+                  Discuss
+                </button>
+              )}
             </div>
             {blocked && (
               <p className="tr-muted" role="note">
@@ -471,6 +492,24 @@ export function FindingDetail({
           </>
         )}
       </section>
+
+      {threadShown && (
+        <Discussion
+          discussion={discussion}
+          writable={writable}
+          disabled={disabled}
+          canFix={can('fix')}
+          canPost={can('post')}
+          canDrop={can('drop')}
+          onSend={(text) => onDiscuss(finding.id, text)}
+          onFix={(proposed) => decide({ action: 'fix', context: proposed })}
+          onPost={(proposed) => {
+            setComment(proposed)
+            setMode('editing')
+          }}
+          onDrop={(proposed) => decide({ action: 'drop', reason: proposed })}
+        />
+      )}
 
       <RunPanel id={finding.id} record={record} steps={steps} disabled={disabled} />
     </article>

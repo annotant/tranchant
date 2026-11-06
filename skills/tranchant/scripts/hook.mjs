@@ -18,8 +18,9 @@
 //      working, neither done nor asked about, fails, so the reviewer can
 //      send it again. Prints `AGENT_ENDED <id>` when it did.
 //
-// `--reviewer`: a review agent's (a lens's reviewer, `rv-<lens>`, or a
-// finding's verifier, `vf-<id>`): it has no writing tool and takes no lock;
+// `--reviewer`: a review agent's (a lens's reviewer, `rv-<lens>`, a
+// finding's verifier, `vf-<id>`, or the agent discussing a finding with the
+// reviewer, `ds-<id>`): it has no writing tool and takes no lock;
 // its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
@@ -96,7 +97,13 @@ const GIT_READS = new Set([
 ])
 // git options that write a file or run a program.
 const GIT_RISKY = /^(?:--output|--ext-diff|-O|--open-files-in-pager)/
-const REVIEW_SCRIPT = /\/scripts\/(add|verify|remove)\.mjs$/
+const REVIEW_SCRIPT = /\/scripts\/(add|verify|remove|reply)\.mjs$/
+/** The scripts each kind of review agent runs, by the prefix of its name. */
+const SCRIPTS_OF = /** @type {Record<string, string[]>} */ ({
+  rv: ['add'],
+  vf: ['verify', 'remove'],
+  ds: ['reply'],
+})
 // A Bash command that writes files takes no lock: refused, the agent must use
 // Edit or Write. Best effort, on the usual forms. What an inline script writes
 // cannot be told: always refused.
@@ -287,24 +294,31 @@ function argumentRefusal(program, args) {
 /**
  * Why review agent `name` may not run `command`, or undefined when it may: a
  * chain of reading commands, and the agent's own script (a reviewer's
- * add.mjs; a verifier's verify.mjs or remove.mjs, on its own finding).
- * @param {string} name `rv-<lens>` or `vf-<finding id>`.
+ * add.mjs; a verifier's verify.mjs or remove.mjs, a discussing agent's
+ * reply.mjs, on its own finding).
+ * @param {string} name `rv-<lens>`, `vf-<finding id>` or `ds-<finding id>`.
  * @param {string} command
  */
 function reviewerRefusal(name, command) {
   const parsed = shellWords(command)
   if ('refusal' in parsed) return parsed.refusal
+  const kind = name.slice(0, 2)
+  const own = SCRIPTS_OF[kind] ?? []
   for (const [program, ...args] of parsed.segments) {
     if (!program) continue
     if (program === 'node') {
       const script = REVIEW_SCRIPT.exec(args[0] ?? '')?.[1]
-      const verifier = name.startsWith('vf-')
       if (!script) return 'node runs only the review scripts'
-      if (!verifier && script !== 'add')
-        return `a reviewer adds findings, ${script}.mjs is a verifier's`
-      if (verifier && script === 'add') return 'a verifier checks a finding, it adds none'
-      if (verifier && args[1] !== name.slice(3))
-        return `a verifier gives its verdict on ${name.slice(3)} only`
+      if (!own.includes(script))
+        return kind === 'rv'
+          ? `a reviewer adds findings, ${script}.mjs is not its script`
+          : kind === 'vf'
+            ? script === 'add'
+              ? 'a verifier checks a finding, it adds none'
+              : `a verifier gives its verdict, ${script}.mjs is not its script`
+            : `a discussing agent answers with reply.mjs, ${script}.mjs is not its script`
+      if (kind !== 'rv' && args[1] !== name.slice(3))
+        return `${kind === 'vf' ? 'a verifier gives its verdict' : 'it answers'} on ${name.slice(3)} only`
       continue
     }
     if (!READERS.has(program)) return `${program} is not a reading command`

@@ -924,3 +924,18 @@ test('the header has the button that switches the theme', async () => {
     within(header!).getByRole('button', { name: /^Switch to (dark|light) theme$/ }),
   ).toBeTruthy()
 })
+
+test('a message in a discussion goes to /api/discuss; the thread shows from the payload', async () => {
+  const server = await renderApp(payload({}))
+  expect(selectedOption()).toBe('f-02')
+  fireEvent.click(screen.getByRole('button', { name: 'Discuss' }))
+  fireEvent.change(screen.getByRole('textbox', { name: 'Your message to the agent' }), {
+    target: { value: 'Is it reachable?' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() =>
+    expect(server.posts).toEqual([
+      { url: '/api/discuss', body: { id: 'f-02', text: 'Is it reachable?' } },
+    ]),
+  )
+})

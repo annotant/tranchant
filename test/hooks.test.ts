@@ -91,6 +91,15 @@ function world(
     // A lens's prompt is its reviewer's whole instructions, its frontmatter left out.
     ['/lenses/bugs.md', '---\nname: bugs\n---\n\nYou review one lens: bugs.\n'],
     ['/lenses/style.md', 'Look at the style.\n'],
+    // A finding the reviewer discusses, and the question they asked.
+    [`${DIR}/findings/f-01.json`, JSON.stringify({ id: 'f-01', title: 'Null tenantId' })],
+    [
+      `${DIR}/discussions/f-01.json`,
+      JSON.stringify({
+        version: 1,
+        messages: [{ by: 'reviewer', text: 'Is it reachable?', at: 'now' }],
+      }),
+    ],
   ])
   if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
   // What the hooks did, in order: the import, the server, the page, the agents.
@@ -101,6 +110,8 @@ function world(
       return { value: '---\nname: worker\n---\n\nYou apply one finding.\n' }
     if (e.path.endsWith('/agents/review/verifier.md'))
       return { value: '---\nname: verifier\n---\n\nYou verify one finding.\n' }
+    if (e.path.endsWith('/agents/discuss.md'))
+      return { value: '---\nname: discuss\n---\n\nYou answer one question.\n' }
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
@@ -142,7 +153,12 @@ function world(
   const notes: { argv: string[]; stdin: string }[] = []
   const prepared: { argv: string[]; cwd?: string }[] = []
   const completed: string[][] = []
+  const replies: string[][] = []
   on('process.run', (_$, e) => {
+    if (e.argv[1]?.endsWith('/scripts/reply.mjs')) {
+      replies.push(e.argv.slice(2))
+      return ok(`UNANSWERED ${e.argv[2] ?? ''}\n`)
+    }
     if (e.argv[1]?.endsWith('/scripts/prepare.mjs')) {
       prepared.push({ argv: e.argv.slice(2), cwd: e.init?.cwd })
       return ok(preparing)
@@ -302,6 +318,7 @@ function world(
     order,
     prepared,
     completed,
+    replies,
   }
 }
 
@@ -1072,4 +1089,50 @@ test('a complete.mjs that fails is said, with the command that does it', async (
     /^Tranchant could not mark Classification overview complete: COMPLETE_REFUSED the review is complete already\. node .+\/complete\.mjs --review /,
   )
   await w.exit(0)
+})
+
+test('a question starts its discussing agent, read-only; one that ends unanswered is answered as failed', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('DISCUSS f-01', 'DISCUSS f-01')
+  // Once, however many times the server says so.
+  expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:ds-f-01-rev-1'])
+  const prompt = w.spawned[0]?.prompt ?? ''
+  expect(prompt).toMatch(
+    new RegExp(
+      `^f-01\nREVIEW=${DIR}\nSKILL=.+\nPROJECT=${ROOT}\nBASE=main\nHEAD=${HEAD}\n`,
+    ),
+  )
+  // The finding and the reviewer's words come fenced, after the paths.
+  const fence = marker(prompt)
+  expect(fence).toBeDefined()
+  expect(prompt).toContain(`${fence}       "text": "Is it reachable?",`)
+  expect(prompt).toContain(`${fence}     "title": "Null tenantId"`)
+  const spec = w.registered.get('tranchant:ds-f-01-rev-1')
+  expect(spec?.prompt).toBe('You answer one question.\n')
+  expect(spec?.tools).toEqual(['Read', 'Bash', 'Grep', 'Glob'])
+  expect(spec?.hooks?.PreToolUse).toEqual([
+    {
+      matcher: 'Bash',
+      hooks: [
+        {
+          type: 'command',
+          command: expect.stringMatching(/'--reviewer' 'ds-f-01'/),
+        },
+      ],
+    },
+  ])
+  expect(w.notes[0]?.stdin).toMatch(/"kind":"start","label":"Discussing f-01"/)
+  for (const agent of ['tranchant:ds-f-01-rev-1', 'tranchant:discuss'])
+    expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
+  await $.turn.complete(turnEnded('a1', 'REPLIED'))
+  await w.clock.settle()
+  expect(w.replies).toEqual([['f-01', '--review', DIR, '--ended']])
+  // Asked again: a new agent, which rereads the discussion.
+  await w.print('DISCUSS f-01')
+  expect(w.spawned).toHaveLength(2)
+  // Stopped: its question gets a failed answer too, and nothing completes.
+  await $.command.run(command('stop'))
+  expect(w.replies).toHaveLength(2)
+  expect(w.completed).toEqual([])
 })

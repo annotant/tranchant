@@ -22,10 +22,13 @@ pattern, read how annotant does it.
   `/tranchant review` starts the review agents the same way: one reviewer per
   lens (`tranchant:rv-<lens>-<review>`), one verifier per finding
   (`tranchant:vf-<id>-<review>`), `<review>` the review id's first 8
-  characters.
+  characters. A question asked in a finding's discussion starts one
+  read-only agent among those (`tranchant:ds-<id>-<review>`), which answers
+  with `reply.mjs`.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
+  `agents/discuss.md`, the discussing agent's;
   `agents/review/`, the default recipe of `/tranchant review`, its lenses'
   prompts (each a reviewer's whole instructions) and the verifier's. Hidden
   from the model.
@@ -33,8 +36,8 @@ pattern, read how annotant does it.
   every line is read in every user's session.
 - `skills/tranchant/scripts/`: Node.js ES modules with JSDoc types, no
   dependencies. `server.mjs` serves the page and prints the lines the hooks
-  read; `lib/store.mjs` owns `decisions.json`; `lib/format.mjs` is the
-  files' reference.
+  read; `lib/store.mjs` owns `decisions.json`, `lib/discussion.mjs` the
+  discussions; `lib/format.mjs` is the files' reference.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import App from '../src/App'
-import type { FindingRecord, Ownership, Review, State } from '../src/domain'
+import type { Discussion, FindingRecord, Ownership, Review, State } from '../src/domain'
 import { FindingDetail } from '../src/FindingDetail'
 import {
   fakeServer,
@@ -22,7 +22,9 @@ function renderDetail({
   disabled = false,
   finding = bug,
   reviewFields = {},
+  discussion,
 }: {
+  discussion?: Discussion
   ownership?: Ownership
   state?: State
   fields?: Partial<FindingRecord>
@@ -33,6 +35,7 @@ function renderDetail({
   const onDecide = vi.fn()
   const onAnswer = vi.fn()
   const onStop = vi.fn()
+  const onDiscuss = vi.fn()
   render(
     <FindingDetail
       review={review(ownership, reviewFields)}
@@ -47,9 +50,11 @@ function renderDetail({
       onDecide={onDecide}
       onAnswer={onAnswer}
       onStop={onStop}
+      discussion={discussion}
+      onDiscuss={onDiscuss}
     />,
   )
-  return { onDecide, onAnswer, onStop }
+  return { onDecide, onAnswer, onStop, onDiscuss }
 }
 
 const button = (name: string | RegExp) => screen.queryByRole('button', { name })
@@ -206,6 +211,7 @@ test('posted shows the discussion link; failed and dropped their reason', () => 
       onDecide={vi.fn()}
       onAnswer={vi.fn()}
       onStop={vi.fn()}
+      onDiscuss={vi.fn()}
     />,
   )
   expect(
@@ -409,3 +415,108 @@ test.each(Object.keys(FAMILIES).filter(isState))(
     expect(chip?.textContent).toBe(label)
   },
 )
+
+const asked = (text: string, at = '2026-11-06T10:00:00Z') =>
+  ({ by: 'reviewer', text, at }) as const
+
+test('Discuss opens a thread under the finding; a message goes to the agent', () => {
+  const { onDiscuss, onDecide } = renderDetail()
+  expect(screen.queryByRole('region', { name: 'Discussion' })).toBeNull()
+  fireEvent.click(button('Discuss')!)
+  expect(button('Discuss')).toBeNull()
+  const box = screen.getByRole('textbox', { name: 'Your message to the agent' })
+  expect(button('Send')).toHaveProperty('disabled', true)
+  fireEvent.change(box, { target: { value: ' Is it reachable? ' } })
+  fireEvent.click(button('Send')!)
+  expect(onDiscuss).toHaveBeenCalledWith('f-01', 'Is it reachable?')
+  expect(onDecide).not.toHaveBeenCalled()
+})
+
+test('while the agent answers, it shows what it does and takes no message', () => {
+  renderDetail({
+    discussion: {
+      messages: [asked('Is it reachable?')],
+      activity: 'src/people/usePeople.ts',
+    },
+  })
+  expect(screen.getByRole('status').textContent).toBe(
+    'The agent is answering… src/people/usePeople.ts',
+  )
+  expect(screen.queryByRole('textbox', { name: 'Your message to the agent' })).toBeNull()
+})
+
+test("the agent's proposals carry over to a decision in one click", () => {
+  const discussion: Discussion = {
+    messages: [
+      asked('Is it reachable?'),
+      {
+        by: 'agent',
+        text: 'Yes: **on mount**.',
+        at: '2026-11-06T10:01:00Z',
+        proposal: {
+          fix: 'Guard in the hook.',
+          comment: 'This crashes on mount.',
+          drop: 'Not reachable.',
+        },
+      },
+    ],
+  }
+  const { onDecide } = renderDetail({ discussion, ownership: 'theirs' })
+  expect(screen.getByText('on mount').tagName).toBe('STRONG')
+  fireEvent.click(button('Fix with this')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'fix', context: 'Guard in the hook.' },
+  ])
+  fireEvent.click(button('Drop with this reason')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'drop', reason: 'Not reachable.' },
+  ])
+  fireEvent.click(button('Post this')!)
+  const editor = screen.getByRole('textbox', { name: 'Comment to post' })
+  expect(editor).toHaveProperty('value', 'This crashes on mount.')
+  fireEvent.click(button('Post')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'post', comment: 'This crashes on mount.' },
+  ])
+})
+
+test('a settled finding shows its discussion read-only', () => {
+  renderDetail({
+    state: 'fixed',
+    discussion: {
+      messages: [
+        asked('Is it reachable?'),
+        {
+          by: 'agent',
+          text: 'Yes.',
+          at: '2026-11-06T10:01:00Z',
+          proposal: { fix: 'Guard.' },
+        },
+      ],
+    },
+  })
+  expect(screen.getByRole('region', { name: 'Discussion' })).toBeDefined()
+  expect(screen.getByText('Is it reachable?')).toBeDefined()
+  expect(button('Fix with this')).toBeNull()
+  expect(button('Discuss')).toBeNull()
+  expect(screen.queryByRole('textbox', { name: 'Your message to the agent' })).toBeNull()
+  expect(screen.getByText(/^Read-only/)).toBeDefined()
+})
+
+test('an agent that ended without answering says so, and the reviewer may ask again', () => {
+  renderDetail({
+    discussion: {
+      messages: [
+        asked('Why?'),
+        {
+          by: 'agent',
+          text: 'The agent ended without answering: ask again.',
+          at: '2026-11-06T10:01:00Z',
+          failed: true,
+        },
+      ],
+    },
+  })
+  expect(screen.getByText(/ended without answering/).className).toMatch(/tr-error/)
+  expect(screen.getByRole('textbox', { name: 'Your message to the agent' })).toBeDefined()
+})

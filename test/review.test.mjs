@@ -400,6 +400,33 @@ test("a verifier's hooks let it give its verdict on its own finding only", async
   assert.match(await pre(`node ${SCRIPTS}add.mjs --review ${dir}`), /adds none/)
 })
 
+test("a discussing agent's hooks let it read and answer on its own finding only", async (t) => {
+  const { dir } = await live(t, 'agent-3')
+  const project = await tempDir(t)
+  const reply = path.join(SCRIPTS, 'reply.mjs')
+  /** @param {string} command */
+  const pre = async (command) => {
+    const ran = await run(
+      process.execPath,
+      [HOOK, 'pre', '--reviewer', 'ds-f-01', '--review', dir, '--project', project],
+      { input: JSON.stringify(bash(command)), env: { TRANCHANT_STATE_DIR: stateDir } },
+    )
+    return ran.stdout
+      ? JSON.parse(ran.stdout).hookSpecificOutput.permissionDecisionReason
+      : undefined
+  }
+  const answer = `node ${reply} f-01 --review ${dir} <<'EOF'\n{"text":"$(rm -rf /)"}\nEOF`
+  assert.equal(await pre(answer), undefined)
+  assert.equal(
+    await pre(`git -C ${project} log -3 && grep -rn tenantId ${project}`),
+    undefined,
+  )
+  assert.match(await pre(`node ${reply} f-02 --review ${dir}`), /on f-01 only/)
+  assert.match(await pre(`node ${VERIFY} f-01 --review ${dir}`), /reply\.mjs/)
+  assert.match(await pre(`echo x > ${project}/a.ts`), /redirection/)
+  assert.match(await pre(`npm test`), /not a reading command/)
+})
+
 test('a finding lands unverified, whatever it says', async (t) => {
   const { dir, findings } = await live(t, 'verify-3')
   const added = await run(
