@@ -39,7 +39,8 @@ interface Props {
   onDecide: (decisions: DecisionInput[]) => void
   onAnswer: (id: string, text: string, choices: string[]) => void
   onStop: (id: string) => void
-  onDiscuss: (id: string, text: string) => void
+  /** Resolves to whether the server took the message. */
+  onDiscuss: (id: string, text: string) => Promise<boolean>
 }
 
 type Mode = 'idle' | 'editing' | 'dropping'

@@ -226,8 +226,8 @@ export interface Message {
   text: string
   at: string
   proposal?: Proposal
-  /** The agent ended without answering. */
-  failed?: boolean
+  /** The agent ended, was stopped or never started before it answered. */
+  failed?: true
 }
 
 /** A finding's discussion with an agent, as `/api/review` sends it. */

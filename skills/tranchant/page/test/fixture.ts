@@ -418,6 +418,8 @@ export function fakeServer(
   let account: AccountPayload | undefined = { username: null }
   let current = initial
   let down = false
+  /** What `/api/discuss` refuses with, as the server words it; undefined, it takes the message. */
+  let discussRefusal: string | undefined
   const posts: Post[] = []
   const fetch = vi.fn(async (input: string, init?: RequestInit) => {
     if (down) throw new TypeError('Failed to fetch')
@@ -439,6 +441,8 @@ export function fakeServer(
         )
         return Response.json({ applied, refused: [] })
       }
+      if (url.pathname === '/api/discuss' && discussRefusal !== undefined)
+        return Response.json({ error: discussRefusal }, { status: 409 })
       return Response.json({ ok: true })
     }
     if (url.pathname.startsWith('/api/runs/')) {
@@ -473,6 +477,9 @@ export function fakeServer(
     },
     answerDiff(next: DiffAnswer) {
       diffAnswer = next
+    },
+    refuseDiscuss(reason: string | undefined) {
+      discussRefusal = reason
     },
     down() {
       down = true

@@ -1226,6 +1226,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     $.ui.toast(
       `Tranchant could not start the ${job.kind} ${reviewAgentName(job)}: ${dir}/review.json: ${loaded}`,
     )
+    if (job.kind === 'discusser') await unanswered($, dir, job.id)
     void checkComplete($, dir)
     return
   }
@@ -1312,27 +1313,58 @@ async function endReviewAgent(
   await reviewNote($, one, one.agent, [
     { at: Date.now(), kind: 'end', label, state: how === 'stopped' ? 'failed' : 'done' },
   ])
-  if (one.kind === 'discusser') await unanswered($, one.review, one.name.slice(3))
   await debug($, `${tag(one.name)}: agent ${one.agent} ${how}`)
+  if (one.kind !== 'discusser') return
+  const id = one.name.slice(3)
+  // Asked again after its answer, while its turn ended: a new agent, not a failure.
+  const again = reasked.delete(key) && how === 'ended'
+  if (again && (await waitsForAnswer($, one.review, id)))
+    await discussLater($, one.review, id)
+  else await unanswered($, one.review, id)
 }
+
+/** Whether finding `id`'s discussion ends on the reviewer's question; unreadable, it does not. */
+async function waitsForAnswer($: $, dir: string, id: string) {
+  try {
+    const discussion: unknown = JSON.parse(
+      await $.fs.read(`${dir}/discussions/${id}.json`),
+    )
+    const messages =
+      discussion && typeof discussion === 'object' && 'messages' in discussion
+        ? discussion.messages
+        : undefined
+    const last: unknown = Array.isArray(messages) ? messages.at(-1) : undefined
+    return !!last && typeof last === 'object' && 'by' in last && last.by === 'reviewer'
+  } catch {
+    return false
+  }
+}
+
+/** Discussing agents asked again while they still ran, by key: their next question waits for their end. */
+const reasked = new Set<string>()
 
 /** A question its agent left waiting gets a failed answer: the reviewer may ask again. */
 async function unanswered($: $, dir: string, id: string) {
   const ran = await $.process
     .run(['node', `${skillDir($)}/scripts/reply.mjs`, id, '--review', dir, '--ended'])
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
-  if (ran.exitCode !== 0)
-    await debug(
-      $,
-      `${tag(id)}: reply.mjs --ended failed: ${short(ran.stderr.trim(), 160)}`,
+  if (ran.exitCode !== 0) {
+    const why = short(ran.stderr.trim() || `reply.mjs exited ${ran.exitCode}`, 160)
+    await debug($, `${tag(id)}: reply.mjs --ended failed: ${why}`)
+    // Else the question waits for ever, and the page refuses the next one.
+    $.ui.toast(
+      `Tranchant could not close the unanswered question on ${tag(id)}: ${why}. node ${skillDir($)}/scripts/reply.mjs ${id} --review ${dir} --ended does it.`,
     )
-  else if (ran.stdout.trim()) await debug($, `${tag(id)}: ${ran.stdout.trim()}`)
+  } else if (ran.stdout.trim()) await debug($, `${tag(id)}: ${ran.stdout.trim()}`)
 }
 
 /** The reviewer asked about a finding: its agent, once, among the review agents. */
 async function discussLater($: $, dir: string, id: string) {
   const key = agentKey(`ds-${id}`, dir)
-  if (startingReview.has(key) || (await read($, reviewAgents))[key]?.running) return
+  if (startingReview.has(key) || (await read($, reviewAgents))[key]?.running) {
+    reasked.add(key)
+    return
+  }
   let queued = false
   await update($, discussing, (all) => {
     const ids = all[dir] ?? []

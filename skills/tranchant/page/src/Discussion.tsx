@@ -10,7 +10,8 @@ interface Props {
   canFix: boolean
   canPost: boolean
   canDrop: boolean
-  onSend: (text: string) => void
+  /** Resolves to whether the server took the message: the draft stays until it does. */
+  onSend: (text: string) => Promise<boolean>
   onFix: (context: string) => void
   onPost: (comment: string) => void
   onDrop: (reason: string) => void
@@ -86,16 +87,19 @@ function Proposals({
 export function Discussion(props: Props) {
   const { discussion, writable, disabled, onSend } = props
   const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
   const messages = discussion?.messages ?? []
   const waiting = isWaiting(discussion)
   const last = messages.at(-1)
-  const canSend = writable && !disabled && !waiting && text.trim().length > 0
+  const canSend = writable && !disabled && !waiting && !sending && text.trim().length > 0
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault()
     if (!canSend) return
-    onSend(text.trim())
-    setText('')
+    setSending(true)
+    const sent = await onSend(text.trim())
+    setSending(false)
+    if (sent) setText('')
   }
 
   return (
@@ -132,7 +136,10 @@ export function Discussion(props: Props) {
       )}
       {writable ? (
         !waiting && (
-          <form className="tr-inline-form tr-inline-form--column" onSubmit={submit}>
+          <form
+            className="tr-inline-form tr-inline-form--column"
+            onSubmit={(event) => void submit(event)}
+          >
             <textarea
               className="tr-textarea"
               value={text}

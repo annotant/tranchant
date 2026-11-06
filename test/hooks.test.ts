@@ -102,6 +102,13 @@ function world(
     ],
   ])
   if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
+  for (const id of ['f-02', 'f-03', 'f-04']) {
+    files.set(`${DIR}/findings/${id}.json`, JSON.stringify({ id }))
+    files.set(
+      `${DIR}/discussions/${id}.json`,
+      files.get(`${DIR}/discussions/f-01.json`) ?? '',
+    )
+  }
   // What the hooks did, in order: the import, the server, the page, the agents.
   const order: string[] = []
   on('fs.read', (_$, e) => {
@@ -319,6 +326,7 @@ function world(
     prepared,
     completed,
     replies,
+    files,
   }
 }
 
@@ -1094,8 +1102,7 @@ test('a complete.mjs that fails is said, with the command that does it', async (
 test('a question starts its discussing agent, read-only; one that ends unanswered is answered as failed', async ($, on) => {
   const w = world(on)
   await open($, w)
-  await w.print('DISCUSS f-01', 'DISCUSS f-01')
-  // Once, however many times the server says so.
+  await w.print('DISCUSS f-01')
   expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:ds-f-01-rev-1'])
   const prompt = w.spawned[0]?.prompt ?? ''
   expect(prompt).toMatch(
@@ -1135,4 +1142,64 @@ test('a question starts its discussing agent, read-only; one that ends unanswere
   await $.command.run(command('stop'))
   expect(w.replies).toHaveLength(2)
   expect(w.completed).toEqual([])
+})
+
+test('a question asked again while its agent ends its turn gets a new agent, not a failure', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('DISCUSS f-01')
+  // The agent answered; the reviewer asks again before its turn completes.
+  await w.print('DISCUSS f-01')
+  expect(w.spawned).toHaveLength(1)
+  await $.turn.complete(turnEnded('a1', 'REPLIED'))
+  await w.clock.settle()
+  expect(w.replies).toEqual([])
+  expect(w.spawned.map((one) => one.type)).toEqual([
+    'tranchant:ds-f-01-rev-1',
+    'tranchant:ds-f-01-rev-1',
+  ])
+  // Said again with no question waiting (a server started anew): no new agent.
+  await w.print('DISCUSS f-01')
+  w.files.set(
+    `${DIR}/discussions/f-01.json`,
+    JSON.stringify({ version: 1, messages: [{ by: 'agent', text: 'Yes.', at: 'now' }] }),
+  )
+  await $.turn.complete(turnEnded('a2', 'REPLIED'))
+  await w.clock.settle()
+  expect(w.spawned).toHaveLength(2)
+  expect(w.replies).toEqual([['f-01', '--review', DIR, '--ended']])
+  await w.exit(0)
+})
+
+test('questions wait behind three review agents; stop answers the waiting ones as failed', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('DISCUSS f-01', 'DISCUSS f-02', 'DISCUSS f-03', 'DISCUSS f-04')
+  expect(w.spawned).toHaveLength(3)
+  await $.turn.complete(turnEnded('a1', 'REPLIED'))
+  await w.clock.settle()
+  // A place freed: the waiting question starts, once.
+  expect(w.spawned.map((one) => one.type).at(-1)).toBe('tranchant:ds-f-04-rev-1')
+  expect(w.spawned).toHaveLength(4)
+  await w.print('DISCUSS f-01', 'DISCUSS f-02')
+  await $.command.run(command('stop'))
+  // f-01's question, asked again, waited: failed with the three agents stopped.
+  expect(w.replies.map((one) => one[0]).toSorted()).toEqual([
+    'f-01',
+    'f-01',
+    'f-02',
+    'f-03',
+    'f-04',
+  ])
+})
+
+test('a discussing agent that cannot start answers its question as failed', async ($, on) => {
+  const w = world(on, { spawnRefused: 'no agents today' })
+  await open($, w)
+  await w.print('DISCUSS f-01')
+  expect(w.replies).toEqual([['f-01', '--review', DIR, '--ended']])
+  expect(w.toasts.at(-1)).toMatch(
+    /could not start the discusser ds-f-01: no agents today/,
+  )
+  await w.exit(0)
 })

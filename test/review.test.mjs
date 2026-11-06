@@ -425,6 +425,16 @@ test("a discussing agent's hooks let it read and answer on its own finding only"
   assert.match(await pre(`node ${VERIFY} f-01 --review ${dir}`), /reply\.mjs/)
   assert.match(await pre(`echo x > ${project}/a.ts`), /redirection/)
   assert.match(await pre(`npm test`), /not a reading command/)
+  // node runs the script by its path, nothing that only ends like it, on its own review.
+  const evil = `node "--eval=require('fs').writeFileSync('/tmp/x','x')//scripts/reply.mjs" f-01`
+  assert.match(await pre(evil), /by their path/)
+  assert.match(
+    await pre(`node --import=${reply} ${reply} f-01 --review ${dir}`),
+    /by their path/,
+  )
+  assert.match(await pre(`node ${reply} f-01 --review ${project}`), /its own review/)
+  assert.match(await pre(`node ${reply} f-01 --review=${dir}`), /two words/)
+  assert.match(await pre(`node ${reply} f-01 --review ${dir} --ended`), /never --ended/)
 })
 
 test('a finding lands unverified, whatever it says', async (t) => {

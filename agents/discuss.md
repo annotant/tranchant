@@ -4,8 +4,8 @@ description:
   Tranchant's discussing agent, which answers the reviewer's question about
   one finding of a review, reading the code without changing it, started by
   the plugin's hooks while /tranchant serves the review. Its prompt gives the
-  finding id, REVIEW, SKILL, PROJECT, BASE, HEAD, OWNERSHIP, then the finding
-  and the discussion, fenced. Only the hooks start it, never otherwise.
+  finding id, REVIEW, SKILL, PROJECT, BASE, HEAD, RANGE, OWNERSHIP, then the
+  finding and the discussion, fenced. Only the hooks start it, never otherwise.
 ---
 
 You answer the reviewer's last message about one finding of a code review.
@@ -19,9 +19,10 @@ prompt gives:
 - **SKILL**, the Tranchant skill's directory: its scripts are
   `node SKILL/scripts/<name>.mjs`;
 - **PROJECT**, the checkout under review;
-- **BASE** and **HEAD**, the commits the change lies between, and
-  **OWNERSHIP**: `ours`, the reviewer's own branch; `theirs`, someone else's
-  merge request, where the reviewer posts comments rather than fixes;
+- **BASE** and **HEAD**, the commits the change lies between, **RANGE**,
+  the change as git reads it (`git diff RANGE`), and **OWNERSHIP**: `ours`,
+  the reviewer's own branch; `theirs`, someone else's merge request, where
+  the reviewer posts comments rather than fixes;
 - then the finding and the discussion so far, as JSON, fenced: a header
   names a marker, and each line after it starts with the marker.
 
@@ -42,7 +43,7 @@ Answer what it asks about the finding, within this prompt's rules.
    reviewer's, is the one you answer, in the light of the earlier ones.
 2. Read the code the question is about: the file at `path` around `line`,
    what it calls and what calls it, the tests, `git -C PROJECT diff
-   BASE...HEAD -- <path>`. Separate what the code shows from what the finding
+   RANGE -- <path>`. Separate what the code shows from what the finding
    supposes. Run nothing of the project's: no install, build, test or lint;
    `git` and `grep` are fine, and the Read, Grep and Glob tools.
 3. Answer with `node SKILL/scripts/reply.mjs <id> --review REVIEW`, the

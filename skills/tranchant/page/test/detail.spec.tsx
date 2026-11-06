@@ -23,8 +23,11 @@ function renderDetail({
   finding = bug,
   reviewFields = {},
   discussion,
+  sent = true,
 }: {
   discussion?: Discussion
+  /** What the server answers a message. */
+  sent?: boolean
   ownership?: Ownership
   state?: State
   fields?: Partial<FindingRecord>
@@ -35,7 +38,7 @@ function renderDetail({
   const onDecide = vi.fn()
   const onAnswer = vi.fn()
   const onStop = vi.fn()
-  const onDiscuss = vi.fn()
+  const onDiscuss = vi.fn(async () => sent)
   render(
     <FindingDetail
       review={review(ownership, reviewFields)}
@@ -419,7 +422,7 @@ test.each(Object.keys(FAMILIES).filter(isState))(
 const asked = (text: string, at = '2026-11-06T10:00:00Z') =>
   ({ by: 'reviewer', text, at }) as const
 
-test('Discuss opens a thread under the finding; a message goes to the agent', () => {
+test('Discuss opens a thread under the finding; a message goes to the agent', async () => {
   const { onDiscuss, onDecide } = renderDetail()
   expect(screen.queryByRole('region', { name: 'Discussion' })).toBeNull()
   fireEvent.click(button('Discuss')!)
@@ -430,6 +433,17 @@ test('Discuss opens a thread under the finding; a message goes to the agent', ()
   fireEvent.click(button('Send')!)
   expect(onDiscuss).toHaveBeenCalledWith('f-01', 'Is it reachable?')
   expect(onDecide).not.toHaveBeenCalled()
+  await waitFor(() => expect(box).toHaveProperty('value', ''))
+})
+
+test('a message the server refused stays in the box', async () => {
+  renderDetail({ sent: false })
+  fireEvent.click(button('Discuss')!)
+  const box = screen.getByRole('textbox', { name: 'Your message to the agent' })
+  fireEvent.change(box, { target: { value: 'Is it reachable?' } })
+  fireEvent.click(button('Send')!)
+  await waitFor(() => expect(button('Send')).toHaveProperty('disabled', false))
+  expect(box).toHaveProperty('value', 'Is it reachable?')
 })
 
 test('while the agent answers, it shows what it does and takes no message', () => {

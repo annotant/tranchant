@@ -1177,6 +1177,25 @@ test('a question on a finding prints DISCUSS; the agent answers through reply.mj
   // Not a decision: the finding is open still.
   assert.equal(payload.findings['f-01'], undefined)
 
+  // The page hears of an answer as it lands.
+  const events = await listen(server.base)
+  try {
+    assert.equal((await discuss({ id: 'f-01', text: 'Then?' })).status, 200)
+    await events.changed('f-01')
+    await reply(['f-01'], JSON.stringify({ text: 'Then this.' }))
+    await events.changed('f-01')
+  } finally {
+    events.close()
+  }
+
+  // A file this Tranchant cannot read is refused, never written over.
+  const file = path.join(server.dir, 'discussions', 'f-03.json')
+  await writeFile(file, '{"version":2,"messages":[]}')
+  const newer = await discuss({ id: 'f-03', text: 'x' })
+  assert.equal(newer.status, 409)
+  assert.match((await json(newer)).error, /not a discussion this Tranchant reads/)
+  assert.equal(await readFile(file, 'utf8'), '{"version":2,"messages":[]}')
+
   // A finding an agent works on, or settled, is not discussed.
   await createStore(server.dir).decide('f-01', { action: 'fix' })
   const queued = await discuss({ id: 'f-01', text: 'Still?' })

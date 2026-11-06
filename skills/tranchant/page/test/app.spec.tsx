@@ -925,17 +925,26 @@ test('the header has the button that switches the theme', async () => {
   ).toBeTruthy()
 })
 
-test('a message in a discussion goes to /api/discuss; the thread shows from the payload', async () => {
+test('a message in a discussion goes to /api/discuss; a refusal shows and keeps it', async () => {
   const server = await renderApp(payload({}))
   expect(selectedOption()).toBe('f-02')
   fireEvent.click(screen.getByRole('button', { name: 'Discuss' }))
-  fireEvent.change(screen.getByRole('textbox', { name: 'Your message to the agent' }), {
-    target: { value: 'Is it reachable?' },
-  })
+  const box = screen.getByRole('textbox', { name: 'Your message to the agent' })
+  // Refused: the server's words show, and the message stays to send again.
+  server.refuseDiscuss('finding f-02 is queued: no discussion now')
+  fireEvent.change(box, { target: { value: 'Is it reachable?' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
   await waitFor(() =>
-    expect(server.posts).toEqual([
-      { url: '/api/discuss', body: { id: 'f-02', text: 'Is it reachable?' } },
-    ]),
+    expect(screen.getByRole('status').textContent).toContain(
+      'finding f-02 is queued: no discussion now',
+    ),
   )
+  expect(box).toHaveProperty('value', 'Is it reachable?')
+  server.refuseDiscuss(undefined)
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() => expect(box).toHaveProperty('value', ''))
+  expect(server.posts.map((one) => one.body)).toEqual([
+    { id: 'f-02', text: 'Is it reachable?' },
+    { id: 'f-02', text: 'Is it reachable?' },
+  ])
 })

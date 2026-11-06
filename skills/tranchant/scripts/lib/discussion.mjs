@@ -21,8 +21,10 @@ import { StoreRefusal, createStore } from './store.mjs'
 /** @typedef {{ version: 1, messages: Message[] }} Discussion */
 
 const DISCUSSION_VERSION = 1
-/** The states a reviewer may discuss in: nothing settled, no agent on the finding. */
-/** @type {readonly State[]} */
+/**
+ * The states a reviewer may discuss in: nothing settled, no agent on the finding.
+ * @type {readonly State[]}
+ */
 const DISCUSS_IN = ['open', 'skipped', 'failed', 'stopped']
 const DISCUSSABLE = new Set(DISCUSS_IN)
 const MAX_MESSAGES = 60
@@ -65,7 +67,10 @@ function parse(text) {
   /** @type {Message[]} */
   const messages = data.messages.filter(
     (/** @type {any} */ one) =>
-      one && (one.by === 'reviewer' || one.by === 'agent') && isText(one.text),
+      one &&
+      (one.by === 'reviewer' || one.by === 'agent') &&
+      isText(one.text) &&
+      typeof one.at === 'string',
   )
   return { version: DISCUSSION_VERSION, messages }
 }
@@ -76,8 +81,14 @@ function parse(text) {
  * @param {string} id
  */
 async function readDiscussion(dir, id) {
+  const text = await readText(dir, id)
+  return text === undefined ? undefined : parse(text)
+}
+
+/** The file's text, or undefined when there is none. @param {string} dir @param {string} id */
+async function readText(dir, id) {
   try {
-    return parse(await readFile(discussionPath(dir, id), 'utf8'))
+    return await readFile(discussionPath(dir, id), 'utf8')
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return undefined
     throw error
@@ -104,22 +115,28 @@ export async function readDiscussions(dir) {
 
 /**
  * Runs `change` on finding `id`'s discussion under its file lock, and writes
- * it. Throwing a StoreRefusal writes nothing.
+ * it. Throwing a StoreRefusal writes nothing; a file it cannot read is
+ * refused, never written over.
  * @template T
  * @param {string} dir
  * @param {string} id
- * @param {(discussion: Discussion) => T} change
+ * @param {(discussion: Discussion) => T | Promise<T>} change
  * @returns {Promise<T>}
  */
 async function changeDiscussion(dir, id, change) {
   const file = discussionPath(dir, id)
   await mkdir(path.dirname(file), { recursive: true })
   return withFileLock(file, async () => {
-    const discussion = (await readDiscussion(dir, id)) ?? {
-      version: DISCUSSION_VERSION,
-      messages: [],
-    }
-    const result = change(discussion)
+    const text = await readText(dir, id)
+    const discussion =
+      text === undefined
+        ? { version: /** @type {const} */ (1), messages: [] }
+        : parse(text)
+    if (!discussion)
+      throw new StoreRefusal(
+        `discussions/${id}.json is not a discussion this Tranchant reads: left as it is`,
+      )
+    const result = await change(discussion)
     // Written to a temp file first: the server reads it while the agent answers.
     const temp = `${file}.${process.pid}.tmp`
     await writeFile(temp, `${JSON.stringify(discussion, null, 2)}\n`)
@@ -143,10 +160,11 @@ export async function say(dir, id, text) {
   const review = await store.readReview()
   if (!review.findings.some((one) => one.id === id))
     throw new StoreRefusal(`no finding ${id} in the review`)
-  const state = (await store.readDecisions()).findings[id]?.state ?? 'open'
-  if (!DISCUSSABLE.has(state))
-    throw new StoreRefusal(`finding ${id} is ${stateWords(state)}: no discussion now`)
-  return changeDiscussion(dir, id, (discussion) => {
+  return changeDiscussion(dir, id, async (discussion) => {
+    // Read under the discussion's lock: as close to the write as it gets.
+    const state = (await store.readDecisions()).findings[id]?.state ?? 'open'
+    if (!DISCUSSABLE.has(state))
+      throw new StoreRefusal(`finding ${id} is ${stateWords(state)}: no discussion now`)
     if (isWaiting(discussion))
       throw new StoreRefusal('the agent is still answering the last message')
     if (discussion.messages.length >= MAX_MESSAGES)

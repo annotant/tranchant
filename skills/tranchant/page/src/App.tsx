@@ -317,8 +317,10 @@ export default function App() {
 
   const discuss = useCallback(
     async (id: string, text: string) => {
+      let sent = false
       try {
         await postDiscuss(id, text)
+        sent = true
         setNotice(undefined)
       } catch (failure) {
         setNotice(
@@ -326,6 +328,7 @@ export default function App() {
         )
       }
       await reload()
+      return sent
     },
     [reload],
   )
@@ -471,7 +474,7 @@ export default function App() {
       }}
       onAnswer={(id, text, choices) => void answer(id, text, choices)}
       onStop={(id) => void stop(id)}
-      onDiscuss={(id, text) => void discuss(id, text)}
+      onDiscuss={discuss}
     />
   ) : (
     <p className="tr-muted">

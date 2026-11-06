@@ -2,9 +2,10 @@
 // server.mjs --review <dir>
 // Serves the page and its API on a free port of 127.0.0.1, and prints one
 // line per decision the plugin's hooks act on: FIX, STOP, DROPPED, SKIPPED,
-// DISCUSS for each question the reviewer asks about a finding, and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
+// and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
 // time); LANDED for each finding a verifier must check, while a review whose
-// findings are verified (`verify`) runs. It watches the review folder, its
+// findings are verified (`verify`) runs; DISCUSS for each question the
+// reviewer asks about a finding. It watches the review folder, its
 // findings, its run files and its review agents' (reviewers/), and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
@@ -1165,7 +1166,11 @@ async function resumeQueued() {
     if (entry.state !== 'queued') continue
     decided(id, entry.decision?.action === 'post' ? 'post' : 'fix')
   }
-  const discussions = await readDiscussions(dir).catch(() => ({}))
+  const discussions = await readDiscussions(dir).catch((error) => {
+    // The questions left waiting stay so until the server starts again: said.
+    console.error(`tranchant server: discussions unreadable: ${oneLine(String(error))}`)
+    return {}
+  })
   for (const [id, discussion] of Object.entries(discussions)) {
     if (isWaiting(discussion)) print(`DISCUSS ${id}`)
   }
