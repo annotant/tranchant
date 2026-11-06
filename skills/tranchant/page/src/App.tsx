@@ -535,7 +535,7 @@ export default function App() {
         selected={selected}
         disabled={disabled}
         onSelect={(ids) => setSelected(new Set(ids))}
-        onDecide={(decisions) => void decide(decisions)}
+        onDecide={decide}
       />
       {notice && (
         <p className="tr-notice" role="status">

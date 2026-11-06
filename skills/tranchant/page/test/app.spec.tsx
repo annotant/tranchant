@@ -546,14 +546,14 @@ test('a finding landing keeps the open detail, its draft context and the selecti
     'value',
     'keep the early return',
   )
-  expect(screen.getByText('1 finding selected')).toBeDefined()
+  expect(screen.getByText('1 of 3 findings selected')).toBeDefined()
   expect(
     screen.getByRole('status', { name: 'Review in progress' }).textContent,
   ).toContain('3 findings so far')
   // The batch counts follow: the one that landed is safe to auto-fix and to do.
-  expect(
-    screen.getByRole('button', { name: /^Fix all safe to auto-fix/ }).textContent,
-  ).toContain('1')
+  expect(screen.getByRole('button', { name: /^Safe to auto-fix/ }).textContent).toBe(
+    'Safe to auto-fix 1',
+  )
   server.set(payload({ review: { status: 'complete', findings: three } }))
   events.send('changed')
   await waitFor(() =>

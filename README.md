@@ -164,8 +164,9 @@ In the page:
   branch, then review again).
 - **Drop** records why the finding is wrong or intentional; **Skip** defers
   it.
-- The bar at the top applies one action to all findings, to the
-  ones safe to auto-fix, or to the ones you ticked.
+- The bar at the top selects every finding, a group (To do, Safe to
+  auto-fix) or none, then applies one action to the selection; Post all to do
+  posts every open finding at once.
 
 Nothing is committed or pushed: the fixes wait on your branch for your
 review.
