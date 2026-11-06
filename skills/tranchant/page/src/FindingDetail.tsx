@@ -11,6 +11,7 @@ import {
   staleMrReason,
   type Review,
   STATE_DETAILS,
+  stateClass,
   stateLabel,
   type Step,
   stateOf,
@@ -208,7 +209,7 @@ export function FindingDetail({
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}
-          <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+          <span className={stateClass(state)} title={STATE_DETAILS[state]}>
             {stateLabel(state)}
           </span>
         </div>

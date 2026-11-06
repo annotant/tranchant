@@ -366,10 +366,46 @@ test('the chip names the group and its title the state; runs end in human words'
       ],
     },
   })
-  const chip = document.querySelector('.tr-chip--failed:not(.tr-runs *)')
+  const chip = document.querySelector('.tr-chip--needs-you:not(.tr-runs *)')
   expect(chip?.textContent).toBe('Needs you')
   expect(chip?.getAttribute('title')).toBe('The fix did not land')
   expect(
-    [...document.querySelectorAll('.tr-runs .tr-chip')].map((one) => one.textContent),
-  ).toEqual(['Fixed', 'Asked you', 'Did not land', 'Stopped', 'In progress'])
+    [...document.querySelectorAll('.tr-runs .tr-chip')].map((one) => [
+      one.textContent,
+      one.className,
+    ]),
+  ).toEqual([
+    ['Fixed', 'tr-chip tr-chip--done'],
+    ['Asked you', 'tr-chip tr-chip--needs-you'],
+    ['Did not land', 'tr-chip tr-chip--needs-you'],
+    ['Stopped', 'tr-chip tr-chip--set-aside'],
+    ['In progress', 'tr-chip tr-chip--in-progress'],
+  ])
 })
+
+// A Record, so a new state fails to compile until it is given its family here.
+const FAMILIES: Record<State, [string, string]> = {
+  open: ['to-do', 'To do'],
+  queued: ['in-progress', 'In progress'],
+  working: ['in-progress', 'In progress'],
+  asking: ['needs-you', 'Needs you'],
+  failed: ['needs-you', 'Needs you'],
+  fixed: ['done', 'Done'],
+  posted: ['done', 'Done'],
+  dropped: ['set-aside', 'Set aside'],
+  skipped: ['set-aside', 'Set aside'],
+  stopped: ['set-aside', 'Set aside'],
+}
+
+const isState = (key: string): key is State => key in FAMILIES
+
+test.each(Object.keys(FAMILIES).filter(isState))(
+  'a %s finding wears its family',
+  (state) => {
+    const [family, label] = FAMILIES[state]
+    renderDetail({ state })
+    const chip = document.querySelector(`.tr-detail-meta .tr-chip--${family}`)
+    expect(chip?.className).toBe(`tr-chip tr-chip--${family}`)
+    expect(chip?.textContent).toBe(label)
+  },
+)

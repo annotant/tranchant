@@ -24,10 +24,12 @@ export const PAGE_CSS = `
   --tr-border: #d9dde3;
   --tr-accent: #2b6cb0;
   --tr-accent-weak: #e7f0fb;
+  --tr-busy: #6a3fb0;
+  --tr-busy-bg: #f1ebfb;
   --tr-on-accent: #ffffff;
   --tr-review: #b3423f;
   --tr-review-bg: #fbecec;
-  --tr-auto: #2f7d4f;
+  --tr-auto: #2a7349;
   --tr-auto-bg: #e8f5ec;
   --tr-warn: #8a5a0c;
   --tr-warn-bg: #fff4dc;
@@ -55,6 +57,8 @@ export const PAGE_CSS = `
     --tr-border: #333a44;
     --tr-accent: #6aa7e8;
     --tr-accent-weak: #1f3147;
+    --tr-busy: #c4a8f4;
+    --tr-busy-bg: #2c2441;
     --tr-on-accent: #0d1b2a;
     --tr-review: #e9807c;
     --tr-review-bg: #3a2222;
@@ -120,7 +124,7 @@ dl { margin: 0; }
 button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-attention-item--alert { background: var(--tr-warn-bg); color: var(--tr-warn); border-color: var(--tr-warn); font-weight: 600; }
 .tr-attention-item--alert:hover { filter: brightness(0.97); }
-.tr-attention-item--live { background: var(--tr-accent-weak); color: var(--tr-accent); }
+.tr-attention-item--live { background: var(--tr-busy-bg); color: var(--tr-busy); }
 .tr-attention-item .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
 .tr-counts { display: flex; gap: 16px; }
 .tr-counts > div { text-align: center; }
@@ -133,7 +137,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
   font-size: 11.5px; font-weight: 600; white-space: nowrap; text-decoration: none;
   background: var(--tr-bg-3); color: var(--tr-muted);
 }
-.tr-chip--ours, .tr-chip--open { background: var(--tr-accent-weak); color: var(--tr-accent); }
+.tr-chip--ours { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--theirs { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--warn { background: var(--tr-warn-bg); color: var(--tr-warn); }
 .tr-chip--live { background: var(--tr-accent-weak); color: var(--tr-accent); gap: 6px; }
@@ -190,10 +194,12 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
   .tr-report-body { grid-template-columns: minmax(0, 1fr); padding-left: 12px; }
 }
 .tr-agent-step { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tr-muted); }
-.tr-chip--queued, .tr-chip--working, .tr-chip--asking { background: var(--tr-warn-bg); color: var(--tr-warn); }
-.tr-chip--fixed, .tr-chip--posted { background: var(--tr-auto-bg); color: var(--tr-auto); }
-.tr-chip--failed, .tr-chip--stopped { background: var(--tr-danger-bg); color: var(--tr-danger); }
-.tr-chip--dropped, .tr-chip--skipped { background: var(--tr-bg-3); color: var(--tr-muted); text-decoration: line-through; }
+/* One rule per class of GROUP_CLASSES (domain.ts); the label still reads without the colour. */
+.tr-chip--to-do { background: var(--tr-accent-weak); color: var(--tr-accent); }
+.tr-chip--in-progress { background: var(--tr-busy-bg); color: var(--tr-busy); }
+.tr-chip--needs-you { background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-chip--done { background: var(--tr-auto-bg); color: var(--tr-auto); }
+.tr-chip--set-aside { background: transparent; color: var(--tr-muted); box-shadow: inset 0 0 0 1px var(--tr-border); }
 .tr-chip--bucket-review { background: var(--tr-review-bg); color: var(--tr-review); }
 .tr-chip--bucket-auto { background: var(--tr-auto-bg); color: var(--tr-auto); }
 .tr-chip--tag-question { background: var(--tr-accent-weak); color: var(--tr-accent); }

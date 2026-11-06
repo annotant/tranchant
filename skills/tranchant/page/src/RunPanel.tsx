@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { activityOf, runningStep, stepKey } from './activity'
 import { fetchRuns } from './api'
-import { type FindingRecord, modelName, type Step } from './domain'
+import {
+  type FindingRecord,
+  type Group,
+  groupClass,
+  modelName,
+  type Step,
+} from './domain'
 
 interface Props {
   id: string
@@ -53,6 +59,15 @@ const OUTCOME_LABELS: Record<Outcome | 'running', string> = {
   asking: 'Asked you',
   failed: 'Did not land',
   stopped: 'Stopped',
+}
+
+// Styled as the finding state each end leads to: a failed run wears Needs you, not red.
+const OUTCOME_GROUPS: Record<Outcome | 'running', Group> = {
+  running: 'inProgress',
+  fixed: 'done',
+  asking: 'needsYou',
+  failed: 'needsYou',
+  stopped: 'setAside',
 }
 
 /** The steps of the run in progress, and the runs that ended, with their history on demand. */
@@ -118,7 +133,7 @@ export function RunPanel({ id, record, steps, disabled }: Props) {
             <li key={run.id}>
               <span className="tr-run-id">{run.id}</span>
               {run.model && <span className="tr-muted"> · {modelName(run.model)}</span>}
-              <span className={`tr-chip tr-chip--${run.outcome ?? 'working'}`}>
+              <span className={groupClass(OUTCOME_GROUPS[run.outcome ?? 'running'])}>
                 {OUTCOME_LABELS[run.outcome ?? 'running']}
               </span>
               {run.summary && <span className="tr-run-summary"> {run.summary}</span>}

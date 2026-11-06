@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react'
 import type { DiffStat } from './api'
 import { type DiffFile, marksInDiff, type Section } from './diff'
-import { type Finding, type Records, STATE_DETAILS, stateLabel, stateOf } from './domain'
+import {
+  type Finding,
+  type Records,
+  STATE_DETAILS,
+  stateClass,
+  stateLabel,
+  stateOf,
+} from './domain'
 import { CodeBlock, digitsOf, NO_MARKS } from './Excerpt'
 import { CommentMark } from './FindingList'
 import { languageOfFile } from './syntax'
@@ -111,7 +118,7 @@ function Marker({
         onClick={() => onOpen(finding.id)}
         aria-current={open ? 'true' : undefined}
       >
-        <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+        <span className={stateClass(state)} title={STATE_DETAILS[state]}>
           {stateLabel(state)}
         </span>
         <span className="tr-chip">{finding.topic}</span>

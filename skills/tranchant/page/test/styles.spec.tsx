@@ -87,3 +87,39 @@ for (const scheme of ['light', 'dark'] as const)
     )
     expect(failing).toEqual([])
   })
+
+/** A rule's colour and background variables; no background means whatever is behind it. */
+const ruleColours = (selector: string) => {
+  const rule = new RegExp(`\\.${selector} \\{([^}]*)\\}`).exec(PAGE_CSS)?.[1] ?? ''
+  const variable = (property: string) =>
+    new RegExp(`(?:^|;)\\s*${property}:\\s*var\\(--tr-([\\w-]+)\\)`).exec(rule)?.[1]
+  return { color: variable('color'), background: variable('background') }
+}
+
+const FAMILIES = ['to-do', 'in-progress', 'needs-you', 'done', 'set-aside']
+
+test('each family of states has its own style, never struck through', () => {
+  const styles = FAMILIES.map((family) => ruleColours(`tr-chip--${family}`))
+  expect(styles.every((style) => style.color)).toBe(true)
+  expect(new Set(styles.map((style) => JSON.stringify(style))).size).toBe(FAMILIES.length)
+  expect(PAGE_CSS).not.toContain('line-through')
+})
+
+// The surfaces a chip sits on: the page, a focused or open row, a panel.
+const SURFACES = ['bg', 'bg-2', 'bg-3', 'accent-weak']
+
+for (const scheme of ['light', 'dark'] as const)
+  test(`the ${scheme} state chips and the live counter read at 4.5:1`, () => {
+    const get = palette(scheme)
+    const selectors = [
+      ...FAMILIES.map((family) => `tr-chip--${family}`),
+      'tr-attention-item--live',
+    ]
+    const failing = selectors.flatMap((selector) => {
+      const { color, background } = ruleColours(selector)
+      return (background ? [background] : SURFACES)
+        .filter((under) => contrast(rgb(get(color!))[0], rgb(get(under))[0]) < 4.5)
+        .map((under) => `${selector} on ${under}`)
+    })
+    expect(failing).toEqual([])
+  })
