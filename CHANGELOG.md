@@ -27,6 +27,12 @@ released to the `stable` branch.
 
 ### Changed
 
+- **The batch bar, selection first.** A three-state checkbox selects every
+  finding or none, a chip per group (To do, Safe to auto-fix) selects it
+  with its count and shows pressed, and the selection's actions appear only
+  once something is selected, each with the number it applies to. **Fix all
+  safe to auto-fix** goes: its chip then **Fix** does the same; **Post all
+  to do** stays. The selection clears once a batch is applied.
 - **The review's agents by lens.** While `/tranchant review` runs, one panel
   replaces the line per agent: a progress bar, a chip per lens (done with
   its findings, running, or stopped and not covered), the verifiers grouped
