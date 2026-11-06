@@ -1,5 +1,8 @@
 // The page's stylesheet, injected by main.tsx: no CSS file to serve.
 
+import figtree from './assets/fonts/figtree-latin.woff2'
+import figtreeItalic from './assets/fonts/figtree-latin-italic.woff2'
+
 declare module 'react' {
   interface CSSProperties {
     [variable: `--tr-${string}`]: string | number
@@ -45,10 +48,13 @@ const DARK_PALETTE = `
   --tr-code-attr: #f2cc60;
 `
 
+// A family name of the page's own, so a locally installed Figtree never takes over.
 export const PAGE_CSS = `
+@font-face { font-family: 'Tranchant Figtree'; font-style: normal; font-weight: 400 700; font-display: swap; src: url(${figtree}) format('woff2'); }
+@font-face { font-family: 'Tranchant Figtree'; font-style: italic; font-weight: 400; font-display: swap; src: url(${figtreeItalic}) format('woff2'); }
 :root {
   color-scheme: light dark;
-  --tr-font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --tr-font: 'Tranchant Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --tr-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   --tr-bg: #ffffff;
   --tr-bg-2: #f6f7f9;
