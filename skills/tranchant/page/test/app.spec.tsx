@@ -768,7 +768,74 @@ test('a review that ended shows no agent at work, and says its unverified findin
   })
   const agents = screen.getByRole('region', { name: 'Review agents' })
   expect(within(agents).queryByLabelText('running')).toBeNull()
+  expect(agents.textContent).toContain('Review done')
+  expect(agents.textContent).toContain('1 lens · 1 finding, 0 verified')
   expect(screen.getByText(/the review ended before a verifier confirmed it/)).toBeTruthy()
+})
+
+test('a review done folds its agents into one line, unfolded on demand with each outcome', async () => {
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'complete',
+        verify: true,
+        findings: [{ ...FINDINGS[0]!, id: 'bugs-1', verified: true }],
+      },
+    }),
+    reviewers: [
+      {
+        name: 'rv-bugs',
+        running: false,
+        outcome: 'done',
+        steps: [
+          { at: 1, kind: 'bash', label: 'Show the diff', state: 'done' },
+          { at: 2, kind: 'tool', label: 'SubagentHandback', state: 'done' },
+          {
+            at: 3,
+            kind: 'note',
+            label: 'I added 1 finding. **bugs-1:** the cart total skips the discount.',
+            state: 'done',
+          },
+          { at: 4, kind: 'end', label: 'Ended', state: 'done' },
+        ],
+      },
+      {
+        name: 'rv-conventions',
+        running: false,
+        outcome: 'failed',
+        steps: [
+          { at: 3, kind: 'read', label: 'AGENTS.md', state: 'failed' },
+          { at: 4, kind: 'end', label: 'Stopped', state: 'failed' },
+        ],
+      },
+    ],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('2 lenses · 1 finding, 1 verified')
+  expect(agents.textContent).toContain('conventions stopped: that lens is not covered')
+  expect(agents.textContent).not.toContain('SubagentHandback')
+  expect(
+    within(agents).queryByRole('list', { name: 'What each lens checked' }),
+  ).toBeNull()
+  fireEvent.click(within(agents).getByRole('button', { name: 'What each lens checked' }))
+  const lenses = within(agents).getByRole('list', { name: 'What each lens checked' })
+  const bugs = within(lenses).getByRole('button', { name: /^done bugs 1 finding/ })
+  expect(bugs.textContent).toContain('bugs-1: the cart total skips the discount.')
+  expect(bugs.textContent).toContain('1 command')
+  expect(lenses.textContent).toContain('stopped: Reading AGENTS.md failed')
+  expect(lenses.textContent).not.toContain('SubagentHandback')
+  fireEvent.click(bugs)
+  expect(bugs.getAttribute('aria-expanded')).toBe('true')
+  expect(lenses.textContent).toContain('Its report')
+  expect(lenses.textContent).toContain('Ran Show the diff')
+  const finding = within(lenses).getByRole('button', { name: FINDINGS[0]!.title })
+  expect(lenses.textContent).toContain('verified')
+  fireEvent.click(finding)
+  await waitFor(() =>
+    expect(
+      screen.getByRole('heading', { level: 2, name: FINDINGS[0]!.title }),
+    ).toBeTruthy(),
+  )
 })
 
 test('a verified review dims the findings no verifier confirmed, and shows its agents', async () => {
@@ -799,8 +866,49 @@ test('a verified review dims the findings no verifier confirmed, and shows its a
   const dimmed = options.filter((option) => option.className.includes('tr-unverified'))
   expect(dimmed.map((option) => option.id)).toEqual([`tr-option-${second!.id}`])
   const agents = screen.getByRole('region', { name: 'Review agents' })
-  expect(agents.textContent).toContain('Reviewer · bugs')
-  expect(agents.textContent).toContain('Reading src/cart.js')
-  expect(agents.textContent).toContain('Verifier · f-01')
-  expect(agents.textContent).toContain('Ended')
+  expect(agents.textContent).toContain('Reviewing the change')
+  expect(agents.textContent).toContain('1 of 2 agents done')
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('bugs')).toBeTruthy()
+  expect(within(lenses).getByLabelText('running')).toBeTruthy()
+  const now = within(agents).getByRole('list', { name: 'Agents at work' })
+  expect(now.textContent).toBe('bugsReading src/cart.js')
+  const verifying = within(agents).getByRole('list', { name: 'Verifiers, by lens' })
+  expect(verifying.textContent).toContain('1/1')
+  expect(agents.textContent).not.toContain('Ended')
+})
+
+const stoppedAgent = (name: string) => ({
+  name,
+  running: false,
+  outcome: 'failed' as const,
+  steps: [{ at: 2, kind: 'end', label: 'Stopped', state: 'failed' as const }],
+})
+
+test('a lens that stopped while the review runs says it is not covered', async () => {
+  await renderApp({
+    ...payload({ review: { status: 'reviewing', verify: true, findings: [] } }),
+    reviewers: [
+      { name: 'rv-bugs', running: true, steps: [] },
+      stoppedAgent('rv-conventions'),
+    ],
+  })
+  const lenses = screen.getByRole('list', { name: 'Reviewers, one per lens' })
+  const chip = within(lenses).getByText('conventions').closest('li')!
+  expect(chip.title).toBe('The agent stopped before it finished: its lens is not covered')
+  expect(within(chip).getByLabelText('stopped')).toBeTruthy()
+  expect(chip.querySelector('.tr-lens-count')).toBeNull()
+})
+
+test('a review done names its stopped lenses together, and no verified count unless verified', async () => {
+  await renderApp({
+    ...payload({ review: { status: 'complete', verify: false, findings: [] } }),
+    reviewers: [stoppedAgent('rv-conventions'), stoppedAgent('rv-tests')],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain(
+    'conventions, tests stopped: those lenses are not covered',
+  )
+  expect(agents.textContent).toContain('2 lenses · 0 findings')
+  expect(agents.textContent).not.toContain('verified')
 })

@@ -286,8 +286,8 @@ export const unverifiedIds = (review: Pick<Review, 'verify' | 'findings'>) =>
 export const isReviewing = (review: Pick<Review, 'status'>) =>
   review.status === 'reviewing'
 
-export const plural = (count: number, noun: string) =>
-  `${count} ${noun}${count === 1 ? '' : 's'}`
+export const plural = (count: number, noun: string, many = `${noun}s`) =>
+  `${count} ${count === 1 ? noun : many}`
 
 /** What decides posting: the MR and the commit reviewed. */
 export type PostScope = Pick<Review, 'ownership' | 'mr' | 'headSha'>
