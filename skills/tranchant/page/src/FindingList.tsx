@@ -4,6 +4,7 @@ import {
   type Finding,
   type Records,
   STATE_DETAILS,
+  stateClass,
   stateLabel,
   stateOf,
   tagOf,
@@ -19,11 +20,32 @@ interface Props {
   selected: ReadonlySet<string>
   /** The findings no verifier confirmed yet: dimmed. */
   unverified?: ReadonlySet<string>
+  /** The findings with a comment ready to post: marked. */
+  commented?: ReadonlySet<string>
   onOpen: (id: string) => void
   onToggle: (id: string) => void
 }
 
 const optionId = (id: string) => `tr-option-${id}`
+
+/** A speech bubble: the finding has a comment ready to post. */
+export function CommentMark() {
+  return (
+    <span
+      className="tr-comment-mark"
+      role="img"
+      aria-label="Has a comment"
+      title="Has a comment to post"
+    >
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M2.75 2h10.5c.97 0 1.75.78 1.75 1.75v6.5c0 .97-.78 1.75-1.75 1.75H8.06l-2.78 2.78A.75.75 0 0 1 4 14.25V12H2.75C1.78 12 1 11.22 1 10.25v-6.5C1 2.78 1.78 2 2.75 2Zm0 1.5a.25.25 0 0 0-.25.25v6.5c0 .14.11.25.25.25h2a.75.75 0 0 1 .75.75v1.19l1.72-1.72a.75.75 0 0 1 .53-.22h5.5a.25.25 0 0 0 .25-.25v-6.5a.25.25 0 0 0-.25-.25H2.75Z"
+        />
+      </svg>
+    </span>
+  )
+}
 
 function Row({
   finding,
@@ -32,6 +54,7 @@ function Row({
   open,
   checked,
   unverified,
+  commented,
   onOpen,
   onToggle,
 }: {
@@ -41,6 +64,7 @@ function Row({
   open: boolean
   checked: boolean
   unverified: boolean
+  commented: boolean
   onOpen: () => void
   onToggle: () => void
 }) {
@@ -63,7 +87,7 @@ function Row({
       />
       <button type="button" className="tr-item-main" onClick={onOpen} tabIndex={-1}>
         <span className="tr-item-line">
-          <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+          <span className={stateClass(state)} title={STATE_DETAILS[state]}>
             {stateLabel(state)}
           </span>
           {tag !== 'concern' && (
@@ -71,6 +95,7 @@ function Row({
           )}
           {unverified && <span className="tr-chip">unverified</span>}
           <span className="tr-item-title">{finding.title}</span>
+          {commented && <CommentMark />}
         </span>
         <span className="tr-item-anchor">
           {finding.path}:{finding.line}
@@ -87,6 +112,7 @@ export function FindingList({
   openId,
   selected,
   unverified,
+  commented,
   onOpen,
   onToggle,
 }: Props) {
@@ -136,6 +162,7 @@ export function FindingList({
                   open={openId === finding.id}
                   checked={selected.has(finding.id)}
                   unverified={unverified?.has(finding.id) ?? false}
+                  commented={commented?.has(finding.id) ?? false}
                   onOpen={() => onOpen(finding.id)}
                   onToggle={() => onToggle(finding.id)}
                 />

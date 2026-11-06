@@ -1,0 +1,2 @@
+/* tranchant page: served by the tranchant skill on 127.0.0.1 only */
+import{a as e,b as i,c as a,d as n,e as o,g as u,i as d,x as l,y as s}from"./chunk-34RX5KAN.js";var C=class extends s{static{e(this,"CynefinTokenBuilder")}constructor(){super(["cynefin-beta"])}},f={parser:{TokenBuilder:e(()=>new C,"TokenBuilder"),ValueConverter:e(()=>new l,"ValueConverter")}};function m(c=o){let r=n(a(c),u),t=n(i({shared:r}),d,f);return r.ServiceRegistry.register(t),{shared:r,Cynefin:t}}e(m,"createCynefinServices");export{f as a,m as b};

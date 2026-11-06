@@ -3,6 +3,7 @@ import {
   type Action,
   allows,
   applicable,
+  commentedIds,
   counts,
   groupFindings,
   idsInBucket,
@@ -10,8 +11,9 @@ import {
   orderedFindings,
   type State,
   stateLabel,
+  staleMrReason,
 } from '../src/domain'
-import { FINDINGS, ORDER, record, review } from './fixture'
+import { FINDINGS, mergeRequest, ORDER, record, review } from './fixture'
 
 test('findings group by bucket, then topic, then path:line', () => {
   const groups = groupFindings(FINDINGS)
@@ -64,11 +66,35 @@ test('fix is allowed from open, dropped, skipped, failed and stopped; never agai
   expect(from('fix', 'theirs')).toEqual(from('fix', 'ours'))
 })
 
-test('post needs theirs with diff refs, from open, dropped, skipped or failed', () => {
+test('post needs diff refs at the head reviewed, from open, dropped, skipped or failed', () => {
   expect(from('post', 'ours')).toEqual([])
   expect(from('post', 'theirs')).toEqual(['open', 'dropped', 'skipped', 'failed'])
+  const ours = review('ours', { mr: mergeRequest() })
+  expect(STATES.filter((state) => allows('post', state, ours))).toEqual(
+    from('post', 'theirs'),
+  )
+  const ahead = review('ours', { mr: mergeRequest('f'.repeat(40)) })
+  expect(allows('post', 'open', ahead)).toBe(false)
+  expect(staleMrReason(ahead)).toBe(
+    "push your branch first: the MR's head is not the one reviewed",
+  )
+  expect(staleMrReason(ours)).toBeUndefined()
+  expect(staleMrReason(review('ours'))).toBeUndefined()
+  expect(staleMrReason(review('theirs', { mr: mergeRequest('f'.repeat(40)) }))).toBe(
+    'the MR moved past the commit reviewed: review it again',
+  )
   const noRefs = { ...review('theirs'), mr: { project: 'x', iid: 1, url: 'https://x' } }
   expect(allows('post', 'open', noRefs)).toBe(false)
+})
+
+test('only ours with a postable MR marks the findings with a comment', () => {
+  const ids = FINDINGS.map((finding) => finding.id)
+  expect([...commentedIds(review('ours', { mr: mergeRequest() }))].toSorted()).toEqual(
+    ids.toSorted(),
+  )
+  expect(commentedIds(review('ours')).size).toBe(0)
+  expect(commentedIds(review('theirs')).size).toBe(0)
+  expect(commentedIds(review('ours', { mr: mergeRequest('f'.repeat(40)) })).size).toBe(0)
 })
 
 test('drop and skip are refused while working, once fixed or posted, and on a finding already there', () => {

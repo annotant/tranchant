@@ -9,5 +9,7 @@ export default defineConfig({
     include: ['test/**/*.spec.tsx'],
     setupFiles: ['test/setup.ts'],
     unstubGlobals: true,
+    // Run through Vitest, not Node: mermaid.spec.tsx mocks what Mermaid imports.
+    server: { deps: { inline: ['mermaid'] } },
   },
 })

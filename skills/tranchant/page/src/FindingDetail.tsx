@@ -2,12 +2,16 @@ import { type FormEvent, useState } from 'react'
 import { Diagram } from './Diagram'
 import {
   allows,
+  draftComment,
   BUCKET_LABELS,
   type DecisionInput,
   type Finding,
   type FindingRecord,
+  postsFrom,
+  staleMrReason,
   type Review,
   STATE_DETAILS,
+  stateClass,
   stateLabel,
   type Step,
   stateOf,
@@ -15,7 +19,9 @@ import {
 } from './domain'
 import { Excerpt } from './Excerpt'
 import { FixChanges } from './FixChanges'
+import { Markdown } from './markdown'
 import { RunPanel } from './RunPanel'
+import { languageOfFile } from './syntax'
 
 interface Props {
   review: Review
@@ -152,12 +158,16 @@ export function FindingDetail({
   const [mode, setMode] = useState<Mode>('idle')
   const [showContext, setShowContext] = useState(false)
   const [context, setContext] = useState('')
-  const [comment, setComment] = useState(record?.comment ?? finding.comment ?? '')
+  const [comment, setComment] = useState(() => draftComment(finding, record))
   const [reason, setReason] = useState('')
 
   const can = (move: Parameters<typeof allows>[0]) =>
     !disabled && allows(move, state, review)
   const theirs = review.ownership === 'theirs'
+  // Ours with an MR: fixing comes first, posting is the secondary choice.
+  const oursWithMr = !theirs && !!review.mr?.diffRefs
+  const blocker = staleMrReason(review)
+  const blocked = !!blocker && !disabled && postsFrom(state)
   const tag = tagOf(finding)
   const lastRun = record?.runs.at(-1)
 
@@ -199,7 +209,7 @@ export function FindingDetail({
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}
-          <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+          <span className={stateClass(state)} title={STATE_DETAILS[state]}>
             {stateLabel(state)}
           </span>
         </div>
@@ -211,15 +221,22 @@ export function FindingDetail({
         marks={finding.marks}
         anchor={finding.line}
         label={`Excerpt of ${finding.path}`}
+        language={languageOfFile(finding.path)}
       />
 
       <dl className="tr-pwf">
         <dt>Problem</dt>
-        <dd>{finding.problem}</dd>
+        <dd>
+          <Markdown source={finding.problem} headings={false} />
+        </dd>
         <dt>Why</dt>
-        <dd>{finding.why}</dd>
+        <dd>
+          <Markdown source={finding.why} headings={false} />
+        </dd>
         <dt>Fix</dt>
-        <dd>{finding.fix}</dd>
+        <dd>
+          <Markdown source={finding.fix} headings={false} />
+        </dd>
       </dl>
 
       {finding.related && finding.related.length > 0 && (
@@ -235,6 +252,7 @@ export function FindingDetail({
                 marks={related.marks}
                 anchor={related.line}
                 label={`Excerpt of ${related.path}`}
+                language={languageOfFile(related.path)}
               />
             </div>
           ))}
@@ -393,6 +411,17 @@ export function FindingDetail({
                   Fix now
                 </button>
               )}
+              {oursWithMr && (can('post') || blocked) && (
+                <button
+                  type="button"
+                  className="tr-btn"
+                  disabled={blocked}
+                  title={blocked ? blocker : undefined}
+                  onClick={() => setMode('editing')}
+                >
+                  Post a comment
+                </button>
+              )}
               {can('drop') && (
                 <button
                   type="button"
@@ -412,6 +441,11 @@ export function FindingDetail({
                 </button>
               )}
             </div>
+            {blocked && (
+              <p className="tr-muted" role="note">
+                Posting is off: {blocker}.
+              </p>
+            )}
             {can('fix') && (
               <div className="tr-context">
                 <button

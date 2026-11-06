@@ -1,0 +1,2 @@
+/* tranchant page: served by the tranchant skill on 127.0.0.1 only */
+import{a as e,b as o,c,d as t,e as n,g as i,m as u,x as d,y as l}from"./chunk-34RX5KAN.js";var k=class extends l{static{e(this,"PacketTokenBuilder")}constructor(){super(["packet"])}},m={parser:{TokenBuilder:e(()=>new k,"TokenBuilder"),ValueConverter:e(()=>new d,"ValueConverter")}};function v(s=n){let r=t(c(s),i),a=t(o({shared:r}),u,m);return r.ServiceRegistry.register(a),{shared:r,Packet:a}}e(v,"createPacketServices");export{m as a,v as b};

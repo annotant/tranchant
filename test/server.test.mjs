@@ -40,6 +40,11 @@ before(async (t) => {
   stateDir = await tempDir(t)
   page = path.join(await tempDir(t), 'page.js')
   await writeFile(page, "/* tranchant page (test) */ console.log('page')\n")
+  await mkdir(path.join(path.dirname(page), 'chunks'))
+  await writeFile(
+    path.join(path.dirname(page), 'chunks', 'mermaid-AB12.js'),
+    'export {}\n',
+  )
   glabDir = await tempDir(t)
   glab = path.join(glabDir, 'glab')
   await writeFile(
@@ -209,7 +214,9 @@ test('prints READY with the review and the project, and answers the health check
     `READY ${main.base} review=${main.review.id} project=${main.project}`,
   )
   const health = await json(await fetch(`${main.base}/api/health`))
-  assert.deepEqual(health, { ok: true, review: main.review.id, version: '0.1.0' })
+  const plugin = new URL('../.claude-plugin/plugin.json', import.meta.url)
+  const { version } = JSON.parse(await readFile(plugin, 'utf8'))
+  assert.deepEqual(health, { ok: true, review: main.review.id, version })
 })
 
 test('serves the page shell with the review’s title, and the bundle', async () => {
@@ -226,6 +233,17 @@ test('serves the page shell with the review’s title, and the bundle', async ()
   assert.equal(bundle.status, 200)
   assert.match(bundle.headers.get('content-type') ?? '', /javascript/)
   assert.equal(await bundle.text(), await readFile(page, 'utf8'))
+})
+
+test('serves the chunks the page loads on demand, by name only', async () => {
+  const chunk = await fetch(`${main.base}/chunks/mermaid-AB12.js`)
+  assert.equal(chunk.status, 200)
+  assert.match(chunk.headers.get('content-type') ?? '', /javascript/)
+  assert.equal(await chunk.text(), 'export {}\n')
+  assert.equal((await fetch(`${main.base}/chunks/missing-0000.js`)).status, 404)
+  for (const escape of ['/chunks/..%2Fpage.js', '/chunks/.hidden.js', '/chunks/a/b.js']) {
+    assert.equal((await fetch(`${main.base}${escape}`)).status, 404, escape)
+  }
 })
 
 test('answers the review, its decisions, its runs and the heads', async () => {
@@ -487,6 +505,23 @@ test('a base that reads as a git option is refused, and git writes nothing', asy
     body: { error: `base ${base} is not a revision` },
   })
   assert.deepEqual(await readdir(out), [])
+})
+
+test('an ours review whose MR is at another head shows its own branch’s diff', async (t) => {
+  const placed = await playground(t, 'ours')
+  const head = 'f'.repeat(40)
+  const mr = {
+    project: 'shop/web',
+    iid: 3,
+    url: 'https://gitlab.example.com/shop/web/-/merge_requests/3',
+    author: 'me',
+    diffRefs: { baseSha: head, headSha: head, startSha: head },
+  }
+  const server = await startServer(t, { name: 'ours', overrides: { ...placed, mr } })
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200, JSON.stringify(body))
+  assert.equal(body.base, 'main')
+  assert.equal(body.head, placed.headSha)
 })
 
 test('refuses diff refs of another head than the review’s', async (t) => {

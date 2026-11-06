@@ -13,7 +13,7 @@ review the same change beside you; a verifier re-reads every finding before
 the reviewer sees it. Your prompt gives:
 
 - **REVIEW**, the review's folder: pass `--review REVIEW` to every script.
-  Its `review.json` is the envelope: `ownership`, `title`, `branch`.
+  Its `review.json` is the envelope: `ownership`, `mr`, `title`, `branch`.
 - **SKILL**, the Tranchant skill's directory: its scripts are
   `node SKILL/scripts/<name>.mjs`.
 - **PROJECT**, the checkout under review, at HEAD.
@@ -97,7 +97,9 @@ dependency's size, how often the handler fires.
    configuration, `tsconfig`. They say what the project asks for, and what
    its tools already catch.
 2. Read `REVIEW/review.json`: when `ownership` is `theirs`, the change
-   is someone else's and every finding needs a `comment`.
+   is someone else's and every finding needs a `comment`; when it is `ours`
+   with an `mr`, the author may post a finding on their own merge request
+   instead of fixing it, and a `comment` is optional.
 3. Read the diff: `git -C PROJECT diff --stat BASE...HEAD` for the files,
    then `git -C PROJECT diff BASE...HEAD -- <path>` per file. Review only
    the files that run in the browser and its styles (`.ts`, `.tsx`,
@@ -132,7 +134,9 @@ dependency's size, how often the handler fires.
 
 Plain words, one idea per sentence, no filler. Name the symbol and the line,
 never "this code". Write for the person who reads it on the page in ten
-seconds, then decides.
+seconds, then decides. `problem`, `why` and `fix` are Markdown: inline code,
+bold, links (`http`, `https`, `mailto`), a list, a fenced block; no heading,
+no HTML.
 
 - `title`: under 80 characters, the defect, not the fix: "Undefined
   tenantId crashes the people hook".
@@ -142,11 +146,20 @@ seconds, then decides.
   often.
 - `fix`: the smallest change that removes the defect, concrete enough to
   apply: the pattern the codebase already uses, by file and name, when there
-  is one. When two fixes are valid, say so and which you would choose.
-- `comment`, only when `ownership` is `theirs`: the whole text to post
-  on the author's merge request, in one go: problem, why and fix in two to
-  five sentences, direct and courteous, in the language the code's comments
-  and commit messages use. The reviewer posts it as is, or edits it.
+  is one; a list when it takes steps, a fenced block when a snippet says it
+  best. When two fixes are valid, say so and which you would choose.
+- `comment`, when `ownership` is `theirs` (required) or the envelope has
+  an `mr` (when the finding is worth posting: a question for whoever reviews
+  the merge request, a note to keep, something to discuss before changing):
+  the whole text to post on the merge request, in one go: problem, why and
+  fix in two to five sentences, direct and courteous, in the language the
+  code's comments and commit messages use. The reviewer posts it as is, or
+  edits it. No `mr`, no `comment`.
+- `diagram`, only when a flow needs proving (who calls whom, in what
+  order, which branch the code takes): `{ "kind": "mermaid", "source":
+  "sequenceDiagram…", "caption": "…" }`, a `sequenceDiagram` or a
+  `flowchart` of the few steps that matter, named after the code's symbols.
+  Most findings have none.
 - `tag`: `concern` (a defect, the default); `question` when the code
   may be right for a reason you cannot see and the author can settle it in a
   sentence (then word `problem` as the question); `suggestion` for an

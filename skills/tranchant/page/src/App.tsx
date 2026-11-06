@@ -13,9 +13,11 @@ import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView
 import {
   allows,
   canPost,
+  commentedIds,
   counts,
   type DecisionInput,
   groupFindings,
+  hasComment,
   isReviewing,
   GROUP_LABELS,
   needsYou,
@@ -30,6 +32,8 @@ import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
 import { Markdown } from './markdown'
 import { ReviewAgents } from './ReviewAgents'
+import { readStored, writeStored } from './storage'
+import { ThemeToggle } from './ThemeToggle'
 
 const SUMMARY_KEY = 'tranchant:summary'
 const VIEW_KEY = 'tranchant:view'
@@ -37,23 +41,6 @@ const NO_SECTIONS: readonly Section[] = []
 
 /** The main view: the change's diff, or the findings by bucket and topic. */
 type View = 'diff' | 'list'
-
-// A private window or a blocked store throws: the page then keeps its defaults.
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key)
-  } catch {
-    return null
-  }
-}
-
-function writeStored(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    // Nothing kept: the default shows next time.
-  }
-}
 
 const readView = (): View => (readStored(VIEW_KEY) === 'list' ? 'list' : 'diff')
 const readSummaryOpen = () => readStored(SUMMARY_KEY) !== 'closed'
@@ -83,7 +70,19 @@ function Header({
             {review.branch} → {review.base}
           </code>
           {review.ownership === 'ours' ? (
-            <span className="tr-chip tr-chip--ours">your branch</span>
+            <>
+              <span className="tr-chip tr-chip--ours">your branch</span>
+              {review.mr && (
+                <a
+                  className="tr-chip tr-chip--ours"
+                  href={review.mr.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  !{review.mr.iid}
+                </a>
+              )}
+            </>
           ) : review.mr ? (
             <a
               className="tr-chip tr-chip--theirs"
@@ -153,7 +152,10 @@ function Header({
           </div>
         ))}
       </dl>
-      <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
+      <div className="tr-header-end">
+        <ThemeToggle />
+        <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
+      </div>
     </header>
   )
 }
@@ -224,6 +226,10 @@ export default function App() {
   const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
   const unverified = useMemo(
     () => (review ? unverifiedIds(review) : new Set<string>()),
+    [review],
+  )
+  const commented = useMemo(
+    () => (review ? commentedIds(review) : new Set<string>()),
     [review],
   )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
@@ -381,7 +387,11 @@ export default function App() {
       else if (event.key === 'Enter' && cursor) setOpenId(cursor)
       else if (event.key === 'x' && cursor) toggle(cursor)
       else if (action && cursor && review && !disabled) {
-        if (allows(action, stateOf(records, cursor), review)) {
+        // A finding with no comment is posted from its editor, never blind.
+        const blind =
+          action === 'post' &&
+          !hasComment(ordered.find((finding) => finding.id === cursor))
+        if (!blind && allows(action, stateOf(records, cursor), review)) {
           if (cursor === openId) void decideShown({ id: cursor, action })
           else void decide([{ id: cursor, action }])
         }
@@ -474,8 +484,13 @@ export default function App() {
       <ReviewAgents
         agents={(payload?.reviewers ?? []).map((agent) =>
           // An agent whose end step was never written ended with its review all the same.
-          review?.status === 'reviewing' ? agent : { ...agent, running: false },
+          reviewing ? agent : { ...agent, running: false },
         )}
+        reviewing={reviewing}
+        findings={review?.findings ?? []}
+        verify={review?.verify === true}
+        project={review?.project ?? ''}
+        onOpen={open}
       />
       <details
         className="tr-summary"
@@ -508,7 +523,7 @@ export default function App() {
         selected={selected}
         disabled={disabled}
         onSelect={(ids) => setSelected(new Set(ids))}
-        onDecide={(decisions) => void decide(decisions)}
+        onDecide={decide}
       />
       {notice && (
         <p className="tr-notice" role="status">
@@ -551,6 +566,7 @@ export default function App() {
                   openId={openId}
                   selected={selected}
                   unverified={unverified}
+                  commented={commented}
                   onOpen={open}
                   onToggle={toggle}
                 />
@@ -577,6 +593,7 @@ export default function App() {
                 open={current}
                 selected={selected}
                 unverified={unverified}
+                commented={commented}
                 onOpen={open}
                 onToggle={toggle}
               />

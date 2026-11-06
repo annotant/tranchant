@@ -97,7 +97,8 @@ If the change is visible to users, add it under `## Unreleased` in
 ## Dependencies
 
 Tranchant has no runtime dependencies: the scripts use Node.js only, and the
-page bundles React. Adding one is a design decision; ask in an issue first.
+page bundles React, and Mermaid in chunks it loads on demand. Adding one is
+a design decision; ask in an issue first.
 
 - Versions are pinned exactly (`save-exact=true`); the lockfile is committed.
 - Dependabot proposes updates weekly, a week after their release, grouped.

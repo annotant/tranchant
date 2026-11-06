@@ -44,7 +44,7 @@ const ok = (stdout: string, exitCode = 0) => ({
 /** `refusing`: what open.mjs prints instead of `REVIEW <dir>`. */
 /** `preparing`: what prepare.mjs prints; `pending`: what each `verify.mjs --pending` prints, in turn. */
 /** `spawnRefused`: why every spawn is refused; `completeSays`: complete.mjs's refusal, exit 2. */
-/** `unreadable`: the review's review.json, which the hooks cannot load. */
+/** `unreadable`: the review's review.json, which the hooks cannot load; `mr`: its MR. */
 function world(
   on: On,
   {
@@ -57,6 +57,7 @@ function world(
     spawnRefused,
     completeSays,
     unreadable,
+    mr,
   }: {
     spawnRefused?: string
     completeSays?: string
@@ -67,6 +68,7 @@ function world(
     refusing?: string
     preparing?: string
     pending?: string[]
+    mr?: { diffRefs: { baseSha: string; headSha: string; startSha: string } }
   } = {},
 ) {
   const files = new Map<string, string>([
@@ -81,6 +83,7 @@ function world(
         base: 'main',
         headSha: HEAD,
         ownership: 'ours',
+        ...(mr && { mr }),
       }),
     ],
     // The envelope prepare.mjs writes.
@@ -736,6 +739,27 @@ async function review($: Engine, w: ReturnType<typeof world>, args = 'review') {
   await w.print(READY)
   return (await answer).text
 }
+
+test("an ours review's MR gives the range only at the head reviewed", async ($, on) => {
+  const mrBase = 'b'.repeat(40)
+  const at = (headSha: string) => ({
+    diffRefs: { baseSha: mrBase, headSha, startSha: mrBase },
+  })
+  const atHead = world(on, { mr: at(HEAD) })
+  await review($, atHead)
+  expect(atHead.spawned[0]?.prompt).toContain(`BASE=${mrBase}\n`)
+  expect(atHead.spawned[0]?.prompt).toContain(`RANGE=${mrBase}..${HEAD}\n`)
+})
+
+test("an ours review whose MR is at another head keeps the branch's own range", async ($, on) => {
+  const mrBase = 'b'.repeat(40)
+  const w = world(on, {
+    mr: { diffRefs: { baseSha: mrBase, headSha: 'f'.repeat(40), startSha: mrBase } },
+  })
+  await review($, w)
+  expect(w.spawned[0]?.prompt).toContain('BASE=main\n')
+  expect(w.spawned[0]?.prompt).toContain(`RANGE=main...${HEAD}\n`)
+})
 
 test('review writes the envelope and opens the page first, then one reviewer per lens', async ($, on) => {
   const w = world(on)

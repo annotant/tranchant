@@ -96,6 +96,8 @@ const MAX_RUNNING = 3
 // keeps starting.
 const START_MS = 8_000
 const MAX_TEXT = 400
+// A review agent's words are its report on the page: kept far longer, line breaks and all.
+const MAX_REPORT = 8000
 const SERVER_ERRORS = new Set([
   'PORT_BUSY',
   'REVIEW_REFUSED',
@@ -129,6 +131,7 @@ const basename = (file: string) => file.slice(file.lastIndexOf('/') + 1)
 const short = (text: string, max = 80) =>
   text.length > max ? `${text.slice(0, max - 1)}…` : text
 const clip = (text: string) => short(text.trim().replace(/\s+/g, ' '), MAX_TEXT)
+const clipReport = (text: string) => short(text.trim(), MAX_REPORT)
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 const ignore = () => undefined
@@ -188,7 +191,7 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
     base?: unknown
     headSha?: unknown
     ownership?: unknown
-    mr?: { diffRefs?: { baseSha?: unknown } }
+    mr?: { diffRefs?: { baseSha?: unknown; headSha?: unknown } }
   } = JSON.parse(await $.fs.read(`${dir}/review.json`))
   if (typeof file.project !== 'string' || !file.project.startsWith('/'))
     throw new Error('its project is not an absolute path')
@@ -197,8 +200,12 @@ async function loadReviewOnce($: $, dir: string): Promise<Review> {
   const base = typeof file.base === 'string' ? file.base : ''
   const headSha = typeof file.headSha === 'string' ? file.headSha : ''
   const refs = file.mr?.diffRefs
+  const mrHead = typeof refs?.headSha === 'string' ? refs.headSha : ''
+  // MR refs at another head (an ours branch ahead of or behind its MR): the review's own range.
+  const atHead =
+    !!mrHead && !!headSha && (mrHead.startsWith(headSha) || headSha.startsWith(mrHead))
   const mrBase =
-    typeof refs?.baseSha === 'string' && refs.baseSha ? refs.baseSha : undefined
+    atHead && typeof refs?.baseSha === 'string' && refs.baseSha ? refs.baseSha : undefined
   return {
     headSha,
     base: mrBase ?? base,
@@ -1616,7 +1623,7 @@ export const register: Register = (on) => {
       .map((block) => ({
         at,
         kind: 'note',
-        label: clip(block.text ?? ''),
+        label: reviewing ? clipReport(block.text ?? '') : clip(block.text ?? ''),
         state: 'done',
       }))
     // Not waited for: each note is a Node start. Its steps carry their time,

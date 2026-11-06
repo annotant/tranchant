@@ -156,6 +156,9 @@ test('the view draws markers under their lines, notes on the header, and the ope
       onToggle={() => undefined}
     />,
   )
+  expect(container.querySelector('#tr-marker-f-02 .tr-chip')?.className).toBe(
+    'tr-chip tr-chip--done',
+  )
   const row21 = container.querySelector('#tr-file-1 .tr-row[data-line="21"]')
   const stack = [...(row21?.parentElement?.querySelectorAll('.tr-marker') ?? [])]
   expect(stack.map((marker) => marker.id)).toEqual(['tr-marker-f-02', 'tr-marker-f-06'])
@@ -165,6 +168,8 @@ test('the view draws markers under their lines, notes on the header, and the ope
   const row42 = container.querySelector('#tr-file-0 .tr-row[data-line="42"]')
   expect(row42?.classList.contains('tr-row--anchor')).toBe(true)
   expect(row42?.querySelector('mark')?.textContent).toBe('people')
+  // A .ts file's code is highlighted, its marks over the colours.
+  expect(row42?.querySelector('.tr-tok--keyword')?.textContent).toBe('const')
   expect(screen.getByRole('note').textContent).toContain(
     'undefined when the drawer opens',
   )
@@ -227,4 +232,38 @@ test('the file list counts each file’s findings and shows its stats', () => {
   ])
   fireEvent.click(items[2]!)
   expect(onPick).toHaveBeenCalledWith(2)
+})
+
+test('the view highlights a file in the language of its extension, another stays plain', () => {
+  const diff = [
+    'diff --git a/src/a.css b/src/a.css',
+    '--- a/src/a.css',
+    '+++ b/src/a.css',
+    '@@ -1 +1 @@',
+    '+const { color: red }',
+    'diff --git a/src/b.ts b/src/b.ts',
+    '--- a/src/b.ts',
+    '+++ b/src/b.ts',
+    '@@ -1 +1 @@',
+    '+const { color: red }',
+  ].join('\n')
+  render(
+    <DiffView
+      sections={placeFindings(parseDiff(diff), []).sections}
+      stats={new Map()}
+      records={{}}
+      cursor={undefined}
+      open={undefined}
+      selected={new Set()}
+      onOpen={() => undefined}
+      onToggle={() => undefined}
+    />,
+  )
+  expect(
+    screen.getByRole('region', { name: 'src/a.css' }).querySelector('.tr-tok'),
+  ).toBeNull()
+  expect(
+    screen.getByRole('region', { name: 'src/b.ts' }).querySelector('.tr-tok--keyword')
+      ?.textContent,
+  ).toBe('const')
 })

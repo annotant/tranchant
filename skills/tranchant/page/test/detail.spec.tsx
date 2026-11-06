@@ -1,9 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import App from '../src/App'
-import type { FindingRecord, Ownership, State } from '../src/domain'
+import type { FindingRecord, Ownership, Review, State } from '../src/domain'
 import { FindingDetail } from '../src/FindingDetail'
-import { fakeServer, FINDINGS, payload, record, review } from './fixture'
+import {
+  fakeServer,
+  FINDINGS,
+  mergeRequest,
+  payload,
+  record,
+  review,
+  withoutComment,
+} from './fixture'
 
 const bug = FINDINGS[0]!
 
@@ -12,19 +20,23 @@ function renderDetail({
   state = 'open',
   fields = {},
   disabled = false,
+  finding = bug,
+  reviewFields = {},
 }: {
   ownership?: Ownership
   state?: State
   fields?: Partial<FindingRecord>
   disabled?: boolean
+  finding?: typeof bug
+  reviewFields?: Partial<Review>
 } = {}) {
   const onDecide = vi.fn()
   const onAnswer = vi.fn()
   const onStop = vi.fn()
   render(
     <FindingDetail
-      review={review(ownership)}
-      finding={bug}
+      review={review(ownership, reviewFields)}
+      finding={finding}
       record={
         state === 'open' && !Object.keys(fields).length
           ? undefined
@@ -42,12 +54,101 @@ function renderDetail({
 
 const button = (name: string | RegExp) => screen.queryByRole('button', { name })
 
+test("the excerpt is highlighted in the language of the finding's path", () => {
+  renderDetail()
+  const excerpt = screen.getByRole('figure', {
+    name: 'Excerpt of src/people/usePeople.ts',
+  })
+  expect(
+    excerpt.querySelector('.tr-row[data-line="42"] .tr-tok--keyword')?.textContent,
+  ).toBe('const')
+})
+
+test('problem, why and fix render as Markdown, without headings', () => {
+  renderDetail({
+    finding: {
+      ...bug,
+      problem: '# Not a heading',
+      why: 'Plain words, no markup at all.',
+      fix: [
+        '## Guard `tenantId` first:',
+        '- return early',
+        '- then query',
+        '```ts',
+        'if (!tenantId) return',
+        '```',
+        'See [the hook](https://example.com/hook) and [run](javascript:alert(1)).',
+      ].join('\n'),
+    },
+  })
+  const [problem, why, fix] = Array.from(document.querySelectorAll('.tr-pwf dd'))
+  expect(document.querySelector('.tr-pwf :is(h1, h2, h3, h4, h5, h6)')).toBeNull()
+  expect(problem?.querySelector('strong')?.textContent).toBe('Not a heading')
+  expect(fix?.querySelector('p strong code')?.textContent).toBe('tenantId')
+  expect(why?.innerHTML).toBe(
+    '<div class="tr-md"><p>Plain words, no markup at all.</p></div>',
+  )
+  expect(fix?.querySelector('p code')?.textContent).toBe('tenantId')
+  expect(
+    Array.from(fix?.querySelectorAll('ul li') ?? []).map((item) => item.textContent),
+  ).toEqual(['return early', 'then query'])
+  expect(fix?.querySelector('pre code')?.textContent).toBe('if (!tenantId) return')
+  const links = Array.from(fix?.querySelectorAll('a') ?? [])
+  expect(links.map((link) => link.getAttribute('href'))).toEqual([
+    'https://example.com/hook',
+  ])
+  expect(links[0]?.getAttribute('target')).toBe('_blank')
+  expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer')
+  expect(fix?.textContent).toContain('run')
+})
+
 test('ours offers Fix now, Drop and Skip, never a post', () => {
   renderDetail()
   expect(button('Fix now')).not.toBeNull()
   expect(button('Drop')).not.toBeNull()
   expect(button('Skip')).not.toBeNull()
   expect(button(/post/i)).toBeNull()
+})
+
+test('ours with an MR offers Fix now first, and Post a comment as a regular button', () => {
+  const { onDecide } = renderDetail({ reviewFields: { mr: mergeRequest() } })
+  const fix = button('Fix now')!
+  const post = button('Post a comment')!
+  expect(fix.className).toContain('tr-btn--primary')
+  expect(post.className).not.toContain('tr-btn--primary')
+  expect(
+    post.compareDocumentPosition(fix) & Node.DOCUMENT_POSITION_PRECEDING,
+  ).toBeTruthy()
+  expect(button('Post as written')).toBeNull()
+  fireEvent.click(post)
+  const box = screen.getByLabelText<HTMLTextAreaElement>('Comment to post')
+  expect(box.value).toBe(bug.comment)
+  fireEvent.click(button('Post')!)
+  expect(onDecide).toHaveBeenLastCalledWith([{ id: 'f-01', action: 'post' }])
+})
+
+test('ours with an MR prefills a finding with no comment from its problem and fix', () => {
+  const { onDecide } = renderDetail({
+    reviewFields: { mr: mergeRequest() },
+    finding: withoutComment(bug),
+  })
+  fireEvent.click(button('Post a comment')!)
+  const box = screen.getByLabelText<HTMLTextAreaElement>('Comment to post')
+  expect(box.value).toBe(`${bug.problem}\n\n${bug.fix}`)
+  fireEvent.click(button('Post')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'post', comment: `${bug.problem}\n\n${bug.fix}` },
+  ])
+})
+
+test('ours with an MR at another head disables posting, says why, and still fixes', () => {
+  renderDetail({ reviewFields: { mr: mergeRequest('f'.repeat(40)) } })
+  const post = button('Post a comment')!
+  expect(post).toHaveProperty('disabled', true)
+  const why = "push your branch first: the MR's head is not the one reviewed"
+  expect(post.getAttribute('title')).toBe(why)
+  expect(screen.getByText(/^Posting is off:/).textContent).toContain(why)
+  expect(button('Fix now')).toHaveProperty('disabled', false)
 })
 
 test('theirs offers Post as written, Edit & post, Fix now and Drop', () => {
@@ -265,10 +366,46 @@ test('the chip names the group and its title the state; runs end in human words'
       ],
     },
   })
-  const chip = document.querySelector('.tr-chip--failed:not(.tr-runs *)')
+  const chip = document.querySelector('.tr-chip--needs-you:not(.tr-runs *)')
   expect(chip?.textContent).toBe('Needs you')
   expect(chip?.getAttribute('title')).toBe('The fix did not land')
   expect(
-    [...document.querySelectorAll('.tr-runs .tr-chip')].map((one) => one.textContent),
-  ).toEqual(['Fixed', 'Asked you', 'Did not land', 'Stopped', 'In progress'])
+    [...document.querySelectorAll('.tr-runs .tr-chip')].map((one) => [
+      one.textContent,
+      one.className,
+    ]),
+  ).toEqual([
+    ['Fixed', 'tr-chip tr-chip--done'],
+    ['Asked you', 'tr-chip tr-chip--needs-you'],
+    ['Did not land', 'tr-chip tr-chip--needs-you'],
+    ['Stopped', 'tr-chip tr-chip--set-aside'],
+    ['In progress', 'tr-chip tr-chip--in-progress'],
+  ])
 })
+
+// A Record, so a new state fails to compile until it is given its family here.
+const FAMILIES: Record<State, [string, string]> = {
+  open: ['to-do', 'To do'],
+  queued: ['in-progress', 'In progress'],
+  working: ['in-progress', 'In progress'],
+  asking: ['needs-you', 'Needs you'],
+  failed: ['needs-you', 'Needs you'],
+  fixed: ['done', 'Done'],
+  posted: ['done', 'Done'],
+  dropped: ['set-aside', 'Set aside'],
+  skipped: ['set-aside', 'Set aside'],
+  stopped: ['set-aside', 'Set aside'],
+}
+
+const isState = (key: string): key is State => key in FAMILIES
+
+test.each(Object.keys(FAMILIES).filter(isState))(
+  'a %s finding wears its family',
+  (state) => {
+    const [family, label] = FAMILIES[state]
+    renderDetail({ state })
+    const chip = document.querySelector(`.tr-detail-meta .tr-chip--${family}`)
+    expect(chip?.className).toBe(`tr-chip tr-chip--${family}`)
+    expect(chip?.textContent).toBe(label)
+  },
+)

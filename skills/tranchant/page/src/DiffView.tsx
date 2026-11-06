@@ -3,8 +3,17 @@
 import { useEffect, useState } from 'react'
 import type { DiffStat } from './api'
 import { type DiffFile, marksInDiff, type Section } from './diff'
-import { type Finding, type Records, STATE_DETAILS, stateLabel, stateOf } from './domain'
+import {
+  type Finding,
+  type Records,
+  STATE_DETAILS,
+  stateClass,
+  stateLabel,
+  stateOf,
+} from './domain'
 import { CodeBlock, digitsOf, NO_MARKS } from './Excerpt'
+import { CommentMark } from './FindingList'
+import { languageOfFile } from './syntax'
 
 const markerId = (id: string) => `tr-marker-${id}`
 export const fileId = (index: number) => `tr-file-${index}`
@@ -70,6 +79,7 @@ interface MarkerProps {
   open: boolean
   checked: boolean
   unverified: boolean
+  commented: boolean
   /** Why the finding sits on the header rather than on its line. */
   note?: string | undefined
   onOpen: (id: string) => void
@@ -84,6 +94,7 @@ function Marker({
   open,
   checked,
   unverified,
+  commented,
   note,
   onOpen,
   onToggle,
@@ -107,12 +118,13 @@ function Marker({
         onClick={() => onOpen(finding.id)}
         aria-current={open ? 'true' : undefined}
       >
-        <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+        <span className={stateClass(state)} title={STATE_DETAILS[state]}>
           {stateLabel(state)}
         </span>
         <span className="tr-chip">{finding.topic}</span>
         {unverified && <span className="tr-chip">unverified</span>}
         <span className="tr-marker-title">{finding.title}</span>
+        {commented && <CommentMark />}
         {note && <span className="tr-marker-note">{note}</span>}
       </button>
     </div>
@@ -129,6 +141,8 @@ interface MarkerState {
   selected: ReadonlySet<string>
   /** The findings no verifier confirmed yet: dimmed. */
   unverified?: ReadonlySet<string> | undefined
+  /** The findings with a comment ready to post: marked. */
+  commented?: ReadonlySet<string> | undefined
   onOpen: (id: string) => void
   onToggle: (id: string) => void
 }
@@ -146,6 +160,7 @@ function Markers({
   open,
   selected,
   unverified,
+  commented,
   ...shared
 }: MarkersProps) {
   return (
@@ -159,6 +174,7 @@ function Markers({
           open={open?.id === finding.id}
           checked={selected.has(finding.id)}
           unverified={unverified?.has(finding.id) ?? false}
+          commented={commented?.has(finding.id) ?? false}
           note={note?.(finding)}
         />
       ))}
@@ -202,6 +218,7 @@ function FileSection({ section, index, stat, ...state }: SectionProps) {
   const status = file ? STATUS_WORDS[file.status] : 'not in the diff'
   const opened = open?.path === section.path ? open : undefined
   const marks = opened && file ? marksInDiff(opened, file) : NO_MARKS
+  const language = languageOfFile(section.path)
   const under = new Map(
     [...section.lines].map(([line, stack]) => [
       line,
@@ -239,6 +256,7 @@ function FileSection({ section, index, stat, ...state }: SectionProps) {
           anchor={opened?.line}
           marks={marks}
           under={under}
+          language={language}
         />
       ))}
     </section>

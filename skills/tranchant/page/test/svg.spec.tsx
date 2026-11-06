@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { Diagram } from '../src/Diagram'
-import { sanitizeSvg } from '../src/svg'
+import { numericEntities, sanitizeSvg } from '../src/svg'
 import { SVG_WITH_SCRIPT } from './fixture'
 
 function parse(svg: string) {
@@ -39,6 +39,23 @@ test('a style with an external url is dropped; a plain one stays', () => {
   expect(clean).toContain('<rect/>')
 })
 
+test('a local url() in a style stays; an external one, quoted or escaped, does not', () => {
+  const clean = sanitizeSvg(
+    [
+      '<svg xmlns="http://www.w3.org/2000/svg">',
+      '<style>#d .node rect { stroke: url(#d-gradient) }</style>',
+      '<style>rect { fill: url( "#ok" ) } circle { fill: url("https://x") }</style>',
+      '<style>rect { fill: \\75rl(https://x) }</style>',
+      '<rect style="stroke: url(#d-gradient)"/>',
+      '</svg>',
+    ].join(''),
+  )
+  expect(clean).toContain('<style>#d .node rect { stroke: url(#d-gradient) }</style>')
+  expect(clean).not.toContain('https://x')
+  expect(clean).not.toContain('75rl')
+  expect(clean).toContain('<rect style="stroke: url(#d-gradient)"/>')
+})
+
 test('what is not SVG is refused', () => {
   expect(sanitizeSvg('<div>hi</div>')).toBeUndefined()
   expect(sanitizeSvg('<svg><rect')).toBeUndefined()
@@ -59,4 +76,26 @@ test('a text diagram is preformatted', () => {
   )
   expect(container.querySelector('pre')?.textContent).toBe('a → b\n  → c')
   expect(container.querySelector('figcaption')).toBeNull()
+})
+
+test('an SVG diagram is drawn as the sanitizer read it, past a self-closing element', () => {
+  const { container } = render(
+    <Diagram
+      diagram={{
+        kind: 'svg',
+        source:
+          '<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="9" y2="0"/><text>after</text></svg>',
+      }}
+    />,
+  )
+  const svg = container.querySelector('.tr-diagram-svg svg')
+  expect(svg?.namespaceURI).toBe('http://www.w3.org/2000/svg')
+  expect(svg?.querySelector('line')?.childNodes).toHaveLength(0)
+  expect(svg?.querySelector('text')?.textContent).toBe('after')
+})
+
+test('HTML entities become numeric ones XML reads; XML’s own and unknown ones stay text', () => {
+  expect(numericEntities('a&nbsp;b &amp; &lt;x&gt; &copy; &nosuch;')).toBe(
+    'a&#160;b &amp; &lt;x&gt; &#169; &amp;nosuch;',
+  )
 })

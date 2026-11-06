@@ -7,6 +7,57 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.2.0 - 2026-11-06
+
+### Added
+
+- **Markdown in a finding.** Its problem, why and fix render as Markdown:
+  inline code, bold, lists, code blocks and links read as written, no
+  longer as raw text. A link opens in a new tab, and only a safe one
+  becomes a link.
+- **Light or dark, your pick.** A sun or moon in the header switches the
+  page to the other theme, diff, code colours and diagrams included. The
+  page follows the system until the first click; the pick is remembered in
+  the browser and set before the page draws, so a reload never flashes.
+- **Post on your own MR.** `/tranchant review` on a branch looks for its
+  open merge request with `glab`; found, the page offers **Post a comment**
+  next to **Fix now**, names the MR in the header, and the batch bar posts
+  every selected finding not posted yet: one with no comment posts the text
+  written from its problem and fix, which the confirmation names. Posting
+  waits until the MR's head is the commit reviewed.
+- **Syntax highlighting.** The diff, a finding's excerpt and hunk, a fix's
+  changes and the summary's code blocks colour TypeScript, TSX, JavaScript
+  and JSON, with annotant's highlighter; the marks stay on top. The dark
+  mark is lighter, so the text under it reads at 4.5:1.
+- **Mermaid diagrams.** A finding's `diagram` can be `mermaid`: the page
+  draws a sequence or a flow from its source, arrows included, in the
+  page's colours, light and dark. Mermaid is bundled and loads only when such
+  a diagram shows; a source that does not parse shows as text with its
+  error. The lenses draw one when a flow needs proving.
+
+### Changed
+
+- **One style per family of states.** A state chip takes its family's
+  colours: to do blue, in progress violet, needs you amber, done green, set
+  aside muted and outlined, no longer struck through. A run's outcome wears
+  the family it leads to. Every state chip reads at 4.5:1, light and
+  dark.
+- **The batch bar, selection first.** A three-state checkbox selects every
+  finding or none, a chip per group (To do, Safe to auto-fix) selects it
+  with its count and shows pressed, and the selection's actions appear only
+  once something is selected, each with the number it applies to. **Fix all
+  safe to auto-fix** goes: its chip then **Fix** does the same; **Post all
+  to do** stays. The selection clears once a batch is applied.
+- **The review's agents by lens.** While `/tranchant review` runs, one panel
+  replaces the line per agent: a progress bar, a chip per lens (done with
+  its findings, running, or stopped and not covered), the verifiers grouped
+  by lens, and only the agents still at work with their step. Once done, it
+  folds into one line, warning when a lens stopped; **What each lens
+  checked** opens one row per lens: its verdict, the point of its report
+  and what it looked at; opened, its whole report, its findings with their
+  verifier's verdict, and its steps. A review agent's words are no longer
+  cut at 400 characters.
+
 ## 0.1.0 - 2026-11-04
 
 ### Added

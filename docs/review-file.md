@@ -50,11 +50,11 @@ arrives. A producer that writes the whole review at once needs none of this:
   "branch": "feature/QO-9678/classification-overview",
   "base": "origin/master",
   "headSha": "3552e3ef0c…", // what was reviewed; a fix on another HEAD is refused
-  "ownership": "ours", // "ours": fixes only; "theirs": posting too
+  "ownership": "ours", // the default action: "ours" fix first, "theirs" post first
   "status": "reviewing", // optional: "reviewing" while findings still land; absent, "complete"
   "title": "Classification overview page",
   "mr": {
-    // optional; required to post
+    // optional; required to post, whatever the ownership
     "project": "qohash/dashboard-ui", // GitLab path or numeric id
     "iid": 5746,
     "url": "https://gitlab.com/qohash/dashboard-ui/-/merge_requests/5746",
@@ -76,9 +76,9 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `id`          | string                    | A UUID. One folder per id; opening the same id again reuses its decisions.                          |
 | `project`     | string                    | Absolute. The git repository it lies in is the lock root.                                           |
 | `headSha`     | string                    | Full SHA. The page shows a warning when the checkout moved; a fix still runs, on the current files. |
-| `ownership`   | `ours` or `theirs`        | Decides the actions the page offers; `post` needs `theirs` and `mr`.                                |
+| `ownership`   | `ours` or `theirs`        | Decides the default action: `ours`, fix first; `theirs`, post first. Either may post with `mr.diffRefs`. |
 | `status`      | `reviewing` or `complete` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`.  |
-| `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three.              |
+| `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
 | `summary`     | string                    | Markdown, shown above the findings.                                                                 |
 | `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
 | `findings`    | Finding[]                 | At least one, unless `status` is `reviewing`. Ids unique within the review.                         |
@@ -115,8 +115,8 @@ arrives. A producer that writes the whole review at once needs none of this:
   "comment": "This crashes when … (the full text to post on the MR, in the author's language)",
   "diagram": {
     // optional, only when a flow needs proving
-    "kind": "svg", // "svg" or "text"
-    "source": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 600 240\">…</svg>",
+    "kind": "mermaid", // "mermaid", "svg" or "text"
+    "source": "sequenceDiagram\n  PersonDrawer->>usePeople: mount (tenantId undefined)\n  …",
     "caption": "The drawer mounts before the tenant query resolves.",
   },
   "related": [
@@ -145,9 +145,9 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `marks[].line`               | integer                             | Within the excerpt (or the hunk's new side).                                                                                                                                                     |
 | `marks[].from`, `marks[].to` | integer ≥ 0, optional               | Columns, 0-based, `from` inclusive and `to` exclusive; absent, the whole line.                                                                                                                   |
 | `marks[].note`               | string, optional                    | Up to 300 characters, shown beside the line.                                                                                                                                                     |
-| `problem`, `why`, `fix`      | string                              | Plain words, as the findings model asks: one idea per sentence.                                                                                                                                  |
-| `comment`                    | string, optional                    | The text to post, whole. Required when `ownership` is `theirs`. Up to 4000 characters.                                                                                                           |
-| `diagram.kind`               | `svg` or `text`                     | `svg`: inline SVG, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference); `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
+| `problem`, `why`, `fix`      | string                              | Markdown (inline code, bold, links, lists, fenced code), in plain words: one idea per sentence. No heading (one renders as bold text), no HTML (it stays text); only `http`, `https` and `mailto` links are links. |
+| `comment`                    | string, optional                    | The text to post, whole. Required when `ownership` is `theirs`; optional on an `ours` review with an `mr`, where the page prefills the editor from `problem` and `fix` when it is absent. Up to 4000 characters. |
+| `diagram.kind`               | `mermaid`, `svg` or `text`          | `mermaid`: [Mermaid](https://mermaid.js.org) source the page draws in its own colours, the way to show a sequence or a flow (`sequenceDiagram`, `flowchart`, `stateDiagram`); strict: no click, no HTML label, and a directive (`%%{init}%%`, front matter) cannot change the security level, the labels, the layout (dagre, `flowchart-elk` included), the theme, its CSS or its font; a source that does not parse shows as text with the parser's message. `svg`: inline SVG drawn by hand, for what Mermaid cannot draw, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference). `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
 | `related[]`                  | object[], optional                  | Up to 4. Same shape as `path`, `line`, `excerpt`, `marks`.                                                                                                                                       |
 | `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs` or `add.mjs`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
 | `verified`                   | boolean, optional                   | Set by `verify.mjs` once a verifier confirmed or amended it; read only when the review's `verify` is true. Like `addedAt`, left out when two findings are compared.                             |
@@ -172,7 +172,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
         "context": "keep the early return, no throw",
         "at": "…",
       },
-      "comment": "…", // "theirs": the text as posted, when the reviewer edited it
+      "comment": "…", // a post: the text as posted, when the reviewer edited it
       "question": {
         "text": "…",
         "options": [{ "label": "…", "description": "…" }],
@@ -216,7 +216,7 @@ and `events` is optional.
 Moves the store accepts:
 
 - `fix`: from `open`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. An `asking` finding leaves only through `answer`.
-- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `ownership` is `theirs` and `mr.diffRefs` is set.
+- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`.
 - `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed` or `posted`.
 - `answer`: from `asking` → `queued`, with `answer` set; the server prints `FIX <id>` again.
 - `stop`: from `queued`, `working` → `stopped`.
@@ -226,8 +226,8 @@ Moves the store accepts:
 A `fixed` or `posted` finding is final: no move leaves it (the reviewer
 reverts by hand, or asks for a follow-up in a new review).
 
-The page's one-shot buttons (Fix all safe to auto-fix, Post all) act on the
-`open` findings (To do on the page) only, in list order; a selection may apply any move the table
+The page's one-shot button (Post all to do) acts on the `open` findings (To do
+on the page) only, in list order; a selection may apply any move the table
 allows. At start, the server prints `FIX <id>` again for every `queued` fix
 and runs the queued posts again; a `working` finding is left to its agent.
 
@@ -284,7 +284,9 @@ folder and tells the page to reload. A run that ends moves its file to
 
 A review agent's file, `reviewers/<name>.jsonl`, holds the same steps: the
 hooks write its `start` when it starts (its label says the lens or the
-finding), its tools and its notes, and an `end` step when it ends (`done`) or
+finding), its tools and its notes (whole, line breaks kept, up to 8,000
+characters: the page shows its last as the lens's report), and an `end`
+step when it ends (`done`) or
 is stopped (`failed`). It is never moved: `/api/review` lists every review
 agent, running until its `end`; one whose session closed before it ended
 keeps showing running.
@@ -299,7 +301,10 @@ reviews a change with no producer of your own:
    current branch, or `<branch>`, against
    the repository's default branch (`origin/HEAD`, else the first of
    `origin/main`, `origin/master`, `main`, `master` that exists),
-   `ownership: "ours"`; or a merge request read with `glab mr view <url> -F
+   `ownership: "ours"`, with the branch's open merge request as `mr` when
+   `glab mr view <branch> -F json`, run from the project, finds one (none,
+   glab missing or logged out: no `mr`, a line on stderr says why, and the
+   review goes on); or a merge request read with `glab mr view <url> -F
    json` (its `diff_refs`, its head fetched when the checkout lacks it),
    `ownership: "theirs"`. It writes the envelope, `status: "reviewing"`,
    `verify: true`, no finding, to `<state>/inbox/<id>.json`.
@@ -356,7 +361,7 @@ locks and show no progress.
 | `GET /api/health`     | `{ ok: true, review: "<id>", version: "<plugin version>" }`.                                                                                                                                                                                                                                                                                                       |
 | `GET /api/review`     | `{ review, findings, runs, reviewers, head }`: the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
 | `GET /api/account`    | `{ username }`: the account `glab api user` names, run from `project` once and kept for the server's life; `null` when glab cannot say (no glab, not logged in, an error). The page names it in a post's confirmation, or says "your glab account". |
-| `GET /api/diff`       | `{ base, head, files, diff }`: the change's unified diff, `git diff <base>...<headSha>` run in `project` (`baseSha..headSha` with `mr.diffRefs`, which must name the review's `headSha`), its paths relative to `project` like the findings', and its files, each `{ path, oldPath?, additions, deletions, binary }`. Computed once; a failure is computed again on the next request. Answers 409 with the reason when git is missing, `project` is not a git repository, a commit is not there, `base` is not a revision, the diff is empty or past `TRANCHANT_MAX_DIFF_MIB` (32), or git fails; the server logs git's words on stderr, and the page shows its list view. |
+| `GET /api/diff`       | `{ base, head, files, diff }`: the change's unified diff, `git diff <base>...<headSha>` run in `project` (`baseSha..headSha` with `mr.diffRefs` at the review's `headSha`; on `theirs`, refs at another head are refused, on `ours` the branch's own range is used), its paths relative to `project` like the findings', and its files, each `{ path, oldPath?, additions, deletions, binary }`. Computed once; a failure is computed again on the next request. Answers 409 with the reason when git is missing, `project` is not a git repository, a commit is not there, `base` is not a revision, the diff is empty or past `TRANCHANT_MAX_DIFF_MIB` (32), or git fails; the server logs git's words on stderr, and the page shows its list view. |
 | `GET /api/events`     | Server-sent events: `changed` with `{ ids }` when a finding landed, was verified or removed, or its record or run changed (`ids` empty when the review's `status` or a review agent's file changed); `page` when the bundle was rebuilt.                                                                                                                                                                             |
 | `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "drop" \| "skip", "context"?, "comment"?, "reason"? } ] }`. Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
 | `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                     |
