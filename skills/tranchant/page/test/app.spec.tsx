@@ -915,3 +915,12 @@ test('a review done names its stopped lenses together, and no verified count unl
   expect(agents.textContent).toContain('2 lenses · 0 findings')
   expect(agents.textContent).not.toContain('verified')
 })
+
+test('the header has the button that switches the theme', async () => {
+  await renderApp()
+  const header = document.querySelector<HTMLElement>('.tr-header')
+  expect(header).not.toBeNull()
+  expect(
+    within(header!).getByRole('button', { name: /^Switch to (dark|light) theme$/ }),
+  ).toBeTruthy()
+})

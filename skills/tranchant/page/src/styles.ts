@@ -11,6 +11,40 @@ const WRAP_MARK = `url("data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M5 2v8h7M9.5 7.5 12 10l-2.5 2.5" fill="none" stroke="#8a8f98" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 )}")`
 
+// Used by both the system's dark scheme and a dark pick: one palette, never two to keep in step.
+const DARK_PALETTE = `
+  color-scheme: dark;
+  --tr-bg: #15181d;
+  --tr-bg-2: #1c2026;
+  --tr-bg-3: #242931;
+  --tr-text: #e6e9ee;
+  --tr-muted: #9aa4b2;
+  --tr-border: #333a44;
+  --tr-accent: #6aa7e8;
+  --tr-accent-weak: #1f3147;
+  --tr-busy: #c4a8f4;
+  --tr-busy-bg: #2c2441;
+  --tr-on-accent: #0d1b2a;
+  --tr-review: #e9807c;
+  --tr-review-bg: #3a2222;
+  --tr-auto: #7ccf98;
+  --tr-auto-bg: #1f3a2a;
+  --tr-warn: #f0c36b;
+  --tr-warn-bg: #3a2f14;
+  --tr-danger: #e9807c;
+  --tr-danger-bg: #3a2222;
+  --tr-mark: rgba(255, 196, 0, 0.22);
+  --tr-mark-line: rgba(255, 196, 0, 0.09);
+  --tr-added: #1f3a2a;
+  --tr-removed: #3a2222;
+  --tr-code-keyword: #e0bdff;
+  --tr-code-string: #8fdca2;
+  --tr-code-number: #ffbb8a;
+  --tr-code-comment: #c4cdd8;
+  --tr-code-tag: #9ad0ff;
+  --tr-code-attr: #f2cc60;
+`
+
 export const PAGE_CSS = `
 :root {
   color-scheme: light dark;
@@ -48,38 +82,10 @@ export const PAGE_CSS = `
   --tr-radius: 6px;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --tr-bg: #15181d;
-    --tr-bg-2: #1c2026;
-    --tr-bg-3: #242931;
-    --tr-text: #e6e9ee;
-    --tr-muted: #9aa4b2;
-    --tr-border: #333a44;
-    --tr-accent: #6aa7e8;
-    --tr-accent-weak: #1f3147;
-    --tr-busy: #c4a8f4;
-    --tr-busy-bg: #2c2441;
-    --tr-on-accent: #0d1b2a;
-    --tr-review: #e9807c;
-    --tr-review-bg: #3a2222;
-    --tr-auto: #7ccf98;
-    --tr-auto-bg: #1f3a2a;
-    --tr-warn: #f0c36b;
-    --tr-warn-bg: #3a2f14;
-    --tr-danger: #e9807c;
-    --tr-danger-bg: #3a2222;
-    --tr-mark: rgba(255, 196, 0, 0.22);
-    --tr-mark-line: rgba(255, 196, 0, 0.09);
-    --tr-added: #1f3a2a;
-    --tr-removed: #3a2222;
-    --tr-code-keyword: #e0bdff;
-    --tr-code-string: #8fdca2;
-    --tr-code-number: #ffbb8a;
-    --tr-code-comment: #c4cdd8;
-    --tr-code-tag: #9ad0ff;
-    --tr-code-attr: #f2cc60;
-  }
+  :root:not([data-theme="light"]) {${DARK_PALETTE}}
 }
+:root[data-theme="dark"] {${DARK_PALETTE}}
+:root[data-theme="light"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -130,7 +136,15 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-counts > div { text-align: center; }
 .tr-counts dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tr-muted); }
 .tr-counts dd { margin: 0; font-size: 18px; font-weight: 600; }
-.tr-version { font-size: 11px; color: var(--tr-muted); align-self: flex-end; white-space: nowrap; }
+.tr-header-end { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; align-self: stretch; gap: 6px; }
+.tr-version { font-size: 11px; color: var(--tr-muted); white-space: nowrap; }
+.tr-theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  padding: 0; border: 1px solid transparent; border-radius: var(--tr-radius);
+  background: none; color: var(--tr-muted); cursor: pointer;
+}
+.tr-theme-toggle:hover { color: var(--tr-text); border-color: var(--tr-border); background: var(--tr-bg-3); }
+.tr-theme-toggle:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: 1px; }
 
 .tr-chip {
   display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 10px;

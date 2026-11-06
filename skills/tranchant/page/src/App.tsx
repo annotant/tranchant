@@ -32,6 +32,8 @@ import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
 import { Markdown } from './markdown'
 import { ReviewAgents } from './ReviewAgents'
+import { readStored, writeStored } from './storage'
+import { ThemeToggle } from './ThemeToggle'
 
 const SUMMARY_KEY = 'tranchant:summary'
 const VIEW_KEY = 'tranchant:view'
@@ -39,23 +41,6 @@ const NO_SECTIONS: readonly Section[] = []
 
 /** The main view: the change's diff, or the findings by bucket and topic. */
 type View = 'diff' | 'list'
-
-// A private window or a blocked store throws: the page then keeps its defaults.
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key)
-  } catch {
-    return null
-  }
-}
-
-function writeStored(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    // Nothing kept: the default shows next time.
-  }
-}
 
 const readView = (): View => (readStored(VIEW_KEY) === 'list' ? 'list' : 'diff')
 const readSummaryOpen = () => readStored(SUMMARY_KEY) !== 'closed'
@@ -167,7 +152,10 @@ function Header({
           </div>
         ))}
       </dl>
-      <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
+      <div className="tr-header-end">
+        <ThemeToggle />
+        <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
+      </div>
     </header>
   )
 }
