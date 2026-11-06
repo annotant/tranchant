@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Diagram as DiagramSource } from './domain'
 import type { Rendered } from './mermaid'
 import { sanitizeSvg } from './svg'
+import { useTheme } from './theme'
 
 export function Diagram({ diagram }: { diagram: DiagramSource }) {
   return (
@@ -39,23 +40,8 @@ function CleanSvg({ svg }: { svg: string }) {
   return <div className="tr-diagram-svg" ref={host} />
 }
 
-const DARK = '(prefers-color-scheme: dark)'
-
-/** The colour scheme in force, which the page's palette follows. */
-function useColorScheme(): 'light' | 'dark' {
-  const query = useMemo(() => window.matchMedia?.(DARK), [])
-  const [dark, setDark] = useState(() => query?.matches ?? false)
-  useEffect(() => {
-    if (!query) return undefined
-    const changed = (event: MediaQueryListEvent) => setDark(event.matches)
-    query.addEventListener('change', changed)
-    return () => query.removeEventListener('change', changed)
-  }, [query])
-  return dark ? 'dark' : 'light'
-}
-
 function MermaidDiagram({ source }: { source: string }) {
-  const scheme = useColorScheme()
+  const scheme = useTheme()
   const [rendered, setRendered] = useState<Rendered | undefined>()
   useEffect(() => {
     let current = true
