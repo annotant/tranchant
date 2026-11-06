@@ -31,8 +31,11 @@ released to the `stable` branch.
   replaces the line per agent: a progress bar, a chip per lens (done with
   its findings, running, or stopped and not covered), the verifiers grouped
   by lens, and only the agents still at work with their step. Once done, it
-  folds into one line, warning when a lens stopped; **Show all agents**
-  lists each with its outcome.
+  folds into one line, warning when a lens stopped; **What each lens
+  checked** opens one row per lens: its verdict, the point of its report
+  and what it looked at; opened, its whole report, its findings with their
+  verifier's verdict, and its steps. A review agent's words are no longer
+  cut at 400 characters.
 
 ## 0.1.0 - 2026-11-04
 

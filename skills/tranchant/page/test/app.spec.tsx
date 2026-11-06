@@ -788,8 +788,15 @@ test('a review done folds its agents into one line, unfolded on demand with each
         running: false,
         outcome: 'done',
         steps: [
-          { at: 1, kind: 'tool', label: 'SubagentHandback', state: 'done' },
-          { at: 2, kind: 'end', label: 'Ended', state: 'done' },
+          { at: 1, kind: 'bash', label: 'Show the diff', state: 'done' },
+          { at: 2, kind: 'tool', label: 'SubagentHandback', state: 'done' },
+          {
+            at: 3,
+            kind: 'note',
+            label: 'I added 1 finding. **bugs-1:** the cart total skips the discount.',
+            state: 'done',
+          },
+          { at: 4, kind: 'end', label: 'Ended', state: 'done' },
         ],
       },
       {
@@ -807,12 +814,28 @@ test('a review done folds its agents into one line, unfolded on demand with each
   expect(agents.textContent).toContain('2 lenses · 1 finding, 1 verified')
   expect(agents.textContent).toContain('conventions stopped: that lens is not covered')
   expect(agents.textContent).not.toContain('SubagentHandback')
-  expect(within(agents).queryByRole('list', { name: 'Every review agent' })).toBeNull()
-  fireEvent.click(within(agents).getByRole('button', { name: 'Show all agents' }))
-  const all = within(agents).getByRole('list', { name: 'Every review agent' })
-  expect(all.textContent).toContain('Reviewer · bugs1 finding')
-  expect(all.textContent).toContain('stopped: Reading AGENTS.md failed')
-  expect(all.textContent).not.toContain('SubagentHandback')
+  expect(
+    within(agents).queryByRole('list', { name: 'What each lens checked' }),
+  ).toBeNull()
+  fireEvent.click(within(agents).getByRole('button', { name: 'What each lens checked' }))
+  const lenses = within(agents).getByRole('list', { name: 'What each lens checked' })
+  const bugs = within(lenses).getByRole('button', { name: /^done bugs 1 finding/ })
+  expect(bugs.textContent).toContain('bugs-1: the cart total skips the discount.')
+  expect(bugs.textContent).toContain('1 command')
+  expect(lenses.textContent).toContain('stopped: Reading AGENTS.md failed')
+  expect(lenses.textContent).not.toContain('SubagentHandback')
+  fireEvent.click(bugs)
+  expect(bugs.getAttribute('aria-expanded')).toBe('true')
+  expect(lenses.textContent).toContain('Its report')
+  expect(lenses.textContent).toContain('Ran Show the diff')
+  const finding = within(lenses).getByRole('button', { name: FINDINGS[0]!.title })
+  expect(lenses.textContent).toContain('verified')
+  fireEvent.click(finding)
+  await waitFor(() =>
+    expect(
+      screen.getByRole('heading', { level: 2, name: FINDINGS[0]!.title }),
+    ).toBeTruthy(),
+  )
 })
 
 test('a verified review dims the findings no verifier confirmed, and shows its agents', async () => {

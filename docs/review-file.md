@@ -284,7 +284,9 @@ folder and tells the page to reload. A run that ends moves its file to
 
 A review agent's file, `reviewers/<name>.jsonl`, holds the same steps: the
 hooks write its `start` when it starts (its label says the lens or the
-finding), its tools and its notes, and an `end` step when it ends (`done`) or
+finding), its tools and its notes (whole, line breaks kept, up to 8,000
+characters: the page shows its last as the lens's report), and an `end`
+step when it ends (`done`) or
 is stopped (`failed`). It is never moved: `/api/review` lists every review
 agent, running until its `end`; one whose session closed before it ended
 keeps showing running.

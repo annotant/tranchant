@@ -496,11 +496,13 @@ export default function App() {
       <ReviewAgents
         agents={(payload?.reviewers ?? []).map((agent) =>
           // An agent whose end step was never written ended with its review all the same.
-          review?.status === 'reviewing' ? agent : { ...agent, running: false },
+          reviewing ? agent : { ...agent, running: false },
         )}
-        reviewing={review?.status === 'reviewing'}
+        reviewing={reviewing}
         findings={review?.findings ?? []}
         verify={review?.verify === true}
+        project={review?.project ?? ''}
+        onOpen={open}
       />
       <details
         className="tr-summary"

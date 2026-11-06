@@ -161,15 +161,35 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-now { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; padding: 4px 0 0; list-style: none; }
 .tr-now li { display: contents; }
 .tr-now-who { font-weight: 600; white-space: nowrap; }
-.tr-log { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: 4px 24px; margin: 0; padding: 10px 0 0; list-style: none; border-top: 1px dashed var(--tr-border); font-size: 12.5px; }
-.tr-agent { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.tr-agent--ended { color: var(--tr-muted); }
-.tr-agent .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
-.tr-agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tr-muted); flex: none; }
-.tr-agent-dot--failed { background: var(--tr-danger); }
-.tr-agent-name { font-weight: 500; white-space: nowrap; }
+.tr-reports { margin: 0; padding: 0; list-style: none; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); overflow: hidden; }
+.tr-report + .tr-report { border-top: 1px solid var(--tr-border); }
+.tr-report-row { display: grid; grid-template-columns: 14px minmax(90px, max-content) max-content minmax(0, 1fr) max-content; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 8px 12px; border: 0; background: var(--tr-bg); color: var(--tr-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.tr-report-row:hover, .tr-report-row[aria-expanded="true"] { background: var(--tr-bg-2); }
+.tr-report-row .tr-lens-icon { color: var(--tr-auto); }
+.tr-report-row .tr-spinner { width: 9px; height: 9px; border-width: 1.5px; }
+.tr-report-row .tr-lens-icon[aria-label="stopped"] { color: var(--tr-danger); }
+.tr-report-lens { font-weight: 700; }
+.tr-report-verdict { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; white-space: nowrap; background: var(--tr-bg-3); color: var(--tr-muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.tr-report-verdict--found, .tr-report-verdict--running { background: var(--tr-accent-weak); color: var(--tr-accent); }
+.tr-report-verdict--failed { background: var(--tr-danger-bg); color: var(--tr-danger); }
+.tr-report-gist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tr-muted); }
+.tr-report-looked { font-size: 12px; color: var(--tr-muted); white-space: nowrap; }
+.tr-report-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; padding: 12px 12px 16px 38px; background: var(--tr-bg-2); border-top: 1px dashed var(--tr-border); }
+.tr-report-h { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--tr-muted); }
+.tr-report-findings { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tr-report-findings li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tr-report-findings .tr-btn--link { text-align: left; }
+.tr-chip--check-verified { background: var(--tr-auto-bg); color: var(--tr-auto); }
+.tr-chip--check-amended { background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-chip--check-verifying { background: var(--tr-accent-weak); color: var(--tr-accent); }
+.tr-report-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--tr-muted); overflow-wrap: anywhere; }
+.tr-report-more { margin-top: 6px; font-size: 12.5px; }
+@media (max-width: 720px) {
+  .tr-report-row { grid-template-columns: 14px minmax(0, 1fr) max-content; }
+  .tr-report-gist, .tr-report-looked { display: none; }
+  .tr-report-body { grid-template-columns: minmax(0, 1fr); padding-left: 12px; }
+}
 .tr-agent-step { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tr-muted); }
-.tr-agent-step--failed { color: var(--tr-danger); }
 .tr-chip--queued, .tr-chip--working, .tr-chip--asking { background: var(--tr-warn-bg); color: var(--tr-warn); }
 .tr-chip--fixed, .tr-chip--posted { background: var(--tr-auto-bg); color: var(--tr-auto); }
 .tr-chip--failed, .tr-chip--stopped { background: var(--tr-danger-bg); color: var(--tr-danger); }
