@@ -7,8 +7,14 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.2.0 - 2026-11-06
+
 ### Added
 
+- **Markdown in a finding.** Its problem, why and fix render as Markdown:
+  inline code, bold, lists, code blocks and links read as written, no
+  longer as raw text. A link opens in a new tab, and only a safe one
+  becomes a link.
 - **Light or dark, your pick.** A sun or moon in the header switches the
   page to the other theme, diff, code colours and diagrams included. The
   page follows the system until the first click; the pick is remembered in
