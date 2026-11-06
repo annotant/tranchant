@@ -258,6 +258,21 @@ export const GROUP_LABELS: Record<Group, string> = {
 
 export const stateLabel = (state: State) => GROUP_LABELS[GROUP_OF[state]]
 
+// One class per group, so states that mean the same look the same.
+export const GROUP_CLASSES: Record<Group, string> = {
+  toDo: 'tr-chip tr-chip--to-do',
+  inProgress: 'tr-chip tr-chip--in-progress',
+  needsYou: 'tr-chip tr-chip--needs-you',
+  done: 'tr-chip tr-chip--done',
+  setAside: 'tr-chip tr-chip--set-aside',
+}
+
+// decisions.json is not checked state by state: an unknown one keeps the chip's shape.
+export const groupClass = (group: Group) =>
+  Object.hasOwn(GROUP_CLASSES, group) ? GROUP_CLASSES[group] : 'tr-chip'
+
+export const stateClass = (state: State) => groupClass(GROUP_OF[state])
+
 /** What the chip's group hides: which of its states the finding is in. */
 export const STATE_DETAILS: Record<State, string> = {
   open: 'Nothing decided yet',

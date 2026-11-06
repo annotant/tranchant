@@ -4,6 +4,7 @@ import {
   type Finding,
   type Records,
   STATE_DETAILS,
+  stateClass,
   stateLabel,
   stateOf,
   tagOf,
@@ -86,7 +87,7 @@ function Row({
       />
       <button type="button" className="tr-item-main" onClick={onOpen} tabIndex={-1}>
         <span className="tr-item-line">
-          <span className={`tr-chip tr-chip--${state}`} title={STATE_DETAILS[state]}>
+          <span className={stateClass(state)} title={STATE_DETAILS[state]}>
             {stateLabel(state)}
           </span>
           {tag !== 'concern' && (

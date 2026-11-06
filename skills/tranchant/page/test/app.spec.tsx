@@ -106,6 +106,9 @@ test('the header shows what needs you and what runs; Needs you opens each in tur
     'In progress 1',
   )
   expect(document.querySelector('.tr-attention .tr-spinner')).not.toBeNull()
+  expect(document.querySelector('#tr-option-f-03 .tr-chip')?.className).toBe(
+    'tr-chip tr-chip--needs-you',
+  )
   // List order is f-02, f-01, f-05, f-03, f-04: f-01 first, then f-03, then f-01 again.
   fireEvent.click(screen.getByRole('button', { name: 'Needs you 2' }))
   await waitFor(() => expect(selectedOption()).toBe('f-01'))

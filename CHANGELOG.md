@@ -31,6 +31,11 @@ released to the `stable` branch.
 
 ### Changed
 
+- **One style per family of states.** A state chip takes its family's
+  colours: to do blue, in progress violet, needs you amber, done green, set
+  aside muted and outlined, no longer struck through. A run's outcome wears
+  the family it leads to. Every state chip reads at 4.5:1, light and
+  dark.
 - **The batch bar, selection first.** A three-state checkbox selects every
   finding or none, a chip per group (To do, Safe to auto-fix) selects it
   with its count and shows pressed, and the selection's actions appear only

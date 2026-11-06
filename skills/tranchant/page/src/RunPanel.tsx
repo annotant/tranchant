@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { activityOf, runningStep, stepKey } from './activity'
 import { fetchRuns } from './api'
-import { type FindingRecord, modelName, type Step } from './domain'
+import {
+  type FindingRecord,
+  groupClass,
+  modelName,
+  stateClass,
+  type Step,
+} from './domain'
 
 interface Props {
   id: string
@@ -118,7 +124,11 @@ export function RunPanel({ id, record, steps, disabled }: Props) {
             <li key={run.id}>
               <span className="tr-run-id">{run.id}</span>
               {run.model && <span className="tr-muted"> · {modelName(run.model)}</span>}
-              <span className={`tr-chip tr-chip--${run.outcome ?? 'working'}`}>
+              <span
+                className={
+                  run.outcome ? stateClass(run.outcome) : groupClass('inProgress')
+                }
+              >
                 {OUTCOME_LABELS[run.outcome ?? 'running']}
               </span>
               {run.summary && <span className="tr-run-summary"> {run.summary}</span>}

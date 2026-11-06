@@ -156,6 +156,9 @@ test('the view draws markers under their lines, notes on the header, and the ope
       onToggle={() => undefined}
     />,
   )
+  expect(container.querySelector('#tr-marker-f-02 .tr-chip')?.className).toBe(
+    'tr-chip tr-chip--done',
+  )
   const row21 = container.querySelector('#tr-file-1 .tr-row[data-line="21"]')
   const stack = [...(row21?.parentElement?.querySelectorAll('.tr-marker') ?? [])]
   expect(stack.map((marker) => marker.id)).toEqual(['tr-marker-f-02', 'tr-marker-f-06'])

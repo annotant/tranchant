@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest'
+import { GROUP_CLASSES } from '../src/domain'
 import { PAGE_CSS } from '../src/styles'
 
 type Rgb = readonly [number, number, number]
@@ -85,5 +86,49 @@ for (const scheme of ['light', 'dark'] as const)
           .filter((background) => contrast(colour, background) < 4.5)
           .map((background) => `${name} on ${background.map(Math.round).join(',')}`),
     )
+    expect(failing).toEqual([])
+  })
+
+/** A rule's colour and background variables; no background means whatever is behind it. */
+const ruleColours = (selector: string) => {
+  // A second rule for the selector would win in the browser unseen: there must be one.
+  const rules = [...PAGE_CSS.matchAll(new RegExp(`\\.${selector}\\s*\\{([^}]*)\\}`, 'g'))]
+  if (rules.length !== 1) throw new Error(`${rules.length} rules for .${selector}`)
+  const rule = rules[0]![1]!
+  const variable = (property: string) =>
+    new RegExp(`(?:^|;)\\s*${property}:\\s*var\\(--tr-([\\w-]+)\\)`).exec(rule)?.[1]
+  const background = variable('background')
+  if (!background && /background/.test(rule) && !/background:\s*transparent/.test(rule))
+    throw new Error(`.${selector} has a background the test cannot read`)
+  return { color: variable('color'), background }
+}
+
+const FAMILIES = Object.values(GROUP_CLASSES).map((name) =>
+  name.replace('tr-chip tr-chip--', ''),
+)
+
+test('each family of states has its own style, never struck through', () => {
+  const styles = FAMILIES.map((family) => ruleColours(`tr-chip--${family}`))
+  expect(styles.every((style) => style.color)).toBe(true)
+  expect(new Set(styles.map((style) => JSON.stringify(style))).size).toBe(FAMILIES.length)
+  expect(PAGE_CSS).not.toContain('line-through')
+})
+
+// The surfaces a chip sits on: the page, a focused or open row, a panel.
+const SURFACES = ['bg', 'bg-2', 'bg-3', 'accent-weak']
+
+for (const scheme of ['light', 'dark'] as const)
+  test(`the ${scheme} state chips and the live counter read at 4.5:1`, () => {
+    const get = palette(scheme)
+    const selectors = [
+      ...FAMILIES.map((family) => `tr-chip--${family}`),
+      'tr-attention-item--live',
+    ]
+    const failing = selectors.flatMap((selector) => {
+      const { color, background } = ruleColours(selector)
+      return (background ? [background] : SURFACES)
+        .filter((under) => contrast(rgb(get(color!))[0], rgb(get(under))[0]) < 4.5)
+        .map((under) => `${selector} on ${under}`)
+    })
     expect(failing).toEqual([])
   })
