@@ -232,7 +232,7 @@ export const BUCKET_LABELS: Record<Bucket, string> = {
 }
 
 /** What a state means to the reviewer; the page shows GROUP_LABELS, never a state's name. */
-export type Group = 'toDo' | 'inProgress' | 'needsYou' | 'done' | 'setAside'
+type Group = 'toDo' | 'inProgress' | 'needsYou' | 'done' | 'setAside'
 
 // Exhaustive so a new state cannot drop out of the header unnoticed at compile time.
 const GROUP_OF: Record<State, Group> = {
@@ -259,7 +259,7 @@ export const GROUP_LABELS: Record<Group, string> = {
 export const stateLabel = (state: State) => GROUP_LABELS[GROUP_OF[state]]
 
 // One class per group, so states that mean the same look the same.
-const GROUP_CLASSES: Record<Group, string> = {
+export const GROUP_CLASSES: Record<Group, string> = {
   toDo: 'tr-chip tr-chip--to-do',
   inProgress: 'tr-chip tr-chip--in-progress',
   needsYou: 'tr-chip tr-chip--needs-you',
@@ -267,7 +267,9 @@ const GROUP_CLASSES: Record<Group, string> = {
   setAside: 'tr-chip tr-chip--set-aside',
 }
 
-export const groupClass = (group: Group) => GROUP_CLASSES[group]
+// decisions.json is not checked state by state: an unknown one keeps the chip's shape.
+export const groupClass = (group: Group) =>
+  Object.hasOwn(GROUP_CLASSES, group) ? GROUP_CLASSES[group] : 'tr-chip'
 
 export const stateClass = (state: State) => groupClass(GROUP_OF[state])
 

@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest'
+import { GROUP_CLASSES } from '../src/domain'
 import { PAGE_CSS } from '../src/styles'
 
 type Rgb = readonly [number, number, number]
@@ -90,13 +91,21 @@ for (const scheme of ['light', 'dark'] as const)
 
 /** A rule's colour and background variables; no background means whatever is behind it. */
 const ruleColours = (selector: string) => {
-  const rule = new RegExp(`\\.${selector} \\{([^}]*)\\}`).exec(PAGE_CSS)?.[1] ?? ''
+  // A second rule for the selector would win in the browser unseen: there must be one.
+  const rules = [...PAGE_CSS.matchAll(new RegExp(`\\.${selector}\\s*\\{([^}]*)\\}`, 'g'))]
+  if (rules.length !== 1) throw new Error(`${rules.length} rules for .${selector}`)
+  const rule = rules[0]![1]!
   const variable = (property: string) =>
     new RegExp(`(?:^|;)\\s*${property}:\\s*var\\(--tr-([\\w-]+)\\)`).exec(rule)?.[1]
-  return { color: variable('color'), background: variable('background') }
+  const background = variable('background')
+  if (!background && /background/.test(rule) && !/background:\s*transparent/.test(rule))
+    throw new Error(`.${selector} has a background the test cannot read`)
+  return { color: variable('color'), background }
 }
 
-const FAMILIES = ['to-do', 'in-progress', 'needs-you', 'done', 'set-aside']
+const FAMILIES = Object.values(GROUP_CLASSES).map((name) =>
+  name.replace('tr-chip tr-chip--', ''),
+)
 
 test('each family of states has its own style, never struck through', () => {
   const styles = FAMILIES.map((family) => ruleColours(`tr-chip--${family}`))
