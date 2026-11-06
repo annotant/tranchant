@@ -21,6 +21,12 @@ released to the `stable` branch.
   review, survives a reload, shows its count on the finding in the diff and
   the list, and reads as it stands once the finding is settled.
 
+### Changed
+
+- **The page reads in Figtree**, annotant's font, in place of the system's:
+  the two pages read as one family. The font ships inside the page, so
+  nothing is fetched from the network; code stays in a monospace font.
+
 ## 0.2.0 - 2026-11-06
 
 ### Added

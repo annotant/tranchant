@@ -132,3 +132,25 @@ for (const scheme of ['light', 'dark'] as const)
     })
     expect(failing).toEqual([])
   })
+
+test('the text is Figtree, under a name of its own, upright and italic', () => {
+  const faces = [...PAGE_CSS.matchAll(/@font-face \{([^}]*)\}/g)].map(
+    (face) => face[1] ?? '',
+  )
+  expect(faces.map((face) => /font-style: (\w+)/.exec(face)?.[1])).toEqual([
+    'normal',
+    'italic',
+  ])
+  expect(faces.every((face) => face.includes("font-family: 'Tranchant Figtree'"))).toBe(
+    true,
+  )
+  expect(faces.every((face) => face.includes('font-display: swap'))).toBe(true)
+  // Rebalanced, or the text sits high in its buttons.
+  expect(
+    faces.every((face) => face.includes('ascent-override: 100%; descent-override: 20%')),
+  ).toBe(true)
+  expect(/--tr-font: ([^;]+);/.exec(PAGE_CSS)?.[1]).toMatch(
+    /^'Tranchant Figtree', system-ui,/,
+  )
+  expect(/--tr-mono: ([^;]+);/.exec(PAGE_CSS)?.[1]).not.toContain('Figtree')
+})

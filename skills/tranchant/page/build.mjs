@@ -30,6 +30,8 @@ const buildOptions = {
   format: 'esm',
   target: 'es2022',
   jsx: 'automatic',
+  // Fonts inlined: the server serves the page's .js files only, and its CSP allows font-src data:.
+  loader: { '.woff2': 'dataurl' },
   minify: true,
   // Keep the bundled dependencies' license notices (React is MIT): at the end of the file.
   legalComments: 'eof',
@@ -130,9 +132,15 @@ function writeLicenses(metafile) {
       const name = pkg.license ? ` (${pkg.license})` : ''
       return `${pkg.name} ${pkg.version}${name}\n\n${text}\n`
     })
+  // The font is vendored, not a package: its license sits next to it.
+  const ofl = readFileSync(
+    new URL('src/assets/fonts/OFL.txt', import.meta.url),
+    'utf8',
+  ).trim()
+  notices.push(`Figtree (OFL-1.1)\n\n${ofl}\n`)
   writeFileSync(
     path.join(options.outdir, 'THIRD_PARTY_LICENSES.txt'),
-    `The Tranchant page (page.js and chunks/) bundles the following packages.\n\n${notices.join(
+    `The Tranchant page (page.js and chunks/) bundles the following packages and font.\n\n${notices.join(
       `\n${'-'.repeat(80)}\n\n`,
     )}`,
   )

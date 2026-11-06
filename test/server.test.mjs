@@ -225,6 +225,8 @@ test('serves the page shell with the review’s title, and the bundle', async ()
   assert.equal(shell.status, 200)
   assert.match(shell.headers.get('content-type') ?? '', /text\/html/)
   assert.match(shell.headers.get('content-security-policy') ?? '', /script-src 'self'/)
+  // The page's fonts are inlined as data: URLs.
+  assert.match(shell.headers.get('content-security-policy') ?? '', /font-src [^;]*data:/)
   const html = await shell.text()
   assert.ok(html.startsWith('<!doctype html>'))
   assert.ok(html.includes('<title>Tranchant · People drawer and table</title>'), html)

@@ -2,3 +2,9 @@
 
 /** The plugin's version, read from .claude-plugin/plugin.json at build time. */
 declare const TRANCHANT_VERSION: string
+
+declare module '*.woff2' {
+  /** A data URL: the build inlines fonts. */
+  const src: string
+  export default src
+}
