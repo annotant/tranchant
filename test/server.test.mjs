@@ -1151,7 +1151,7 @@ test('a question on a finding prints DISCUSS; the agent answers through reply.mj
     payload.reviewers.map((/** @type {any} */ one) => one.name),
     ['rv-bugs'],
   )
-  assert.equal(payload.discussions['f-01'].activity, 'src/people/usePeople.ts')
+  assert.equal(payload.discussions['f-01'].step.label, 'src/people/usePeople.ts')
   assert.equal(payload.discussions['f-01'].messages[0].text, 'Is it reachable?')
 
   const answer = { text: 'It is: `tenantId` is undefined on mount.', drop: 7 }
@@ -1173,7 +1173,7 @@ test('a question on a finding prints DISCUSS; the agent answers through reply.mj
   const [, said] = payload.discussions['f-01'].messages
   assert.equal(said.by, 'agent')
   assert.deepEqual(said.proposal, { fix: 'Return early.' })
-  assert.equal(payload.discussions['f-01'].activity, undefined)
+  assert.equal(payload.discussions['f-01'].step, undefined)
   // Not a decision: the finding is open still.
   assert.equal(payload.findings['f-01'], undefined)
 

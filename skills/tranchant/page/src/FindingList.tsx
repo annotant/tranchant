@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import {
   type BucketGroup,
   type Finding,
+  plural,
   type Records,
   STATE_DETAILS,
   stateClass,
@@ -22,11 +23,37 @@ interface Props {
   unverified?: ReadonlySet<string>
   /** The findings with a comment ready to post: marked. */
   commented?: ReadonlySet<string>
+  /** By finding, the messages of its discussion: marked with their count. */
+  discussed?: ReadonlyMap<string, number>
   onOpen: (id: string) => void
   onToggle: (id: string) => void
 }
 
 const optionId = (id: string) => `tr-option-${id}`
+
+/** Two bubbles and their count: the finding has a discussion. */
+export function DiscussionMark({ count }: { count: number }) {
+  const words = `${plural(count, 'message')} in its discussion`
+  return (
+    <span className="tr-discussion-mark" role="img" aria-label={words} title={words}>
+      <svg
+        viewBox="0 0 24 24"
+        width="13"
+        height="13"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2Z" />
+        <path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" />
+      </svg>
+      {count}
+    </span>
+  )
+}
 
 /** A speech bubble: the finding has a comment ready to post. */
 export function CommentMark() {
@@ -55,6 +82,7 @@ function Row({
   checked,
   unverified,
   commented,
+  discussed,
   onOpen,
   onToggle,
 }: {
@@ -65,6 +93,8 @@ function Row({
   checked: boolean
   unverified: boolean
   commented: boolean
+  /** The messages of its discussion; none, 0. */
+  discussed: number
   onOpen: () => void
   onToggle: () => void
 }) {
@@ -96,6 +126,7 @@ function Row({
           {unverified && <span className="tr-chip">unverified</span>}
           <span className="tr-item-title">{finding.title}</span>
           {commented && <CommentMark />}
+          {discussed > 0 && <DiscussionMark count={discussed} />}
         </span>
         <span className="tr-item-anchor">
           {finding.path}:{finding.line}
@@ -113,6 +144,7 @@ export function FindingList({
   selected,
   unverified,
   commented,
+  discussed,
   onOpen,
   onToggle,
 }: Props) {
@@ -163,6 +195,7 @@ export function FindingList({
                   checked={selected.has(finding.id)}
                   unverified={unverified?.has(finding.id) ?? false}
                   commented={commented?.has(finding.id) ?? false}
+                  discussed={discussed?.get(finding.id) ?? 0}
                   onOpen={() => onOpen(finding.id)}
                   onToggle={() => onToggle(finding.id)}
                 />

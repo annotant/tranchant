@@ -272,7 +272,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-confirm-post ul { margin: 4px 0 0; padding-left: 18px; }
 
 .tr-btn {
-  display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: var(--tr-radius);
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--tr-radius);
   border: 1px solid var(--tr-border); background: var(--tr-bg); cursor: pointer; font-weight: 500; white-space: nowrap;
 }
 .tr-btn:hover { background: var(--tr-bg-2); }
@@ -346,6 +346,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-marker-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; font: 13px/1.4 var(--tr-font); }
 .tr-marker-title { font-weight: 500; }
 .tr-comment-mark { display: inline-flex; flex: none; color: var(--tr-accent); }
+.tr-discussion-mark { display: inline-flex; flex: none; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--tr-accent); font-variant-numeric: tabular-nums; }
 .tr-marker-note { color: var(--tr-warn); font-size: 12px; }
 .tr-detail { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 32px; max-width: 1100px; }
 .tr-detail-head h2 { font-size: 17px; }
@@ -424,16 +425,65 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-input { flex: 1; min-width: 240px; height: 30px; padding: 0 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
 .tr-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); resize: vertical; }
 .tr-input:focus, .tr-textarea:focus { outline: none; border-color: var(--tr-accent); }
-.tr-discussion { display: flex; flex-direction: column; gap: 8px; }
-.tr-discussion-title { margin: 0; font-size: 14px; }
-.tr-messages { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
-.tr-message { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--tr-radius); background: var(--tr-bg-2); }
-.tr-message--reviewer { background: var(--tr-accent-weak); }
-.tr-message-by { font-size: 12px; font-weight: 600; color: var(--tr-muted); }
-.tr-message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.tr-proposals { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-.tr-proposal { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 6px 8px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
-.tr-proposal-label { font-size: 12px; font-weight: 600; color: var(--tr-muted); }
+/* A finding's discussion, after annotant's thread: yours right in the accent, the agent's left. */
+.tr-dsc { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--tr-border); border-radius: 12px; background: var(--tr-bg-2); }
+.tr-dsc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tr-dsc-head h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tr-muted); }
+.tr-dsc-note { font-size: 12px; color: var(--tr-muted); }
+.tr-dsc-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 8px 0; text-align: center; }
+.tr-dsc-empty p { margin: 0; max-width: 380px; }
+.tr-dsc-empty-icon { color: var(--tr-accent); }
+.tr-dsc-empty-title { font-size: 15px; font-weight: 700; }
+.tr-suggest { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding-top: 4px; }
+.tr-suggest button { height: 30px; padding: 0 12px; border: 1px solid var(--tr-border); border-radius: 999px; background: var(--tr-bg); color: var(--tr-text); font: inherit; font-size: 13px; cursor: pointer; }
+.tr-suggest button:hover { border-color: var(--tr-accent); }
+.tr-chat { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 16px; }
+.tr-msg { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tr-msg--you { align-items: flex-end; padding-left: 48px; }
+.tr-msg--agent { align-items: stretch; }
+.tr-msg-who { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tr-muted); }
+/* Long words, URLs and code break inside the bubble rather than spilling out of it. */
+.tr-bubble { max-width: 100%; padding: 8px 14px; border-radius: 14px; overflow-wrap: anywhere; }
+.tr-bubble--you { background: var(--tr-accent); color: var(--tr-on-accent); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.tr-bubble--agent { background: var(--tr-bg); border: 1px solid var(--tr-border); border-bottom-left-radius: 4px; }
+.tr-bubble--agent > :first-child { margin-top: 0; }
+.tr-bubble--agent > :last-child { margin-bottom: 0; }
+/* One line, the agent's latest step: a pulsing icon, then what it does. */
+.tr-step-now { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--tr-radius); background: var(--tr-accent-weak); color: var(--tr-accent); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.tr-step-now > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tr-step-icon { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--tr-accent); color: var(--tr-on-accent); animation: tr-pulse 1.6s ease-out infinite; }
+@keyframes tr-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--tr-accent) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
+@media (prefers-reduced-motion: reduce) { .tr-step-icon { animation: none; } }
+/* What the agent proposes: one card each, its action on its right. */
+.tr-proposals { display: flex; flex-direction: column; gap: 8px; }
+.tr-proposal { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--tr-warn) 30%, var(--tr-border)); border-radius: var(--tr-radius); background: var(--tr-bg); }
+.tr-proposal-icon { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 7px; background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-proposal-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.tr-proposal-body { color: var(--tr-muted); overflow-wrap: anywhere; }
+.tr-proposal-body p { margin: 0; }
+.tr-proposal > .tr-btn { flex-shrink: 0; }
+.tr-proposal--editing { flex-direction: column; align-items: stretch; border-color: var(--tr-accent); }
+.tr-proposal-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--tr-muted); }
+.tr-proposal-foot strong { font-size: 13px; color: var(--tr-text); }
+.tr-clamp { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.tr-taken { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); font-size: 13px; color: var(--tr-muted); }
+.tr-taken svg { flex-shrink: 0; color: var(--tr-auto); }
+.tr-unanswered { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--tr-radius); background: var(--tr-danger-bg); color: var(--tr-danger); font-size: 13px; }
+.tr-unanswered svg { flex-shrink: 0; margin-top: 1px; }
+.tr-unanswered-body { display: flex; flex-direction: column; gap: 6px; }
+/* The message box: grows with its text up to its max-height, then scrolls. */
+.tr-composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--tr-border); border-radius: 12px; background: var(--tr-bg); transition: border-color .15s; }
+.tr-composer:focus-within { border-color: var(--tr-accent); }
+.tr-composer textarea { flex: 1; min-width: 0; min-height: 36px; max-height: 160px; padding: 7px 0; border: 0; outline: none; resize: none; overflow-y: auto; background: transparent; font: inherit; font-size: 15px; line-height: 1.45; color: var(--tr-text); }
+.tr-composer textarea::placeholder { color: var(--tr-muted); }
+.tr-send { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: var(--tr-accent); color: var(--tr-on-accent); cursor: pointer; }
+.tr-send:disabled { background: var(--tr-accent-weak); color: var(--tr-muted); cursor: default; }
+.tr-composer-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; font-size: 12px; color: var(--tr-muted); }
+.tr-composer-foot kbd { font: inherit; font-weight: 600; color: var(--tr-text); }
+.tr-dsc-closed { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; border: 1px dashed var(--tr-border); border-radius: 12px; font-size: 13px; color: var(--tr-muted); }
+.tr-btn--on { background: var(--tr-accent-weak); border-color: var(--tr-accent); color: var(--tr-accent); }
+.tr-btn svg { flex-shrink: 0; }
+.tr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .tr-ask { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--tr-warn-bg); border-radius: var(--tr-radius); }
 .tr-ask-text { font-weight: 600; }
 .tr-options { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }

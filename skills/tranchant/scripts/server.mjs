@@ -705,12 +705,14 @@ async function handle(req, res) {
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
       discussions: Object.fromEntries(
         Object.entries(discussions).map(([id, discussion]) => {
-          // While it answers: what its agent does last, the page's progress line.
+          // While it answers: its agent's last step, the page's progress line.
           const steps = isWaiting(discussion)
             ? agents.find((agent) => agent.name === `ds-${id}`)?.steps
             : undefined
-          const doing = steps?.findLast((step) => step.kind !== 'end' && step.label)
-          return [id, { ...discussion, ...(doing && { activity: doing.label }) }]
+          // The file holds every agent the thread had: an end is a past one's.
+          const last = steps?.at(-1)
+          const step = last && last.kind !== 'end' ? last : undefined
+          return [id, { ...discussion, ...(step && { step }) }]
         }),
       ),
       head: { reviewed: latest.headSha, current },

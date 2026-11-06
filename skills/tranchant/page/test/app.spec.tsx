@@ -948,3 +948,22 @@ test('a message in a discussion goes to /api/discuss; a refusal shows and keeps 
     { id: 'f-02', text: 'Is it reachable?' },
   ])
 })
+
+test('a finding with a discussion is marked with its count, in the list and in the diff', async () => {
+  const discussions = {
+    'f-02': {
+      messages: [
+        { by: 'reviewer' as const, text: 'Why?', at: '2026-11-06T10:00:00Z' },
+        { by: 'agent' as const, text: 'Because.', at: '2026-11-06T10:01:00Z' },
+      ],
+    },
+  }
+  await renderApp({ ...payload(), discussions })
+  const listed = screen.getByRole('img', { name: '2 messages in its discussion' })
+  expect(listed.textContent).toBe('2')
+  cleanup()
+  await renderDiffApp({ ...payload(), discussions })
+  expect(
+    screen.getAllByRole('img', { name: '2 messages in its discussion' }),
+  ).not.toHaveLength(0)
+})

@@ -233,8 +233,8 @@ export interface Message {
 /** A finding's discussion with an agent, as `/api/review` sends it. */
 export interface Discussion {
   messages: Message[]
-  /** While the agent answers: what it does last. */
-  activity?: string
+  /** While the agent answers: its last step. */
+  step?: Step
 }
 
 /** What `GET /api/review` answers. */

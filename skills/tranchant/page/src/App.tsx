@@ -229,6 +229,16 @@ export default function App() {
     () => (review ? unverifiedIds(review) : new Set<string>()),
     [review],
   )
+  const discussed = useMemo(
+    () =>
+      new Map(
+        Object.entries(payload?.discussions ?? {}).map(([id, one]) => [
+          id,
+          one.messages.length,
+        ]),
+      ),
+    [payload?.discussions],
+  )
   const commented = useMemo(
     () => (review ? commentedIds(review) : new Set<string>()),
     [review],
@@ -588,6 +598,7 @@ export default function App() {
                   selected={selected}
                   unverified={unverified}
                   commented={commented}
+                  discussed={discussed}
                   onOpen={open}
                   onToggle={toggle}
                 />
@@ -615,6 +626,7 @@ export default function App() {
                 selected={selected}
                 unverified={unverified}
                 commented={commented}
+                discussed={discussed}
                 onOpen={open}
                 onToggle={toggle}
               />
