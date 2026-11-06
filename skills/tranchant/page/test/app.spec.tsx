@@ -229,6 +229,17 @@ test('a decision on the finding shown opens the next open one in list order', as
   expect(screen.queryByText('All findings settled')).toBeNull()
 })
 
+test('opening an issue stays on the finding, to watch it open', async () => {
+  const server = await renderApp()
+  expect(selectedOption()).toBe('f-02')
+  fireEvent.click(screen.getByRole('button', { name: 'Open an issue' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open the issue' }))
+  await waitFor(() => expect(decisionsOf(server.posts.at(-1))[0]?.action).toBe('issue'))
+  // Long enough for a jump to the next finding to have happened.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(selectedOption()).toBe('f-02')
+})
+
 test('the next open finding wraps to the start of the list', async () => {
   await renderApp()
   fireEvent.click(screen.getByText('Use the design tokens'))

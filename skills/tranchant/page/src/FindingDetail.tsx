@@ -179,8 +179,10 @@ export function FindingDetail({
   // Undefined: shown when the finding has a thread; the Discuss button opens or folds it.
   const [folded, setFolded] = useState<boolean>()
 
+  // The tool is opening it: nothing else is offered until it lands or fails.
+  const opening = state === 'queued' && record?.decision?.action === 'issue'
   const can = (move: Parameters<typeof allows>[0]) =>
-    !disabled && allows(move, state, review)
+    !disabled && !opening && allows(move, state, review)
   const theirs = review.ownership === 'theirs'
   // Ours with an MR: fixing comes first, posting is the secondary choice.
   const oursWithMr = !theirs && !!review.mr?.diffRefs
@@ -377,19 +379,26 @@ export function FindingDetail({
       </section>
 
       <section className="tr-section tr-decide" aria-label="Actions">
-        {can('stop') && (
-          <div className="tr-actions">
-            <span className="tr-muted">
-              {state === 'queued' ? 'Waiting for an agent…' : 'An agent is on it…'}
-            </span>
-            <button
-              type="button"
-              className="tr-btn tr-btn--danger"
-              onClick={() => onStop(finding.id)}
-            >
-              Stop
-            </button>
-          </div>
+        {opening ? (
+          <p className="tr-outcome tr-pending" role="status">
+            <span className="tr-spinner" aria-hidden="true" />
+            Opening the issue{tracker?.kind ? ` on ${tracker.web}` : ''}…
+          </p>
+        ) : (
+          can('stop') && (
+            <div className="tr-actions">
+              <span className="tr-muted">
+                {state === 'queued' ? 'Waiting for an agent…' : 'An agent is on it…'}
+              </span>
+              <button
+                type="button"
+                className="tr-btn tr-btn--danger"
+                onClick={() => onStop(finding.id)}
+              >
+                Stop
+              </button>
+            </div>
+          )
         )}
         {mode === 'dropping' ? (
           <form

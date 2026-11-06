@@ -420,6 +420,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-diagram figcaption { margin-top: 4px; font-size: 12.5px; color: var(--tr-muted); }
 
 .tr-outcome { padding: 8px 10px; background: var(--tr-bg-2); border-radius: var(--tr-radius); }
+.tr-pending { display: flex; align-items: center; gap: 8px; }
 .tr-changed { margin: 4px 0 0; padding-left: 20px; }
 .tr-warn { color: var(--tr-warn); }
 .tr-fix-changes { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
@@ -428,6 +429,8 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-context { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .tr-inline-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .tr-inline-form--column { flex-direction: column; align-items: stretch; }
+/* In a column, flex: 1 would size the input's height from nothing: it keeps a button's. */
+.tr-inline-form--column .tr-input { flex: none; }
 .tr-input { flex: 1; min-width: 240px; height: 30px; padding: 0 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
 .tr-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); resize: vertical; }
 .tr-input:focus, .tr-textarea:focus { outline: none; border-color: var(--tr-accent); }

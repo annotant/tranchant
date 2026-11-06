@@ -658,3 +658,20 @@ test('an issue that failed opens again as the reviewer wrote it', () => {
   expect(screen.getByLabelText<HTMLInputElement>('Issue title').value).toBe('My words')
   expect(screen.getByLabelText<HTMLTextAreaElement>('Issue body').value).toBe('My body')
 })
+
+test('while its issue opens, the finding shows a spinner and offers nothing else', () => {
+  renderDetail({
+    state: 'queued',
+    fields: {
+      decision: { action: 'issue', at: 'now' },
+      issue: { title: 'T', body: 'B' },
+    },
+    tracker: github,
+  })
+  expect(screen.getByRole('status').textContent).toBe(
+    'Opening the issue on https://github.com/acme/app…',
+  )
+  expect(document.querySelector('.tr-pending .tr-spinner')).not.toBeNull()
+  for (const name of ['Stop', 'Drop', 'Skip', 'Fix now', 'Open an issue'])
+    expect(button(name)).toBeNull()
+})
