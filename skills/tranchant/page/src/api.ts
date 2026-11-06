@@ -6,6 +6,7 @@ const EVENTS = '/api/events'
 const DECISIONS = '/api/decisions'
 const ANSWER = '/api/answer'
 const STOP = '/api/stop'
+const DISCUSS = '/api/discuss'
 const RUNS = '/api/runs/'
 const DIFF = '/api/diff'
 const CHANGES = '/api/changes/'
@@ -82,6 +83,9 @@ export const postAnswer = (id: string, text: string, choices?: string[]) =>
     method: 'POST',
     body: JSON.stringify(choices?.length ? { id, text, choices } : { id, text }),
   })
+
+export const postDiscuss = (id: string, text: string) =>
+  request<unknown>(DISCUSS, { method: 'POST', body: JSON.stringify({ id, text }) })
 
 export const postStop = (id: string) =>
   request<unknown>(STOP, { method: 'POST', body: JSON.stringify({ id }) })

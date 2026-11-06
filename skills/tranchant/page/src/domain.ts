@@ -210,6 +210,33 @@ export interface ReviewAgent {
   steps: Step[]
 }
 
+/** What the agent proposes the reviewer carries over to a decision. */
+interface Proposal {
+  /** The fix's context. */
+  fix?: string
+  /** The comment to post. */
+  comment?: string
+  /** The reason to drop. */
+  drop?: string
+}
+
+export interface Message {
+  by: 'reviewer' | 'agent'
+  /** Markdown, from the agent. */
+  text: string
+  at: string
+  proposal?: Proposal
+  /** The agent ended, was stopped or never started before it answered. */
+  failed?: true
+}
+
+/** A finding's discussion with an agent, as `/api/review` sends it. */
+export interface Discussion {
+  messages: Message[]
+  /** While the agent answers: its last step. */
+  step?: Step
+}
+
 /** What `GET /api/review` answers. */
 export interface ReviewPayload {
   review: Review
@@ -218,6 +245,8 @@ export interface ReviewPayload {
   runs: Record<string, Step[]>
   /** The review's agents, in the order they started; absent from older servers. */
   reviewers?: ReviewAgent[]
+  /** By finding id; absent from older servers. */
+  discussions?: Record<string, Discussion>
   head: { reviewed: string; current: string | null }
 }
 
@@ -365,6 +394,16 @@ const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
 const UNDECIDED: readonly State[] = ['open', 'queued', 'asking', 'failed', 'stopped']
 const DROP_FROM = new Set<State>([...UNDECIDED, 'skipped'])
 const SKIP_FROM = new Set<State>([...UNDECIDED, 'dropped'])
+
+// As lib/discussion.mjs: nothing settled, and no agent on the finding.
+const DISCUSS_IN = new Set<State>(['open', 'skipped', 'failed', 'stopped'])
+
+/** Whether the reviewer may write in the finding's discussion: else it reads as it stands. */
+export const discussable = (state: State) => DISCUSS_IN.has(state)
+
+/** The reviewer's last message waits for the agent's answer. */
+export const isWaiting = (discussion: Discussion | undefined) =>
+  discussion?.messages.at(-1)?.by === 'reviewer'
 
 /** Whether a post may leave `state`, the review aside. */
 export const postsFrom = (state: State) => POST_FROM.has(state)

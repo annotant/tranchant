@@ -12,7 +12,7 @@ import {
   stateOf,
 } from './domain'
 import { CodeBlock, digitsOf, NO_MARKS } from './Excerpt'
-import { CommentMark } from './FindingList'
+import { CommentMark, DiscussionMark } from './FindingList'
 import { languageOfFile } from './syntax'
 
 const markerId = (id: string) => `tr-marker-${id}`
@@ -80,6 +80,8 @@ interface MarkerProps {
   checked: boolean
   unverified: boolean
   commented: boolean
+  /** The messages of its discussion; none, 0. */
+  discussed: number
   /** Why the finding sits on the header rather than on its line. */
   note?: string | undefined
   onOpen: (id: string) => void
@@ -95,6 +97,7 @@ function Marker({
   checked,
   unverified,
   commented,
+  discussed,
   note,
   onOpen,
   onToggle,
@@ -125,6 +128,7 @@ function Marker({
         {unverified && <span className="tr-chip">unverified</span>}
         <span className="tr-marker-title">{finding.title}</span>
         {commented && <CommentMark />}
+        {discussed > 0 && <DiscussionMark count={discussed} />}
         {note && <span className="tr-marker-note">{note}</span>}
       </button>
     </div>
@@ -143,6 +147,8 @@ interface MarkerState {
   unverified?: ReadonlySet<string> | undefined
   /** The findings with a comment ready to post: marked. */
   commented?: ReadonlySet<string> | undefined
+  /** By finding, the messages of its discussion: marked with their count. */
+  discussed?: ReadonlyMap<string, number> | undefined
   onOpen: (id: string) => void
   onToggle: (id: string) => void
 }
@@ -161,6 +167,7 @@ function Markers({
   selected,
   unverified,
   commented,
+  discussed,
   ...shared
 }: MarkersProps) {
   return (
@@ -175,6 +182,7 @@ function Markers({
           checked={selected.has(finding.id)}
           unverified={unverified?.has(finding.id) ?? false}
           commented={commented?.has(finding.id) ?? false}
+          discussed={discussed?.get(finding.id) ?? 0}
           note={note?.(finding)}
         />
       ))}

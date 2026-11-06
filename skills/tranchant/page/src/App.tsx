@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type DiffState,
   postAnswer,
+  postDiscuss,
   postDecisions,
   postStop,
   useDiff,
@@ -228,6 +229,16 @@ export default function App() {
     () => (review ? unverifiedIds(review) : new Set<string>()),
     [review],
   )
+  const discussed = useMemo(
+    () =>
+      new Map(
+        Object.entries(payload?.discussions ?? {}).map(([id, one]) => [
+          id,
+          one.messages.length,
+        ]),
+      ),
+    [payload?.discussions],
+  )
   const commented = useMemo(
     () => (review ? commentedIds(review) : new Set<string>()),
     [review],
@@ -310,6 +321,24 @@ export default function App() {
         setNotice(failure instanceof Error ? failure.message : 'The answer was not sent.')
       }
       await reload()
+    },
+    [reload],
+  )
+
+  const discuss = useCallback(
+    async (id: string, text: string) => {
+      let sent = false
+      try {
+        await postDiscuss(id, text)
+        sent = true
+        setNotice(undefined)
+      } catch (failure) {
+        setNotice(
+          failure instanceof Error ? failure.message : 'The message was not sent.',
+        )
+      }
+      await reload()
+      return sent
     },
     [reload],
   )
@@ -445,6 +474,7 @@ export default function App() {
       finding={current}
       record={records[current.id]}
       steps={payload?.runs[current.id] ?? []}
+      discussion={payload?.discussions?.[current.id]}
       unverified={unverified.has(current.id)}
       disabled={disabled}
       onDecide={(decisions) => {
@@ -454,6 +484,7 @@ export default function App() {
       }}
       onAnswer={(id, text, choices) => void answer(id, text, choices)}
       onStop={(id) => void stop(id)}
+      onDiscuss={discuss}
     />
   ) : (
     <p className="tr-muted">
@@ -567,6 +598,7 @@ export default function App() {
                   selected={selected}
                   unverified={unverified}
                   commented={commented}
+                  discussed={discussed}
                   onOpen={open}
                   onToggle={toggle}
                 />
@@ -594,6 +626,7 @@ export default function App() {
                 selected={selected}
                 unverified={unverified}
                 commented={commented}
+                discussed={discussed}
                 onOpen={open}
                 onToggle={toggle}
               />

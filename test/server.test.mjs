@@ -17,6 +17,7 @@ import {
 } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
+import { say } from '../skills/tranchant/scripts/lib/discussion.mjs'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
 import { buildPlayground } from './fixtures/playground.mjs'
 import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
@@ -249,6 +250,7 @@ test('serves the chunks the page loads on demand, by name only', async () => {
 test('answers the review, its decisions, its runs and the heads', async () => {
   const body = await json(await fetch(`${main.base}/api/review`))
   assert.deepEqual(Object.keys(body).toSorted(), [
+    'discussions',
     'findings',
     'head',
     'review',
@@ -256,6 +258,7 @@ test('answers the review, its decisions, its runs and the heads', async () => {
     'runs',
   ])
   assert.deepEqual(body.reviewers, [])
+  assert.deepEqual(body.discussions, {})
   assert.equal(body.review.id, main.review.id)
   assert.equal(body.review.findings.length, 5)
   assert.deepEqual(body.findings, {})
@@ -1105,6 +1108,117 @@ test('a verified review prints LANDED once per finding, and serves its review ag
   } finally {
     events.close()
   }
+})
+
+const REPLY = path.join(SCRIPTS, 'reply.mjs')
+
+test('a question on a finding prints DISCUSS; the agent answers through reply.mjs', async (t) => {
+  const server = await startServer(t, {
+    overrides: { id: 'c1d2e3f4-5a6b-4c7d-8e9f-0a1b2c3d4e5f' },
+  })
+  /** @param {unknown} body */
+  const discuss = (body) =>
+    fetch(`${server.base}/api/discuss`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const reviewNow = async () => json(await fetch(`${server.base}/api/review`))
+  /** @param {string[]} args @param {string} [input] */
+  const reply = (args, input) =>
+    run(process.execPath, [REPLY, ...args, '--review', server.dir], { input })
+
+  const printed = server.output().length
+  const asked = await discuss({ id: 'f-01', text: ' Is it reachable? ' })
+  assert.equal(asked.status, 200)
+  assert.equal(await server.nextLine('DISCUSS f-01', printed), 'DISCUSS f-01')
+  const again = await discuss({ id: 'f-01', text: 'And?' })
+  assert.equal(again.status, 409)
+  assert.deepEqual(await json(again), {
+    error: 'the agent is still answering the last message',
+  })
+  assert.equal((await discuss({ id: 'f-01', text: ' ' })).status, 409)
+  assert.equal((await discuss({ id: 'f-99', text: 'x' })).status, 409)
+
+  // Its agent's steps are the discussion's progress, never a review agent's.
+  const agents = path.join(server.dir, 'reviewers')
+  await mkdir(agents, { recursive: true })
+  const step = { at: 1, kind: 'read', label: 'src/people/usePeople.ts', state: 'done' }
+  await writeFile(path.join(agents, 'ds-f-01.jsonl'), `${JSON.stringify(step)}\n`)
+  await writeFile(path.join(agents, 'rv-bugs.jsonl'), `${JSON.stringify(step)}\n`)
+  let payload = await reviewNow()
+  assert.deepEqual(
+    payload.reviewers.map((/** @type {any} */ one) => one.name),
+    ['rv-bugs'],
+  )
+  assert.equal(payload.discussions['f-01'].step.label, 'src/people/usePeople.ts')
+  assert.equal(payload.discussions['f-01'].messages[0].text, 'Is it reachable?')
+
+  const answer = { text: 'It is: `tenantId` is undefined on mount.', drop: 7 }
+  const unsound = await reply(['f-01'], JSON.stringify(answer))
+  assert.equal(unsound.code, 2)
+  assert.equal(unsound.stdout, 'REPLY_REFUSED drop must be a text\n')
+  assert.equal((await reply(['f-01'], 'not json')).code, 2)
+  const replied = await reply(
+    ['f-01'],
+    JSON.stringify({ ...answer, drop: undefined, fix: 'Return early.' }),
+  )
+  assert.equal(replied.stdout, 'REPLIED f-01\n', replied.stderr)
+  const late = await reply(['f-01'], JSON.stringify({ text: 'Again.' }))
+  assert.equal(
+    late.stdout,
+    'REPLY_REFUSED no question on finding f-01 waits for an answer\n',
+  )
+  payload = await reviewNow()
+  const [, said] = payload.discussions['f-01'].messages
+  assert.equal(said.by, 'agent')
+  assert.deepEqual(said.proposal, { fix: 'Return early.' })
+  assert.equal(payload.discussions['f-01'].step, undefined)
+  // Not a decision: the finding is open still.
+  assert.equal(payload.findings['f-01'], undefined)
+
+  // The page hears of an answer as it lands.
+  const events = await listen(server.base)
+  try {
+    assert.equal((await discuss({ id: 'f-01', text: 'Then?' })).status, 200)
+    await events.changed('f-01')
+    await reply(['f-01'], JSON.stringify({ text: 'Then this.' }))
+    await events.changed('f-01')
+  } finally {
+    events.close()
+  }
+
+  // A file this Tranchant cannot read is refused, never written over.
+  const file = path.join(server.dir, 'discussions', 'f-03.json')
+  await writeFile(file, '{"version":2,"messages":[]}')
+  const newer = await discuss({ id: 'f-03', text: 'x' })
+  assert.equal(newer.status, 409)
+  assert.match((await json(newer)).error, /not a discussion this Tranchant reads/)
+  assert.equal(await readFile(file, 'utf8'), '{"version":2,"messages":[]}')
+
+  // A finding an agent works on, or settled, is not discussed.
+  await createStore(server.dir).decide('f-01', { action: 'fix' })
+  const queued = await discuss({ id: 'f-01', text: 'Still?' })
+  assert.equal(queued.status, 409)
+  assert.deepEqual(await json(queued), {
+    error: 'finding f-01 is queued: no discussion now',
+  })
+})
+
+test('a question left waiting is asked again at start; an agent that ended answers it as failed', async (t) => {
+  const imported = await importReview(t, 'theirs', stateDir, {
+    id: 'd2e3f4a5-6b7c-4d8e-9f0a-1b2c3d4e5f6a',
+  })
+  await say(imported.dir, 'f-02', 'Why not Intl?')
+  const server = await startServer(t, { dir: imported.dir })
+  assert.equal(await server.nextLine('DISCUSS f-02', 0), 'DISCUSS f-02')
+  const args = [REPLY, 'f-02', '--review', imported.dir, '--ended']
+  assert.equal((await run(process.execPath, args)).stdout, 'UNANSWERED f-02\n')
+  assert.equal((await run(process.execPath, args)).stdout, '')
+  const payload = await json(await fetch(`${server.base}/api/review`))
+  const last = payload.discussions['f-02'].messages.at(-1)
+  assert.equal(last.failed, true)
+  assert.equal(last.by, 'agent')
 })
 
 test('starts again on what was queued: FIX for a fix, a post for a post', async (t) => {

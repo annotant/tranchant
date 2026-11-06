@@ -924,3 +924,46 @@ test('the header has the button that switches the theme', async () => {
     within(header!).getByRole('button', { name: /^Switch to (dark|light) theme$/ }),
   ).toBeTruthy()
 })
+
+test('a message in a discussion goes to /api/discuss; a refusal shows and keeps it', async () => {
+  const server = await renderApp(payload({}))
+  expect(selectedOption()).toBe('f-02')
+  fireEvent.click(screen.getByRole('button', { name: 'Discuss' }))
+  const box = screen.getByRole('textbox', { name: 'Your message to the agent' })
+  // Refused: the server's words show, and the message stays to send again.
+  server.refuseDiscuss('finding f-02 is queued: no discussion now')
+  fireEvent.change(box, { target: { value: 'Is it reachable?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() =>
+    expect(screen.getByRole('status').textContent).toContain(
+      'finding f-02 is queued: no discussion now',
+    ),
+  )
+  expect(box).toHaveProperty('value', 'Is it reachable?')
+  server.refuseDiscuss(undefined)
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() => expect(box).toHaveProperty('value', ''))
+  expect(server.posts.map((one) => one.body)).toEqual([
+    { id: 'f-02', text: 'Is it reachable?' },
+    { id: 'f-02', text: 'Is it reachable?' },
+  ])
+})
+
+test('a finding with a discussion is marked with its count, in the list and in the diff', async () => {
+  const discussions = {
+    'f-02': {
+      messages: [
+        { by: 'reviewer' as const, text: 'Why?', at: '2026-11-06T10:00:00Z' },
+        { by: 'agent' as const, text: 'Because.', at: '2026-11-06T10:01:00Z' },
+      ],
+    },
+  }
+  await renderApp({ ...payload(), discussions })
+  const listed = screen.getByRole('img', { name: '2 messages in its discussion' })
+  expect(listed.textContent).toBe('2')
+  cleanup()
+  await renderDiffApp({ ...payload(), discussions })
+  expect(
+    screen.getAllByRole('img', { name: '2 messages in its discussion' }),
+  ).not.toHaveLength(0)
+})

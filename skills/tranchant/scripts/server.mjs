@@ -4,7 +4,8 @@
 // line per decision the plugin's hooks act on: FIX, STOP, DROPPED, SKIPPED,
 // and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
 // time); LANDED for each finding a verifier must check, while a review whose
-// findings are verified (`verify`) runs. It watches the review folder, its
+// findings are verified (`verify`) runs; DISCUSS for each question the
+// reviewer asks about a finding. It watches the review folder, its
 // findings, its run files and its review agents' (reviewers/), and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
@@ -21,6 +22,7 @@ import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, statusOf } from './lib/format.mjs'
+import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
 import {
   StoreRefusal,
   WRITE_KINDS,
@@ -74,6 +76,9 @@ const { project } = review
 const runsDir = path.join(dir, 'runs')
 const findingsDir = path.join(dir, 'findings')
 const agentsDir = path.join(dir, 'reviewers')
+const discussionsDir = path.join(dir, 'discussions')
+/** A discussing agent's name: its steps are the discussion's, not a review agent's. */
+const DISCUSSER = /^ds-/
 
 /** The server's own origins, once it listens: the page's requests carry one of them. */
 const origins = new Set()
@@ -685,17 +690,31 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
     // Read anew: findings land and the status flips while the review runs.
-    const [{ review: latest, decisions }, runs, reviewers, current] = await Promise.all([
-      store.readAll(),
-      store.runs(),
-      readReviewAgents(dir),
-      currentHead(),
-    ])
+    const [{ review: latest, decisions }, runs, agents, discussions, current] =
+      await Promise.all([
+        store.readAll(),
+        store.runs(),
+        readReviewAgents(dir),
+        readDiscussions(dir),
+        currentHead(),
+      ])
     return send(res, 200, {
       review: latest,
       findings: decisions.findings,
       runs,
-      reviewers,
+      reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
+      discussions: Object.fromEntries(
+        Object.entries(discussions).map(([id, discussion]) => {
+          // While it answers: its agent's last step, the page's progress line.
+          const steps = isWaiting(discussion)
+            ? agents.find((agent) => agent.name === `ds-${id}`)?.steps
+            : undefined
+          // The file holds every agent the thread had: an end is a past one's.
+          const last = steps?.at(-1)
+          const step = last && last.kind !== 'end' ? last : undefined
+          return [id, { ...discussion, ...(step && { step }) }]
+        }),
+      ),
       head: { reviewed: latest.headSha, current },
     })
   }
@@ -779,6 +798,16 @@ async function handle(req, res) {
     const entry = await store.answer(input.id, { text: text(input.text), choices })
     print(`FIX ${input.id}`)
     return send(res, 200, { finding: entry })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/discuss') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id)) {
+      return send(res, 400, { error: 'id is required' })
+    }
+    const discussion = await say(dir, input.id, text(input.text) ?? '')
+    print(`DISCUSS ${input.id}`)
+    return send(res, 200, { discussion })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
@@ -906,6 +935,15 @@ async function changes() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
     next.set(id, `${next.get(id) ?? ''}\n${JSON.stringify(entry)}`)
+  }
+  for (const name of await readdir(discussionsDir).catch(() => [])) {
+    const id = /^([\w-]{1,64})\.json$/.exec(name)?.[1]
+    if (!id) continue
+    const size = await stat(path.join(discussionsDir, name)).then(
+      (file) => `${file.size} ${file.mtimeMs}`,
+      () => '',
+    )
+    next.set(id, `${next.get(id) ?? ''}\ndiscussion ${size}`)
   }
   const files = await readdir(runsDir).catch(() => [])
   for (const name of files) {
@@ -1053,6 +1091,7 @@ function watchFolders() {
     [runsDir, changeSeen],
     [findingsDir, changeSeen],
     [agentsDir, changeSeen],
+    [discussionsDir, changeSeen],
     [path.dirname(PAGE), pageChanged],
   ]
   for (const [folder, onChange] of folders) {
@@ -1120,14 +1159,22 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 
 /**
  * What waited while no server ran: the hooks start an agent on each queued
- * fix again (they skip the ones they handed over already), and the server
- * posts each queued post.
+ * fix again (they skip the ones they handed over already) and on each
+ * question left unanswered, and the server posts each queued post.
  */
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
     if (entry.state !== 'queued') continue
     decided(id, entry.decision?.action === 'post' ? 'post' : 'fix')
+  }
+  const discussions = await readDiscussions(dir).catch((error) => {
+    // The questions left waiting stay so until the server starts again: said.
+    console.error(`tranchant server: discussions unreadable: ${oneLine(String(error))}`)
+    return {}
+  })
+  for (const [id, discussion] of Object.entries(discussions)) {
+    if (isWaiting(discussion)) print(`DISCUSS ${id}`)
   }
 }
 
@@ -1140,6 +1187,7 @@ server.listen(port, '127.0.0.1', async () => {
   await mkdir(runsDir, { recursive: true })
   await mkdir(findingsDir, { recursive: true })
   await mkdir(agentsDir, { recursive: true })
+  await mkdir(discussionsDir, { recursive: true })
   await refreshNext(true)
   console.log(
     `READY http://127.0.0.1:${listening} review=${review.id} project=${project}`,

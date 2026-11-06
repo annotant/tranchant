@@ -1,7 +1,14 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import App from '../src/App'
-import type { FindingRecord, Ownership, Review, State } from '../src/domain'
+import type { Discussion, FindingRecord, Ownership, Review, State } from '../src/domain'
 import { FindingDetail } from '../src/FindingDetail'
 import {
   fakeServer,
@@ -22,7 +29,12 @@ function renderDetail({
   disabled = false,
   finding = bug,
   reviewFields = {},
+  discussion,
+  sent = true,
 }: {
+  discussion?: Discussion
+  /** What the server answers a message. */
+  sent?: boolean
   ownership?: Ownership
   state?: State
   fields?: Partial<FindingRecord>
@@ -33,6 +45,7 @@ function renderDetail({
   const onDecide = vi.fn()
   const onAnswer = vi.fn()
   const onStop = vi.fn()
+  const onDiscuss = vi.fn(async () => sent)
   render(
     <FindingDetail
       review={review(ownership, reviewFields)}
@@ -47,9 +60,11 @@ function renderDetail({
       onDecide={onDecide}
       onAnswer={onAnswer}
       onStop={onStop}
+      discussion={discussion}
+      onDiscuss={onDiscuss}
     />,
   )
-  return { onDecide, onAnswer, onStop }
+  return { onDecide, onAnswer, onStop, onDiscuss }
 }
 
 const button = (name: string | RegExp) => screen.queryByRole('button', { name })
@@ -206,6 +221,7 @@ test('posted shows the discussion link; failed and dropped their reason', () => 
       onDecide={vi.fn()}
       onAnswer={vi.fn()}
       onStop={vi.fn()}
+      onDiscuss={vi.fn()}
     />,
   )
   expect(
@@ -409,3 +425,152 @@ test.each(Object.keys(FAMILIES).filter(isState))(
     expect(chip?.textContent).toBe(label)
   },
 )
+
+const asked = (text: string, at = '2026-11-06T10:00:00Z') =>
+  ({ by: 'reviewer', text, at }) as const
+const answered = (
+  text: string,
+  proposal?: Discussion['messages'][number]['proposal'],
+): Discussion['messages'][number] => ({
+  by: 'agent',
+  text,
+  at: '2026-11-06T10:01:00Z',
+  ...(proposal && { proposal }),
+})
+const box = () => screen.getByRole('textbox', { name: 'Your message to the agent' })
+const thread = () => screen.queryByRole('region', { name: 'Discussion' })
+
+test('Discuss opens the thread: a suggestion fills the box, Enter sends it', async () => {
+  const { onDiscuss, onDecide } = renderDetail()
+  expect(thread()).toBeNull()
+  const discuss = button('Discuss')!
+  expect(discuss.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(discuss)
+  expect(discuss.getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByText('Not sure about this finding?')).toBeDefined()
+  expect(button('Send')).toHaveProperty('disabled', true)
+  fireEvent.click(button('Is this really reachable?')!)
+  expect(box()).toHaveProperty('value', 'Is this really reachable?')
+  // Shift+Enter breaks the line; Enter sends.
+  fireEvent.keyDown(box(), { key: 'Enter', shiftKey: true })
+  expect(onDiscuss).not.toHaveBeenCalled()
+  fireEvent.keyDown(box(), { key: 'Enter' })
+  expect(onDiscuss).toHaveBeenCalledWith('f-01', 'Is this really reachable?')
+  expect(onDecide).not.toHaveBeenCalled()
+  await waitFor(() => expect(box()).toHaveProperty('value', ''))
+  // Discuss again folds the thread.
+  fireEvent.click(discuss)
+  expect(thread()).toBeNull()
+})
+
+test('a message the server refused stays in the box', async () => {
+  renderDetail({ sent: false })
+  fireEvent.click(button('Discuss')!)
+  fireEvent.change(box(), { target: { value: 'Is it reachable?' } })
+  fireEvent.click(button('Send')!)
+  await waitFor(() => expect(button('Send')).toHaveProperty('disabled', false))
+  expect(box()).toHaveProperty('value', 'Is it reachable?')
+})
+
+test('the thread shows by itself; while the agent answers, its step shows and the box waits', () => {
+  renderDetail({
+    discussion: {
+      messages: [asked('Is it reachable?')],
+      step: { at: 1, kind: 'read', label: 'src/people/usePeople.ts', state: 'running' },
+    },
+  })
+  expect(thread()).not.toBeNull()
+  expect(screen.getByText('Is it reachable?').className).toContain('tr-bubble--you')
+  expect(screen.getByRole('status').textContent).toBe('Reading src/people/usePeople.ts')
+  expect(box()).toHaveProperty('disabled', true)
+  expect(box().getAttribute('placeholder')).toBe('The agent is answering…')
+})
+
+test("the agent's proposals carry over to a decision; the comment is edited in place", () => {
+  const discussion: Discussion = {
+    messages: [
+      asked('Is it reachable?'),
+      answered('Yes: **on mount**.', {
+        fix: 'Guard in the hook.',
+        comment: 'This crashes on mount.',
+        drop: 'Not reachable.',
+      }),
+    ],
+  }
+  const { onDecide } = renderDetail({ discussion, ownership: 'theirs' })
+  expect(screen.getByText('on mount').tagName).toBe('STRONG')
+  fireEvent.click(button('Fix with this')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'fix', context: 'Guard in the hook.' },
+  ])
+  fireEvent.click(button('Drop with this reason')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'drop', reason: 'Not reachable.' },
+  ])
+  fireEvent.click(button('Post this')!)
+  const editor = within(thread()!).getByRole('textbox', { name: 'Comment to post' })
+  expect(editor).toHaveProperty('value', 'This crashes on mount.')
+  fireEvent.change(editor, { target: { value: 'This crashes on first mount.' } })
+  fireEvent.click(within(thread()!).getByRole('button', { name: 'Post' }))
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'post', comment: 'This crashes on first mount.' },
+  ])
+  fireEvent.click(within(thread()!).getByRole('button', { name: 'Cancel' }))
+  expect(button('Post this')).not.toBeNull()
+})
+
+test('a settled finding shows its thread read-only, and what was taken from it', () => {
+  renderDetail({
+    state: 'dropped',
+    fields: { reason: 'Not reachable.' },
+    discussion: {
+      messages: [
+        asked('Is it reachable?'),
+        answered('No.', { fix: 'Guard.', drop: 'Not reachable.' }),
+      ],
+    },
+  })
+  expect(thread()).not.toBeNull()
+  expect(button('Fix with this')).toBeNull()
+  expect(screen.queryByRole('textbox', { name: 'Your message to the agent' })).toBeNull()
+  expect(screen.getByText("You dropped it with the agent's reason")).toBeDefined()
+  expect(
+    screen.getByText('The finding is settled: the thread reads as it stands.'),
+  ).toBeDefined()
+})
+
+test('a finding an agent works on keeps its thread read-only, for that reason', () => {
+  renderDetail({
+    state: 'queued',
+    fields: { decision: { action: 'fix', context: 'Guard.', at: 'now' } },
+    discussion: {
+      messages: [asked('Is it reachable?'), answered('Yes.', { fix: 'Guard.' })],
+    },
+  })
+  expect(
+    screen.getByText('An agent is on the finding: the thread reads as it stands.'),
+  ).toBeDefined()
+  expect(screen.getByText("You sent it to fix with the agent's proposal")).toBeDefined()
+})
+
+test('an agent that ended without answering says so; Ask again sends the question again', () => {
+  const { onDiscuss } = renderDetail({
+    discussion: {
+      messages: [
+        asked('Why?'),
+        {
+          by: 'agent',
+          text: 'The agent ended without answering: ask again.',
+          at: '2026-11-06T10:01:00Z',
+          failed: true,
+        },
+      ],
+    },
+  })
+  expect(
+    screen.getByText(/ended without answering/).closest('.tr-unanswered'),
+  ).not.toBeNull()
+  fireEvent.click(button('Ask again')!)
+  expect(onDiscuss).toHaveBeenCalledWith('f-01', 'Why?')
+  expect(box()).toBeDefined()
+})

@@ -7,6 +7,20 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Discuss a finding.** When you doubt a finding or its fix, **Discuss**
+  opens a thread under it, laid out as annotant's: your messages on the
+  right, the agent's on the left, its current step live while it reads.
+  Ask a question, or pick a suggested one, and an agent answers with the
+  finding and the repository as context. It reads the code and never
+  changes it, and the finding's state stays as it is. When its answer
+  proposes another fix, a comment to post or a reason to drop, **Fix with
+  this**, **Post this** (edited in place first) or **Drop with this reason**
+  turns it into a decision in one click. The thread is kept with the
+  review, survives a reload, shows its count on the finding in the diff and
+  the list, and reads as it stands once the finding is settled.
+
 ## 0.2.0 - 2026-11-06
 
 ### Added

@@ -91,8 +91,24 @@ function world(
     // A lens's prompt is its reviewer's whole instructions, its frontmatter left out.
     ['/lenses/bugs.md', '---\nname: bugs\n---\n\nYou review one lens: bugs.\n'],
     ['/lenses/style.md', 'Look at the style.\n'],
+    // A finding the reviewer discusses, and the question they asked.
+    [`${DIR}/findings/f-01.json`, JSON.stringify({ id: 'f-01', title: 'Null tenantId' })],
+    [
+      `${DIR}/discussions/f-01.json`,
+      JSON.stringify({
+        version: 1,
+        messages: [{ by: 'reviewer', text: 'Is it reachable?', at: 'now' }],
+      }),
+    ],
   ])
   if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
+  for (const id of ['f-02', 'f-03', 'f-04']) {
+    files.set(`${DIR}/findings/${id}.json`, JSON.stringify({ id }))
+    files.set(
+      `${DIR}/discussions/${id}.json`,
+      files.get(`${DIR}/discussions/f-01.json`) ?? '',
+    )
+  }
   // What the hooks did, in order: the import, the server, the page, the agents.
   const order: string[] = []
   on('fs.read', (_$, e) => {
@@ -101,6 +117,8 @@ function world(
       return { value: '---\nname: worker\n---\n\nYou apply one finding.\n' }
     if (e.path.endsWith('/agents/review/verifier.md'))
       return { value: '---\nname: verifier\n---\n\nYou verify one finding.\n' }
+    if (e.path.endsWith('/agents/discuss.md'))
+      return { value: '---\nname: discuss\n---\n\nYou answer one question.\n' }
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
@@ -142,7 +160,12 @@ function world(
   const notes: { argv: string[]; stdin: string }[] = []
   const prepared: { argv: string[]; cwd?: string }[] = []
   const completed: string[][] = []
+  const replies: string[][] = []
   on('process.run', (_$, e) => {
+    if (e.argv[1]?.endsWith('/scripts/reply.mjs')) {
+      replies.push(e.argv.slice(2))
+      return ok(`UNANSWERED ${e.argv[2] ?? ''}\n`)
+    }
     if (e.argv[1]?.endsWith('/scripts/prepare.mjs')) {
       prepared.push({ argv: e.argv.slice(2), cwd: e.init?.cwd })
       return ok(preparing)
@@ -302,6 +325,8 @@ function world(
     order,
     prepared,
     completed,
+    replies,
+    files,
   }
 }
 
@@ -1070,6 +1095,111 @@ test('a complete.mjs that fails is said, with the command that does it', async (
   await w.clock.settle()
   expect(w.toasts.at(-1)).toMatch(
     /^Tranchant could not mark Classification overview complete: COMPLETE_REFUSED the review is complete already\. node .+\/complete\.mjs --review /,
+  )
+  await w.exit(0)
+})
+
+test('a question starts its discussing agent, read-only; one that ends unanswered is answered as failed', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('DISCUSS f-01')
+  expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:ds-f-01-rev-1'])
+  const prompt = w.spawned[0]?.prompt ?? ''
+  expect(prompt).toMatch(
+    new RegExp(
+      `^f-01\nREVIEW=${DIR}\nSKILL=.+\nPROJECT=${ROOT}\nBASE=main\nHEAD=${HEAD}\n`,
+    ),
+  )
+  // The finding and the reviewer's words come fenced, after the paths.
+  const fence = marker(prompt)
+  expect(fence).toBeDefined()
+  expect(prompt).toContain(`${fence}       "text": "Is it reachable?",`)
+  expect(prompt).toContain(`${fence}     "title": "Null tenantId"`)
+  const spec = w.registered.get('tranchant:ds-f-01-rev-1')
+  expect(spec?.prompt).toBe('You answer one question.\n')
+  expect(spec?.tools).toEqual(['Read', 'Bash', 'Grep', 'Glob'])
+  expect(spec?.hooks?.PreToolUse).toEqual([
+    {
+      matcher: 'Bash',
+      hooks: [
+        {
+          type: 'command',
+          command: expect.stringMatching(/'--reviewer' 'ds-f-01'/),
+        },
+      ],
+    },
+  ])
+  expect(w.notes[0]?.stdin).toMatch(/"kind":"start","label":"Discussing f-01"/)
+  for (const agent of ['tranchant:ds-f-01-rev-1', 'tranchant:discuss'])
+    expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
+  await $.turn.complete(turnEnded('a1', 'REPLIED'))
+  await w.clock.settle()
+  expect(w.replies).toEqual([['f-01', '--review', DIR, '--ended']])
+  // Asked again: a new agent, which rereads the discussion.
+  await w.print('DISCUSS f-01')
+  expect(w.spawned).toHaveLength(2)
+  // Stopped: its question gets a failed answer too, and nothing completes.
+  await $.command.run(command('stop'))
+  expect(w.replies).toHaveLength(2)
+  expect(w.completed).toEqual([])
+})
+
+test('a question asked again while its agent ends its turn gets a new agent, not a failure', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('DISCUSS f-01')
+  // The agent answered; the reviewer asks again before its turn completes.
+  await w.print('DISCUSS f-01')
+  expect(w.spawned).toHaveLength(1)
+  await $.turn.complete(turnEnded('a1', 'REPLIED'))
+  await w.clock.settle()
+  expect(w.replies).toEqual([])
+  expect(w.spawned.map((one) => one.type)).toEqual([
+    'tranchant:ds-f-01-rev-1',
+    'tranchant:ds-f-01-rev-1',
+  ])
+  // Said again with no question waiting (a server started anew): no new agent.
+  await w.print('DISCUSS f-01')
+  w.files.set(
+    `${DIR}/discussions/f-01.json`,
+    JSON.stringify({ version: 1, messages: [{ by: 'agent', text: 'Yes.', at: 'now' }] }),
+  )
+  await $.turn.complete(turnEnded('a2', 'REPLIED'))
+  await w.clock.settle()
+  expect(w.spawned).toHaveLength(2)
+  expect(w.replies).toEqual([['f-01', '--review', DIR, '--ended']])
+  await w.exit(0)
+})
+
+test('questions wait behind three review agents; stop answers the waiting ones as failed', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('DISCUSS f-01', 'DISCUSS f-02', 'DISCUSS f-03', 'DISCUSS f-04')
+  expect(w.spawned).toHaveLength(3)
+  await $.turn.complete(turnEnded('a1', 'REPLIED'))
+  await w.clock.settle()
+  // A place freed: the waiting question starts, once.
+  expect(w.spawned.map((one) => one.type).at(-1)).toBe('tranchant:ds-f-04-rev-1')
+  expect(w.spawned).toHaveLength(4)
+  await w.print('DISCUSS f-01', 'DISCUSS f-02')
+  await $.command.run(command('stop'))
+  // f-01's question, asked again, waited: failed with the three agents stopped.
+  expect(w.replies.map((one) => one[0]).toSorted()).toEqual([
+    'f-01',
+    'f-01',
+    'f-02',
+    'f-03',
+    'f-04',
+  ])
+})
+
+test('a discussing agent that cannot start answers its question as failed', async ($, on) => {
+  const w = world(on, { spawnRefused: 'no agents today' })
+  await open($, w)
+  await w.print('DISCUSS f-01')
+  expect(w.replies).toEqual([['f-01', '--review', DIR, '--ended']])
+  expect(w.toasts.at(-1)).toMatch(
+    /could not start the discusser ds-f-01: no agents today/,
   )
   await w.exit(0)
 })
