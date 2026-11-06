@@ -226,8 +226,8 @@ Moves the store accepts:
 A `fixed` or `posted` finding is final: no move leaves it (the reviewer
 reverts by hand, or asks for a follow-up in a new review).
 
-The page's one-shot buttons (Fix all safe to auto-fix, Post all) act on the
-`open` findings (To do on the page) only, in list order; a selection may apply any move the table
+The page's one-shot button (Post all to do) acts on the `open` findings (To do
+on the page) only, in list order; a selection may apply any move the table
 allows. At start, the server prints `FIX <id>` again for every `queued` fix
 and runs the queued posts again; a `working` finding is left to its agent.
 

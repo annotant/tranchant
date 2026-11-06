@@ -221,6 +221,29 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
   background: var(--tr-bg-3); color: var(--tr-muted); font-size: 11px; text-align: center;
 }
 .tr-btn--primary .tr-count { background: rgba(255,255,255,0.25); color: inherit; }
+.tr-batch-end { margin-left: auto; }
+.tr-master {
+  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0;
+  border: 1.5px solid var(--tr-muted); border-radius: 4px; background: var(--tr-bg); color: var(--tr-on-accent); cursor: pointer;
+}
+.tr-master svg { fill: none; stroke: currentColor; stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+.tr-master[aria-checked="true"], .tr-master[aria-checked="mixed"] { background: var(--tr-accent); border-color: var(--tr-accent); }
+.tr-master:disabled, .tr-pick:disabled { cursor: default; opacity: 0.45; }
+.tr-master:focus-visible, .tr-pick:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: 2px; }
+.tr-selection { min-width: 24ch; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tr-picks { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.tr-pick {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--tr-border);
+  border-radius: 999px; background: var(--tr-bg); color: var(--tr-text); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.tr-pick:hover:not(:disabled) { border-color: var(--tr-accent); }
+.tr-pick[aria-pressed="true"] { background: var(--tr-accent-weak); border-color: var(--tr-accent); color: var(--tr-accent); }
+.tr-pick-count {
+  min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--tr-bg-3); color: var(--tr-muted);
+  font-size: 11px; text-align: center;
+}
+.tr-pick[aria-pressed="true"] .tr-pick-count { background: var(--tr-bg); color: var(--tr-accent); }
+.tr-clear { font-size: 13px; }
 .tr-confirm {
   display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px;
   background: var(--tr-warn-bg); color: var(--tr-warn); border-radius: var(--tr-radius);
