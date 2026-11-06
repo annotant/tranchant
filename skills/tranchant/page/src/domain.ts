@@ -118,13 +118,14 @@ export type State =
   | 'asking'
   | 'fixed'
   | 'posted'
+  | 'moved'
   | 'dropped'
   | 'skipped'
   | 'failed'
   | 'stopped'
 
 /** What the reviewer asks of a finding, as `POST /api/decisions` takes it. */
-export type Action = 'fix' | 'post' | 'drop' | 'skip'
+export type Action = 'fix' | 'post' | 'issue' | 'drop' | 'skip'
 
 export interface DecisionInput {
   id: string
@@ -135,6 +136,9 @@ export interface DecisionInput {
   comment?: string
   /** `drop`: why. */
   reason?: string
+  /** `issue`: the issue as the reviewer wrote it. */
+  title?: string
+  body?: string
 }
 
 export interface DecisionsResult {
@@ -184,6 +188,8 @@ export interface FindingRecord {
   /** `dropped`: the reviewer's words; `failed`: the error. */
   reason?: string
   posted?: { discussionId: string; url: string; at: string }
+  /** `issue`: its title and body; `url` and `ref` (`#12`) once created. */
+  issue?: { title: string; body: string; url?: string; ref?: string; at?: string }
   runs: Run[]
   events: Event[]
   cancellation?: { at: string; changed: string[]; steps: number; run?: string }
@@ -272,6 +278,7 @@ const GROUP_OF: Record<State, Group> = {
   failed: 'needsYou',
   fixed: 'done',
   posted: 'done',
+  moved: 'done',
   dropped: 'setAside',
   skipped: 'setAside',
   stopped: 'setAside',
@@ -308,9 +315,10 @@ export const STATE_DETAILS: Record<State, string> = {
   queued: 'Waiting for its agent to start',
   working: 'An agent is fixing it',
   asking: 'The agent asks you a question',
-  failed: 'The fix did not land',
+  failed: 'The fix, the post or the issue did not land',
   fixed: 'Fixed on the working tree',
   posted: 'Posted on the merge request',
+  moved: 'Moved to an issue, to settle later',
   dropped: 'You chose not to act on it',
   skipped: 'Skipped for now',
   stopped: 'You stopped its agent: it may have left changes',
@@ -388,8 +396,88 @@ export const commentedIds = (review: PostScope & Pick<Review, 'findings'>) =>
       : [],
   )
 
+/** What `GET /api/tracker` answers: where the project's issues go, or why nowhere. */
+export type Tracker =
+  | {
+      kind: 'github' | 'gitlab'
+      /** The project's page on its host. */
+      web: string
+      /** The project's folder within its repository, `/`-terminated, or ''. */
+      prefix: string
+    }
+  | { kind: null; reason: string }
+
+/**
+ * The anchor's file on the tracker: at the commit reviewed when it is the
+ * MR's head (so on the remote), else on the branch; undefined with no tracker.
+ */
+export function anchorUrl(
+  finding: Pick<Finding, 'path' | 'line'>,
+  review: PostScope & Pick<Review, 'branch'>,
+  tracker: Tracker | undefined,
+): string | undefined {
+  if (!tracker?.kind) return undefined
+  const ref = canPost(review) ? review.headSha : review.branch
+  const file = `${tracker.prefix}${finding.path}`
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')
+  const blob = tracker.kind === 'gitlab' ? '-/blob' : 'blob'
+  return `${tracker.web}/${blob}/${encodeURIComponent(ref).replaceAll('%2F', '/')}/${file}#L${finding.line}`
+}
+
+/** A fence longer than any run of backticks in `lines`, so none closes it. */
+const fenceFor = (lines: readonly string[]) => {
+  const longest = Math.max(
+    0,
+    ...lines.flatMap((line) => line.match(/`+/g) ?? []).map((run) => run.length),
+  )
+  return '`'.repeat(Math.max(3, longest + 1))
+}
+
+type Issuable = Pick<
+  Finding,
+  'id' | 'title' | 'path' | 'line' | 'problem' | 'why' | 'fix' | 'excerpt'
+>
+
+/** The issue the page prefills for a finding: its title, and its problem, why, fix, anchor and excerpt. */
+export function draftIssue(
+  finding: Issuable,
+  review: PostScope & Pick<Review, 'branch'>,
+  tracker: Tracker | undefined,
+): { title: string; body: string } {
+  const anchor = `${finding.path}:${finding.line}`
+  const url = anchorUrl(finding, review, tracker)
+  const fence = fenceFor(finding.excerpt.lines)
+  const language = /\.([A-Za-z0-9]+)$/.exec(finding.path)?.[1] ?? ''
+  const source = review.mr
+    ? `[${review.mr.url}](${review.mr.url})`
+    : `the branch \`${review.branch}\``
+  const body = [
+    finding.problem,
+    `**Why.** ${finding.why}`,
+    `**Fix.** ${finding.fix}`,
+    url ? `[\`${anchor}\`](${url})` : `\`${anchor}\``,
+    [`${fence}${language}`, ...finding.excerpt.lines, fence].join('\n'),
+    `_Found reviewing ${source}; left for later._`,
+  ].join('\n\n')
+  return { title: finding.title, body }
+}
+
+/** An issue as a batch sends it: drafted, the reviewer editing none. */
+export const issueInput = (
+  finding: Issuable,
+  review: PostScope & Pick<Review, 'branch'>,
+  tracker: Tracker | undefined,
+): DecisionInput => ({
+  id: finding.id,
+  action: 'issue',
+  ...draftIssue(finding, review, tracker),
+})
+
 const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stopped'])
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
+const ISSUE_FROM = POST_FROM
 // Nothing has landed in these states: a reviewer may still drop or skip.
 const UNDECIDED: readonly State[] = ['open', 'queued', 'asking', 'failed', 'stopped']
 const DROP_FROM = new Set<State>([...UNDECIDED, 'skipped'])
@@ -413,10 +501,11 @@ export type Move = Action | 'stop' | 'answer'
 
 type Rule = (state: State, review: PostScope) => boolean
 
-/** The store's moves table: a `fixed` or `posted` finding is final. */
+/** The store's moves table: a `fixed`, `posted` or `moved` finding is final. */
 const MOVES: Record<Move, Rule> = {
   fix: (state) => FIX_FROM.has(state),
   post: (state, review) => canPost(review) && POST_FROM.has(state),
+  issue: (state) => ISSUE_FROM.has(state),
   drop: (state) => DROP_FROM.has(state),
   skip: (state) => SKIP_FROM.has(state),
   stop: (state) => state === 'queued' || state === 'working',

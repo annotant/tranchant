@@ -7,6 +7,7 @@ import {
   postStop,
   useDiff,
   useReview,
+  useTracker,
 } from './api'
 import { BatchBar } from './BatchBar'
 import { parseDiff, placeFindings, type Section } from './diff'
@@ -213,6 +214,7 @@ function ViewToggle({
 
 export default function App() {
   const { payload, reachable, loaded, reload } = useReview()
+  const tracker = useTracker()
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [cursorState, setCursor] = useState<string>()
   const [openState, setOpenId] = useState<string>()
@@ -477,6 +479,7 @@ export default function App() {
       discussion={payload?.discussions?.[current.id]}
       unverified={unverified.has(current.id)}
       disabled={disabled}
+      tracker={tracker}
       onDecide={(decisions) => {
         const [one] = decisions
         if (decisions.length === 1 && one) void decideShown(one)
@@ -553,6 +556,7 @@ export default function App() {
         ordered={ordered}
         selected={selected}
         disabled={disabled}
+        tracker={tracker}
         onSelect={(ids) => setSelected(new Set(ids))}
         onDecide={decide}
       />

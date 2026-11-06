@@ -6,54 +6,18 @@
 // error. Prints `posted <url>` or `failed <reason>`. The server runs it on
 // each post decision, one at a time; never an agent.
 // TRANCHANT_GLAB names another glab executable (the tests' fake one).
-import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { findReview, positional } from './lib/project.mjs'
+import { firstLine, runWithInput } from './lib/command.mjs'
 import { oneLine } from './lib/format.mjs'
 import { StoreRefusal, createStore } from './lib/store.mjs'
 
 const MAX_REASON = 300
-// Built, not written: a control character in a regex literal fails the linter.
-const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
 
 /** @param {string} reason */
 function failed(reason) {
   console.log(`failed ${oneLine(reason)}`)
   process.exit(1)
-}
-
-/** glab's first line of error, without its colours. */
-const firstLine = (/** @type {string} */ output) =>
-  output
-    .replaceAll(ANSI, '')
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line !== '' && !line.startsWith('[glab] Update available')) ?? ''
-
-/**
- * Runs glab with `body` on stdin.
- * @param {string} glab
- * @param {string[]} args
- * @param {string} body
- * @param {string | undefined} cwd
- * @returns {Promise<{ code: number | null, stdout: string, stderr: string }>}
- */
-function runGlab(glab, args, body, cwd) {
-  return new Promise((resolve) => {
-    const child = spawn(glab, args, {
-      cwd,
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk) => (stdout += chunk))
-    child.stderr.on('data', (chunk) => (stderr += chunk))
-    child.on('error', (error) => resolve({ code: null, stdout, stderr: String(error) }))
-    child.on('close', (code) => resolve({ code, stdout, stderr }))
-    child.stdin.on('error', () => undefined)
-    child.stdin.end(body)
-  })
 }
 
 const [id] = positional()
@@ -114,7 +78,7 @@ const args = [
 ]
 // From the project: glab takes the GitLab host from the checkout's remote.
 const cwd = existsSync(review.project) ? review.project : undefined
-const ran = await runGlab(process.env.TRANCHANT_GLAB || 'glab', args, request, cwd)
+const ran = await runWithInput(process.env.TRANCHANT_GLAB || 'glab', args, request, cwd)
 if (ran.code !== 0) {
   await give(
     firstLine(ran.stderr) || firstLine(ran.stdout) || `glab exited with ${ran.code}`,

@@ -1,7 +1,8 @@
 # Tranchant
 
 A Claude Code plugin: a page shows a code review's findings, the user settles
-each one (fix on the working tree, post on the MR, drop, skip), and one
+each one (fix on the working tree, post on the MR, move to an issue, drop,
+skip), and one
 background agent per fix makes the change. See the [README](README.md) and
 [docs/review-file.md](docs/review-file.md), the contract every part follows.
 
@@ -15,7 +16,8 @@ pattern, read how annotant does it.
 - `hooks/register.ts`: the plugin's hooks, a Claude Code mod (2.1.287 or
   later) declared in `hooks/hooks.json`. `/tranchant` (or the skill, through
   `mcp__tranchant__open`) runs the server and starts one agent per fix, with
-  no model turn, and runs `post.mjs` per post. Claude Code runs none of a
+  no model turn; the server runs `post.mjs` per post and `issue.mjs` per
+  issue. Claude Code runs none of a
   mod's hooks for an agent the plugin starts: each fix's agent is registered
   as a type of its own (`tranchant:tr-<id>`) whose settings hooks run
   `skills/tranchant/scripts/hook.mjs` (file locks, steps) around its tools.

@@ -20,6 +20,7 @@ import {
   contentOf,
   currentRun,
   nextRunId,
+  oneLine,
   parseDecisions,
   postBlocker,
   problemsText,
@@ -46,6 +47,9 @@ export const MAX_OPTIONS = 6
 const PROGRESS_SHOWN = 50
 const MAX_SUMMARY = 2000
 const MAX_TEXT = 4000
+/** An issue's title and body: GitLab caps a title at 255 characters, GitHub a body at 65,536. */
+export const MAX_ISSUE_TITLE = 255
+export const MAX_ISSUE_BODY = 60_000
 /** A model id is short (`claude-opus-5-5`): the hooks' value, kept bounded. */
 const MAX_MODEL = 100
 export const WRITE_KINDS = new Set(['edit', 'write', 'multiedit'])
@@ -605,14 +609,15 @@ export function createStore(dir) {
 
     /**
      * The reviewer's decision on a finding: a fix (with the `context` the
-     * agent follows), a post (with the `comment` as they edited it), a drop
-     * (with their `reason`) or a skip. A post needs the MR's `diffRefs` at
-     * the commit reviewed, whatever the ownership; a question is answered with `answer`, not decided again.
+     * agent follows), a post (with the `comment` as they edited it), an issue
+     * (with its `title` and `body`), a drop (with their `reason`) or a skip. A
+     * post needs the MR's `diffRefs` at the commit reviewed, whatever the
+     * ownership; a question is answered with `answer`, not decided again.
      * @param {string} id
-     * @param {{ action: 'fix' | 'post' | 'drop' | 'skip', context?: string, comment?: string, reason?: string }} decision
+     * @param {{ action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, reason?: string, title?: string, body?: string }} decision
      * @returns {Promise<Entry>}
      */
-    decide(id, { action, context, comment, reason }) {
+    decide(id, { action, context, comment, reason, title, body }) {
       return changeOne(id, (entry, finding, known) => {
         if (action === 'post') {
           const blocker = postBlocker(known)
@@ -620,6 +625,9 @@ export function createStore(dir) {
           if (!comment?.trim() && !finding.comment) {
             throw new StoreRefusal(`post refused: finding ${id} has no comment`)
           }
+        }
+        if (action === 'issue' && (!title?.trim() || !body?.trim())) {
+          throw new StoreRefusal(`issue refused: finding ${id} needs a title and a body`)
         }
         const at = apply(id, entry, action, { by: 'reviewer' })
         entry.decision = {
@@ -634,6 +642,12 @@ export function createStore(dir) {
           if (comment?.trim()) entry.comment = comment.trim().slice(0, MAX_TEXT)
           else delete entry.comment
         }
+        if (action === 'issue') {
+          entry.issue = {
+            title: oneLine(title?.trim() ?? '').slice(0, MAX_ISSUE_TITLE),
+            body: (body?.trim() ?? '').slice(0, MAX_ISSUE_BODY),
+          }
+        } else delete entry.issue
         if (action === 'drop' && reason?.trim())
           entry.reason = reason.trim().slice(0, MAX_TEXT)
         return entry
@@ -695,8 +709,11 @@ export function createStore(dir) {
     claim(id, { agent, model } = {}) {
       return changeOne(id, (entry, finding) => {
         const working = currentRun(entry)
-        if (entry.state === 'queued' && entry.decision?.action === 'post') {
-          throw new StoreRefusal(`claim refused: finding ${id} is queued for a post`)
+        const action = entry.decision?.action
+        if (entry.state === 'queued' && (action === 'post' || action === 'issue')) {
+          throw new StoreRefusal(
+            `claim refused: finding ${id} is queued for ${action === 'post' ? 'a post' : 'an issue'}`,
+          )
         }
         if (working && (!agent || !working.agent || working.agent === agent)) {
           return { entry, finding, run: working }
@@ -786,7 +803,24 @@ export function createStore(dir) {
     },
 
     /**
-     * The fix or the post failed: `reason` says why, and the run, if any, ends.
+     * The issue is created: the finding is settled there.
+     * @param {string} id
+     * @param {{ url: string, ref?: string }} where
+     * @returns {Promise<Entry>}
+     */
+    moved(id, { url, ref }) {
+      return changeOne(id, (entry) => {
+        const issue = entry.issue
+        if (!issue) throw new StoreRefusal(`moved refused: finding ${id} has no issue`)
+        const at = apply(id, entry, 'moved', { by: 'server' })
+        entry.issue = { ...issue, url, ...(ref ? { ref } : {}), at }
+        delete entry.reason
+        return entry
+      })
+    },
+
+    /**
+     * The fix, the post or the issue failed: `reason` says why, and the run, if any, ends.
      * @param {string} id
      * @param {string} reason
      * @param {{ by?: Actor }} [options]

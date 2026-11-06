@@ -401,3 +401,55 @@ test('a decisions file of another version is refused, and left untouched', async
   await assert.rejects(store.readAll(), StoreRefusal)
   assert.equal(await readFile(file, 'utf8'), '{"version":9,"findings":{}}')
 })
+
+test('an issue queues the finding with its title and body, then moves it once created', async (t) => {
+  const { store } = await setUp(t, 'ours')
+  await assert.rejects(
+    store.decide('f-01', { action: 'issue', title: 'T', body: ' ' }),
+    /issue refused: finding f-01 needs a title and a body/,
+  )
+  const queued = await store.decide('f-01', {
+    action: 'issue',
+    title: ' Later:\nthe crash ',
+    body: ' Problem\n\nFix ',
+  })
+  assert.equal(queued.state, 'queued')
+  assert.deepEqual(queued.issue, { title: 'Later: the crash', body: 'Problem\n\nFix' })
+  // An agent never takes a finding queued for an issue.
+  await assert.rejects(
+    store.claim('f-01'),
+    /claim refused: finding f-01 is queued for an issue/,
+  )
+  const moved = await store.moved('f-01', {
+    url: 'https://github.com/o/r/issues/3',
+    ref: '#3',
+  })
+  assert.equal(moved.state, 'moved')
+  assert.deepEqual(moved.issue, {
+    title: 'Later: the crash',
+    body: 'Problem\n\nFix',
+    url: 'https://github.com/o/r/issues/3',
+    ref: '#3',
+    at: moved.events.at(-1)?.at,
+  })
+  assert.equal(moved.events.at(-1)?.by, 'server')
+  // Settled: nothing moves it again.
+  for (const action of /** @type {const} */ (['fix', 'issue', 'drop', 'skip'])) {
+    await assert.rejects(
+      store.decide('f-01', { action, title: 'T', body: 'B' }),
+      /moved to an issue already/,
+    )
+  }
+})
+
+test('an issue that fails leaves the finding failed, with the reason, to try again', async (t) => {
+  const { store } = await setUp(t, 'theirs')
+  await store.decide('f-02', { action: 'issue', title: 'T', body: 'B' })
+  const failed = await store.fail('f-02', 'gh: HTTP 410: Issues are disabled')
+  assert.equal(failed.state, 'failed')
+  assert.equal(failed.reason, 'gh: HTTP 410: Issues are disabled')
+  const again = await store.decide('f-02', { action: 'issue', title: 'T2', body: 'B2' })
+  assert.equal(again.state, 'queued')
+  assert.equal(again.reason, undefined)
+  assert.deepEqual(again.issue, { title: 'T2', body: 'B2' })
+})

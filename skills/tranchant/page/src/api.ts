@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { DecisionInput, DecisionsResult, ReviewPayload, Step } from './domain'
+import type {
+  DecisionInput,
+  DecisionsResult,
+  ReviewPayload,
+  Step,
+  Tracker,
+} from './domain'
 
 const REVIEW = '/api/review'
 const EVENTS = '/api/events'
@@ -11,6 +17,7 @@ const RUNS = '/api/runs/'
 const DIFF = '/api/diff'
 const CHANGES = '/api/changes/'
 const ACCOUNT = '/api/account'
+const TRACKER = '/api/tracker'
 
 /** How often the page asks again once the server stopped answering. */
 export const RETRY_MS = 5000
@@ -151,6 +158,27 @@ export function useAccount(wanted: boolean) {
     }
   }, [wanted])
   return username
+}
+
+/** Where the project's issues go, asked once; undefined until known, or when the request fails. */
+export function useTracker() {
+  const [tracker, setTracker] = useState<Tracker>()
+  useEffect(() => {
+    let disposed = false
+    async function load() {
+      try {
+        const answer = await request<Tracker>(TRACKER)
+        if (!disposed) setTracker(answer)
+      } catch {
+        // The issue still opens, its anchor in plain text; issue.mjs reads the tracker itself.
+      }
+    }
+    void load()
+    return () => {
+      disposed = true
+    }
+  }, [])
+  return tracker
 }
 
 export const fetchRuns = async (id: string) =>

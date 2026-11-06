@@ -324,3 +324,37 @@ test('"Post all to do" only when something is left to post', async () => {
   )
   expect(screen.queryByRole('button', { name: /^Post all/ })).toBeNull()
 })
+
+test('Issue opens one issue per selected finding, drafted, after a confirmation even for one', async () => {
+  const server = await renderApp()
+  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${FINDINGS[0]!.title}` }))
+  fireEvent.click(button(/^Issue 1$/))
+  expect(server.posts).toEqual([])
+  const confirm = screen.getByRole('alertdialog')
+  expect(confirm.textContent).toContain('Open 1 issue on https://github.com/acme/app')
+  expect(
+    within(screen.getByRole('list', { name: 'Issues to open' })).getByText(
+      FINDINGS[0]!.title,
+    ),
+  ).toBeDefined()
+  fireEvent.click(button('Confirm'))
+  await waitFor(() => expect(server.posts).toHaveLength(1))
+  const [decision] = decisionsOf(server.posts[0])
+  expect(decision).toMatchObject({
+    id: 'f-01',
+    action: 'issue',
+    title: FINDINGS[0]!.title,
+  })
+  expect(decision?.body).toContain(FINDINGS[0]!.problem)
+  expect(decision?.body).toContain('https://github.com/acme/app/blob/')
+})
+
+test('with no tracker, Issue is off and says why', async () => {
+  const server = fakeServer(payload())
+  server.answerTracker({ kind: null, reason: 'the project has no origin remote' })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Findings' })
+  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${FINDINGS[0]!.title}` }))
+  await waitFor(() => expect(button(/^Issue 0$/)).toHaveProperty('disabled', true))
+  expect(button(/^Issue 0$/).getAttribute('title')).toContain('no origin remote')
+})

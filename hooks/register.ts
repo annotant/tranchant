@@ -609,7 +609,7 @@ async function onLine(
     case 'DISCUSS':
       return discussLater($, watched.dir, id)
     default:
-      // POSTED, POST_FAILED, AGENT_ENDED: the server's own doing.
+      // POSTED, POST_FAILED, MOVED, ISSUE_FAILED, AGENT_ENDED: the server's own doing.
       return debug($, `${tag(id)}: ${kind}`)
   }
 }

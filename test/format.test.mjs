@@ -291,6 +291,7 @@ test('reads decisions of its version, and refuses another untouched', () => {
 const MOVE_NAMES = [
   'fix',
   'post',
+  'issue',
   'drop',
   'skip',
   'answer',
@@ -299,6 +300,7 @@ const MOVE_NAMES = [
   'done',
   'ask',
   'posted',
+  'moved',
   'fail',
 ]
 
@@ -319,6 +321,10 @@ const ALLOWED = [
   ['post', 'dropped', 'queued'],
   ['post', 'skipped', 'queued'],
   ['post', 'failed', 'queued'],
+  ['issue', 'open', 'queued'],
+  ['issue', 'dropped', 'queued'],
+  ['issue', 'skipped', 'queued'],
+  ['issue', 'failed', 'queued'],
   ['answer', 'asking', 'queued'],
   ['stop', 'queued', 'stopped'],
   ['stop', 'working', 'stopped'],
@@ -326,6 +332,7 @@ const ALLOWED = [
   ['done', 'working', 'fixed'],
   ['ask', 'working', 'asking'],
   ['posted', 'queued', 'posted'],
+  ['moved', 'queued', 'moved'],
   ['fail', 'queued', 'failed'],
   ['fail', 'working', 'failed'],
   ...DROP_FROM.map(
@@ -357,6 +364,8 @@ test('allows every move of the table, and no other', () => {
   assert.equal(canMove('skip', 'posted'), false)
   assert.equal(canMove('fix', 'asking'), false)
   assert.equal(canMove('post', 'posted'), false)
+  assert.equal(canMove('issue', 'moved'), false)
+  assert.equal(canMove('fix', 'moved'), false)
   assert.equal(canMove('drop', 'working'), false)
   assert.equal(canMove('claim', 'open'), false)
 })
