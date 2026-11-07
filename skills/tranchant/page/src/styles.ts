@@ -236,6 +236,8 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-md h2, .tr-md h3, .tr-md h4 { font-size: 13px; margin-top: 8px; }
 .tr-md pre { padding: 8px 10px; background: var(--tr-bg-2); border: 1px solid var(--tr-border); border-radius: var(--tr-radius); overflow: auto; font-size: 12.5px; }
 .tr-md li { margin: 2px 0; }
+/* A chip cut by a line break keeps its padding and border on each line; a long name breaks rather than overflows. */
+.tr-md :not(pre) > code { padding: 0 0.3em; background: var(--tr-bg-3); border: 1px solid var(--tr-border); border-radius: 4px; overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 
 .tr-batch {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 8px 16px;
