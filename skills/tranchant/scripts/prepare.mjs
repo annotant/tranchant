@@ -368,7 +368,8 @@ const envelope = {
   verify: true,
   title: change.title,
   ...('mr' in change && { mr: change.mr }),
-  summary: `Reviewed by Tranchant, lens by lens: ${applied.map((lens) => lens.name).join(', ')}.`,
+  // Blank: the review agents' band already names the lenses, and the page hides the section.
+  summary: '',
   strengths: [],
   findings: [],
 }

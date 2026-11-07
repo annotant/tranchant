@@ -421,6 +421,21 @@ test('the summary renders the Markdown and the strengths, and remembers being cl
   expect(closed?.open).toBe(false)
 })
 
+test('an empty summary without strengths shows no Summary section', async () => {
+  await renderApp(payload({ review: { summary: '  ', strengths: [] } }))
+  expect(screen.queryByText('Summary')).toBeNull()
+})
+
+test('a summary alone, or a strength alone, shows the Summary section', async () => {
+  await renderApp(payload({ review: { strengths: [] } }))
+  expect(screen.getByRole('heading', { name: 'Change Map' })).toBeDefined()
+  expect(screen.queryByRole('heading', { name: 'What looks good' })).toBeNull()
+  cleanup()
+  await renderApp(payload({ review: { summary: '', strengths: ['Names are clear.'] } }))
+  expect(screen.getByText('Summary')).toBeDefined()
+  expect(screen.getByText('Names are clear.')).toBeDefined()
+})
+
 test('a changed event reloads the review; a run shows its steps', async () => {
   const events = fakeEvents()
   const server = await renderApp()

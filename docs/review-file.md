@@ -80,7 +80,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `ownership`   | `ours` or `theirs`        | Decides the default action: `ours`, fix first; `theirs`, post first. Either may post with `mr.diffRefs`. |
 | `status`      | `reviewing` or `complete` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`.  |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
-| `summary`     | string                    | Markdown, shown above the findings.                                                                 |
+| `summary`     | string                    | Markdown, shown above the findings. May be blank: with no `strengths` either, the page hides the section. |
 | `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
 | `findings`    | Finding[]                 | At least one, unless `status` is `reviewing`. Ids unique within the review.                         |
 

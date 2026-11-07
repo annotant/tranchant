@@ -471,6 +471,9 @@ export default function App() {
     />
   )
   const reviewing = isReviewing(review)
+  const strengths = review.strengths ?? []
+  // A section with nothing in it would only repeat the band above it.
+  const hasSummary = review.summary.trim() !== '' || strengths.length > 0
   const detail = current ? (
     <FindingDetail
       key={current.id}
@@ -528,30 +531,32 @@ export default function App() {
         project={review?.project ?? ''}
         onOpen={open}
       />
-      <details
-        className="tr-summary"
-        open={summaryOpen}
-        onToggle={(event) => {
-          const next = event.currentTarget.open
-          setSummaryOpen(next)
-          writeStored(SUMMARY_KEY, next ? 'open' : 'closed')
-        }}
-      >
-        <summary>Summary</summary>
-        <div className="tr-summary-body">
-          <Markdown source={review.summary} />
-          {review.strengths && review.strengths.length > 0 && (
-            <section aria-label="What looks good">
-              <h3>What looks good</h3>
-              <ul>
-                {review.strengths.map((strength) => (
-                  <li key={strength}>{strength}</li>
-                ))}
-              </ul>
-            </section>
-          )}
-        </div>
-      </details>
+      {hasSummary && (
+        <details
+          className="tr-summary"
+          open={summaryOpen}
+          onToggle={(event) => {
+            const next = event.currentTarget.open
+            setSummaryOpen(next)
+            writeStored(SUMMARY_KEY, next ? 'open' : 'closed')
+          }}
+        >
+          <summary>Summary</summary>
+          <div className="tr-summary-body">
+            {review.summary.trim() && <Markdown source={review.summary} />}
+            {strengths.length > 0 && (
+              <section aria-label="What looks good">
+                <h3>What looks good</h3>
+                <ul>
+                  {strengths.map((strength) => (
+                    <li key={strength}>{strength}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
+        </details>
+      )}
       <BatchBar
         review={review}
         records={records}
