@@ -9,6 +9,14 @@ released to the `stable` branch.
 
 ### Added
 
+- **Open an issue.** A finding that is real but not for this change (too
+  big, out of scope, someone else's code) moves to the project's own
+  tracker: GitHub with `gh`, GitLab with `glab`, whichever the checkout's
+  `origin` is on. The issue opens prefilled from the finding's title,
+  problem, why, fix, anchor (linked to the file) and excerpt, to edit
+  before it is created; the finding is then settled, **Moved to an issue**,
+  with the issue's link. **Issue** in the selection bar opens one per
+  finding. A failure leaves the finding to try again, and says why.
 - **Discuss a finding.** When you doubt a finding or its fix, **Discuss**
   opens a thread under it, laid out as annotant's: your messages on the
   right, the agent's on the left, its current step live while it reads.

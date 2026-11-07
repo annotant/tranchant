@@ -183,6 +183,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       "answer": { "text": "…", "choices": ["…"], "at": "…" },
       "reason": "…", // dropped: the reviewer's words; failed: the error
       "posted": { "discussionId": "…", "url": "…", "at": "…" },
+      "issue": { "title": "…", "body": "…", "url": "…", "ref": "#12", "at": "…" }, // an issue: url, ref, at once created
       "runs": [/* Run */],
       "events": [/* Event */],
       "cancellation": {
@@ -204,33 +205,36 @@ and `events` is optional.
 | State     | Meaning                                                                   | Moved by                            |
 | --------- | ------------------------------------------------------------------------- | ----------------------------------- |
 | `open`    | Nothing decided yet                                                       |                                     |
-| `queued`  | A fix or a post is decided; waiting for an agent or for glab              | reviewer (`fix`, `post`, an answer) |
+| `queued`  | A fix, a post or an issue is decided; waiting for an agent, glab or gh    | reviewer (`fix`, `post`, `issue`, an answer) |
 | `working` | An agent is on it                                                         | agent (`claim.mjs`)                 |
 | `asking`  | The agent asked the reviewer something; it stopped                        | agent (`ask.mjs`)                   |
 | `fixed`   | The working tree holds the fix                                            | agent (`done.mjs`)                  |
 | `posted`  | The comment is on the MR                                                  | server (`post.mjs`)                 |
+| `moved`   | Moved to an issue, to settle later; `issue.url` links it                  | server (`issue.mjs`)                |
 | `dropped` | The reviewer rejected the finding                                         | reviewer                            |
 | `skipped` | Deferred                                                                  | reviewer                            |
-| `failed`  | The fix or the post failed; `reason` says why                             | hooks, server                       |
+| `failed`  | The fix, the post or the issue failed; `reason` says why                  | hooks, server                       |
 | `stopped` | The reviewer stopped the agent; `cancellation` lists what it left changed | reviewer                            |
 
 Moves the store accepts:
 
 - `fix`: from `open`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. An `asking` finding leaves only through `answer`.
 - `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`.
-- `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed` or `posted`.
+- `issue`: from `open`, `dropped`, `skipped`, `failed` → `queued`, with `issue.title` and `issue.body` (the title cut to one line of 255 characters, the body to 60,000); refused when either is empty. Any ownership, with or without an MR.
+- `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed`, `posted` or `moved`.
+- `posted`, `moved`: the server's, from `queued` → `posted`, `moved`.
 - `answer`: from `asking` → `queued`, with `answer` set; the server prints `FIX <id>` again.
 - `stop`: from `queued`, `working` → `stopped`.
-- `claim`: from `queued` → `working`, starting a run; refused on a finding queued for a post.
+- `claim`: from `queued` → `working`, starting a run; refused on a finding queued for a post or an issue.
 - `done`: from `working` → `fixed`. `ask`: from `working` → `asking`. `hook.mjs ended` moves a `working` finding whose agent ended without either to `failed` (`reason`: `the agent ended without done.mjs or ask.mjs`).
 
-A `fixed` or `posted` finding is final: no move leaves it (the reviewer
-reverts by hand, or asks for a follow-up in a new review).
+A `fixed`, `posted` or `moved` finding is final: no move leaves it (the
+reviewer reverts by hand, or asks for a follow-up in a new review).
 
 The page's one-shot button (Post all to do) acts on the `open` findings (To do
 on the page) only, in list order; a selection may apply any move the table
 allows. At start, the server prints `FIX <id>` again for every `queued` fix
-and runs the queued posts again; a `working` finding is left to its agent.
+and runs the queued posts and issues again; a `working` finding is left to its agent.
 
 ### A run
 
@@ -385,7 +389,8 @@ fetched into its `.git` when the checkout lacks it.
 
 `server.mjs --review <dir>` serves the page and its API on a free port of
 127.0.0.1, prints one line per decision the hooks act on, and runs `post.mjs`
-itself on each `post` decision, one at a time. It watches the review folder,
+itself on each `post` decision and `issue.mjs` on each `issue` decision, one
+at a time. It watches the review folder,
 `findings/` and `runs/`, and tells the pages what changed. Only runs while a session
 watches (`/tranchant`): no server, no page. It refuses to start outside the
 plugin's hooks (`TRANCHANT_HOOKS` unset): without them a fix would run with no
@@ -399,6 +404,7 @@ locks and show no progress.
 | `FIX <id>`                                                 | The reviewer asked for a fix (or answered a question): the hooks start an agent. |
 | `STOP <id>`                                                | The reviewer stopped the finding's agent: the hooks end it.                      |
 | `POSTED <id>`, `POST_FAILED <id> <reason>`                 | The server ran `post.mjs` itself; informational.                                 |
+| `MOVED <id>`, `ISSUE_FAILED <id> <reason>`                 | The server ran `issue.mjs` itself; informational.                                |
 | `DROPPED <id>`, `SKIPPED <id>`                             | Informational.                                                                   |
 | `AGENT_ENDED <id>`                                         | `hook.mjs ended` found the finding still `working` and moved it to `failed`.     |
 | `LANDED <id>`                                              | A finding not verified yet is there, in a `verify` review still `reviewing`: the hooks start its verifier. Once per finding, after `READY`. |
@@ -416,9 +422,10 @@ locks and show no progress.
 | `GET /api/health`     | `{ ok: true, review: "<id>", version: "<plugin version>" }`.                                                                                                                                                                                                                                                                                                       |
 | `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head }`: the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
 | `GET /api/account`    | `{ username }`: the account `glab api user` names, run from `project` once and kept for the server's life; `null` when glab cannot say (no glab, not logged in, an error). The page names it in a post's confirmation, or says "your glab account". |
+| `GET /api/tracker`    | `{ kind, web, prefix }`: where the project's issues go, from its `origin` remote, as `issue.mjs` reads it (both name the same project): `kind` `github` for `github.com`, `*.ghe.com` and `github.<domain>` hosts, `gitlab` for a host that names gitlab or any host when the review has an `mr`; an SSH endpoint (`ssh.github.com`, `altssh.gitlab.com`) or an account alias (`github.com-work`) names the forge itself. `web` the project's page; `prefix` the project's folder in its repository (the page links an issue's anchor to `<web>/blob/<ref>/<prefix><path>#L<line>`, `/-/blob/` on GitLab, `<ref>` the commit reviewed when it is the MR's head, else the branch). `{ kind: null, reason }` when there is none (no `origin`, not a url, another forge, git failing); a failure is read again on the next request. |
 | `GET /api/diff`       | `{ base, head, files, diff }`: the change's unified diff, `git diff <base>...<headSha>` run in `project` (`baseSha..headSha` with `mr.diffRefs` at the review's `headSha`; on `theirs`, refs at another head are refused, on `ours` the branch's own range is used), its paths relative to `project` like the findings', and its files, each `{ path, oldPath?, additions, deletions, binary }`. Computed once; a failure is computed again on the next request. Answers 409 with the reason when git is missing, `project` is not a git repository, a commit is not there, `base` is not a revision, the diff is empty or past `TRANCHANT_MAX_DIFF_MIB` (32), or git fails; the server logs git's words on stderr, and the page shows its list view. |
 | `GET /api/events`     | Server-sent events: `changed` with `{ ids }` when a finding landed, was verified or removed, or its record or run changed (`ids` empty when the review's `status` or a review agent's file changed); `page` when the bundle was rebuilt.                                                                                                                                                                             |
-| `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "drop" \| "skip", "context"?, "comment"?, "reason"? } ] }`. Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
+| `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "issue" \| "drop" \| "skip", "context"?, "comment"?, "reason"?, "title"?, "body"? } ] }` (`title` and `body`: an issue's). Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
 | `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                     |
 | `POST /api/discuss`   | `{ "id", "text" }`: a question on finding `id`, refused (409) when `id` is not a finding of the review, its state allows no discussion, a question still waits, the text is empty, the discussion holds 60 messages, or its file is one this Tranchant cannot read; answers `{ discussion }` and prints `DISCUSS <id>`. |
 | `POST /api/stop`      | `{ "id" }`; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                                                                |
@@ -444,6 +451,7 @@ server's.
 | `done.mjs <id> "<summary>"`                                                                                                 | `working` → `fixed`, with the files the run changed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `ask.mjs <id> "<question>" [--option "<label>: <description>"]… [--multiple]`                                               | `working` → `asking`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `post.mjs <id>`                                                                                                             | Posts `comment` (the reviewer's edit when there is one) as a positioned discussion on the MR: `glab api --method POST --header 'Content-Type: application/json' --input -` with a JSON body (`position` of type `text`, the three `diffRefs` SHAs, `old_path` and `new_path` both set to `path`, `new_line`), run from `project` so glab picks the host from the remote; then `queued` → `posted` with `posted.url`, or `failed` with glab's first error line. Run by the server on a `post` decision, never by an agent.                                                                                                  |
+| `issue.mjs <id>`                                                                                                            | Opens the issue the reviewer wrote (`issue.title`, `issue.body`) on the project `/api/tracker` names, run from `project`: on GitHub `gh api --method POST --hostname <host> --header 'Content-Type: application/json' --input - repos/<owner>/<repo>/issues` with `{ title, body }`; on GitLab `glab api --method POST --hostname <host> … projects/<the remote's path, encoded>/issues` with `{ title, description }`. The tool has 60 seconds (`TRANCHANT_TOOL_TIMEOUT_MS`). Then `queued` → `moved` with `issue.url` and `issue.ref` (`#<number>`, `#<iid>`, absent when the answer has none), or `failed` with the tool's first error line; an answer without the issue's url fails saying where to check, since the issue may be open. Prints `moved <url>` or `failed <reason>`. Run by the server on an `issue` decision, never by an agent; a run that ends without a reason (a crash) is failed by the server, as a post is. |
 | `open.mjs <review.json> [--verify]`                                                                                         | Validates and imports a review: the envelope into `review.json`, each inline finding into `findings/<id>.json`; prints `REVIEW <dir>`. `verify` and `verified` are dropped; `--verify`, which `/tranchant review` passes, keeps `verify`. Review and finding ids match `[\w-]{1,64}`: they become folder names and words on protocol lines. An id already imported with the same envelope (`status`, `verify` and `findings` aside: a review grows) is reused, decisions kept, its inline findings not there yet added; with another envelope, or a finding of other content, it is refused (`REVIEW_REFUSED id <id> exists with other content`, `REVIEW_REFUSED finding <id> exists with other content`): the producer mints a new id. |
 | `add.mjs --review <dir> [--file <finding.json>]`                                                                            | Adds one finding, from the file or stdin, to a review still `reviewing`: checked as a review's are (id, anchor, `comment` when `theirs`), written to `findings/<id>.json` with `addedAt`; prints `ADDED <id>`. The same finding again is accepted silently; another one under the same id, an unsound one, or any once the review is complete prints `ADD_REFUSED <reason>` and exits 2.                                                                                                                                                                                                                                   |
 | `complete.mjs --review <dir>`                                                                                               | Sets `status` to `complete`; prints `COMPLETE`. On a review complete already, `COMPLETE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |

@@ -1258,3 +1258,199 @@ test('says who holds a busy port', async (t) => {
   )
   assert.equal(await busy.exit, 3)
 })
+
+/**
+ * A server on the `ours` fixture whose project is a repository with `remote`
+ * as its origin, and a fake `name` (gh or glab) that records its call and
+ * answers `answer`, or fails with `error`.
+ * @param {any} t
+ * @param {{ remote: string, tool: 'gh' | 'glab', answer?: string, error?: string, overrides?: Record<string, unknown> }} options
+ */
+async function issueServer(t, { remote, tool, answer = '', error, overrides }) {
+  const bin = await tempDir(t)
+  const fake = path.join(bin, tool)
+  await writeFile(
+    fake,
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$@" > "${bin}/args.txt"`,
+      `pwd -P > "${bin}/cwd.txt"`,
+      `cat > "${bin}/stdin.txt"`,
+      error ? `echo '${error}' >&2; exit 1` : `printf '%s' '${answer}'`,
+      '',
+    ].join('\n'),
+  )
+  await chmod(fake, 0o755)
+  const server = await startServer(t, {
+    name: 'ours',
+    overrides,
+    env: tool === 'gh' ? { TRANCHANT_GH: fake } : { TRANCHANT_GLAB: fake },
+  })
+  await run('git', ['-C', server.project, 'init', '-q'])
+  await run('git', ['-C', server.project, 'remote', 'add', 'origin', remote])
+  /** @param {unknown} body */
+  const send = (body) =>
+    fetch(`${server.base}/api/decisions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const read = async (/** @type {string} */ name) =>
+    readFile(path.join(bin, name), 'utf8')
+  return { server, send, read }
+}
+
+test('opens an issue on GitHub with gh itself, and moves the finding there', async (t) => {
+  const { server, send, read } = await issueServer(t, {
+    remote: 'git@github.com:acme/app.git',
+    tool: 'gh',
+    answer: '{"number":12,"html_url":"https://github.com/acme/app/issues/12"}',
+  })
+  const tracker = await json(await fetch(`${server.base}/api/tracker`))
+  assert.deepEqual(tracker, {
+    kind: 'github',
+    web: 'https://github.com/acme/app',
+    prefix: '',
+  })
+  const printed = server.output().length
+  const response = await send({
+    decisions: [{ id: 'f-01', action: 'issue', title: 'Later', body: 'Why and how' }],
+  })
+  assert.deepEqual((await json(response)).applied, ['f-01'])
+  assert.equal(await server.nextLine('MOVED f-01', printed), 'MOVED f-01')
+  const entry = (await json(await fetch(`${server.base}/api/review`))).findings['f-01']
+  assert.equal(entry.state, 'moved')
+  assert.equal(entry.issue.url, 'https://github.com/acme/app/issues/12')
+  assert.equal(entry.issue.ref, '#12')
+  assert.deepEqual((await read('args.txt')).trim().split('\n'), [
+    'api',
+    '--method',
+    'POST',
+    '--hostname',
+    'github.com',
+    '--header',
+    'Content-Type: application/json',
+    '--input',
+    '-',
+    'repos/acme/app/issues',
+  ])
+  assert.deepEqual(JSON.parse(await read('stdin.txt')), {
+    title: 'Later',
+    body: 'Why and how',
+  })
+  assert.equal((await read('cwd.txt')).trim(), await realpath(server.project))
+})
+
+test('opens an issue on GitLab with glab, on the origin’s project the page names', async (t) => {
+  const { server, send, read } = await issueServer(t, {
+    remote: 'git@gitlab.com:group/sub/project.git',
+    tool: 'glab',
+    answer: '{"iid":7,"web_url":"https://gitlab.com/group/sub/project/-/issues/7"}',
+    overrides: {
+      mr: { project: 'qohash/other', iid: 1, url: 'https://gitlab.com/x', author: 'a' },
+    },
+  })
+  const tracker = await json(await fetch(`${server.base}/api/tracker`))
+  assert.equal(tracker.web, 'https://gitlab.com/group/sub/project')
+  const printed = server.output().length
+  await send({ decisions: [{ id: 'f-02', action: 'issue', title: 'T', body: 'B' }] })
+  assert.equal(await server.nextLine('MOVED f-02', printed), 'MOVED f-02')
+  const args = (await read('args.txt')).trim().split('\n')
+  assert.deepEqual(args.slice(3, 5), ['--hostname', 'gitlab.com'])
+  assert.equal(args.at(-1), 'projects/group%2Fsub%2Fproject/issues')
+  assert.deepEqual(JSON.parse(await read('stdin.txt')), { title: 'T', description: 'B' })
+  const entry = (await json(await fetch(`${server.base}/api/review`))).findings['f-02']
+  assert.equal(entry.issue.ref, '#7')
+})
+
+test('an Enterprise GitHub host goes to gh with its hostname', async (t) => {
+  const { server, send, read } = await issueServer(t, {
+    remote: 'git@github.acme.io:acme/app.git',
+    tool: 'gh',
+    answer: '{"number":3,"html_url":"https://github.acme.io/acme/app/issues/3"}',
+  })
+  const printed = server.output().length
+  await send({ decisions: [{ id: 'f-01', action: 'issue', title: 'T', body: 'B' }] })
+  assert.equal(await server.nextLine('MOVED f-01', printed), 'MOVED f-01')
+  const args = (await read('args.txt')).trim().split('\n')
+  assert.deepEqual(args.slice(3, 5), ['--hostname', 'github.acme.io'])
+})
+
+test('a tool that succeeds without the issue’s url fails the finding, saying where to look', async (t) => {
+  const { server, send } = await issueServer(t, {
+    remote: 'git@github.com:acme/app.git',
+    tool: 'gh',
+    answer: '{}',
+  })
+  const printed = server.output().length
+  await send({ decisions: [{ id: 'f-01', action: 'issue', title: 'T', body: 'B' }] })
+  const line = await server.nextLine('ISSUE_FAILED f-01', printed)
+  assert.match(
+    line,
+    /without the issue's url: check https:\/\/github\.com\/acme\/app\/issues/,
+  )
+  const entry = (await json(await fetch(`${server.base}/api/review`))).findings['f-01']
+  assert.equal(entry.state, 'failed')
+})
+
+test('starts again on an issue left queued: it opens, and never goes to an agent', async (t) => {
+  const bin = await tempDir(t)
+  const fake = path.join(bin, 'gh')
+  await writeFile(
+    fake,
+    `#!/bin/sh\ncat > /dev/null\nprintf '%s' '{"number":5,"html_url":"https://github.com/acme/app/issues/5"}'\n`,
+  )
+  await chmod(fake, 0o755)
+  const imported = await importReview(t, 'ours', stateDir)
+  await run('git', ['-C', imported.project, 'init', '-q'])
+  await run('git', [
+    '-C',
+    imported.project,
+    'remote',
+    'add',
+    'origin',
+    'git@github.com:acme/app.git',
+  ])
+  await createStore(imported.dir).decide('f-01', {
+    action: 'issue',
+    title: 'T',
+    body: 'B',
+  })
+  const server = await startServer(t, { dir: imported.dir, env: { TRANCHANT_GH: fake } })
+  assert.equal(await server.nextLine('MOVED f-01', 0), 'MOVED f-01')
+  assert.doesNotMatch(server.output(), /^FIX f-01$/m)
+})
+
+test('an issue the tracker refuses fails the finding with its first line', async (t) => {
+  const { server, send } = await issueServer(t, {
+    remote: 'https://github.com/acme/app.git',
+    tool: 'gh',
+    error: 'HTTP 410: Issues are disabled for this repo',
+  })
+  const printed = server.output().length
+  await send({ decisions: [{ id: 'f-03', action: 'issue', title: 'T', body: 'B' }] })
+  assert.equal(
+    await server.nextLine('ISSUE_FAILED f-03', printed),
+    'ISSUE_FAILED f-03 HTTP 410: Issues are disabled for this repo',
+  )
+  const entry = (await json(await fetch(`${server.base}/api/review`))).findings['f-03']
+  assert.equal(entry.state, 'failed')
+  assert.equal(entry.reason, 'HTTP 410: Issues are disabled for this repo')
+})
+
+test('a project with no origin has no tracker, and its issues fail saying so', async (t) => {
+  const server = await startServer(t, { name: 'ours' })
+  await run('git', ['-C', server.project, 'init', '-q'])
+  const tracker = await json(await fetch(`${server.base}/api/tracker`))
+  assert.equal(tracker.kind, null)
+  assert.match(tracker.reason, /no origin remote/)
+  const printed = server.output().length
+  await fetch(`${server.base}/api/decisions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      decisions: [{ id: 'f-01', action: 'issue', title: 'T', body: 'B' }],
+    }),
+  })
+  assert.match(await server.nextLine('ISSUE_FAILED f-01', printed), /no origin remote/)
+})

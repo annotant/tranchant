@@ -2,8 +2,9 @@
 // server.mjs --review <dir>
 // Serves the page and its API on a free port of 127.0.0.1, and prints one
 // line per decision the plugin's hooks act on: FIX, STOP, DROPPED, SKIPPED,
-// and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
-// time); LANDED for each finding a verifier must check, while a review whose
+// POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
+// time), MOVED or ISSUE_FAILED for the issues it opens (issue.mjs, in the
+// same queue); LANDED for each finding a verifier must check, while a review whose
 // findings are verified (`verify`) runs; DISCUSS for each question the
 // reviewer asks about a finding. It watches the review folder, its
 // findings, its run files and its review agents' (reviewers/), and
@@ -23,7 +24,10 @@ import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, statusOf } from './lib/format.mjs'
 import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
+import { trackerOf } from './lib/tracker.mjs'
 import {
+  MAX_ISSUE_BODY,
+  MAX_ISSUE_TITLE,
   StoreRefusal,
   WRITE_KINDS,
   createStore,
@@ -69,6 +73,7 @@ if (!existsSync(PAGE)) {
 const CHUNKS = path.join(path.dirname(PAGE), 'chunks')
 const CHUNK = /^\/chunks\/([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\.js$/
 const POST = path.join(SKILL_DIR, 'scripts', 'post.mjs')
+const ISSUE = path.join(SKILL_DIR, 'scripts', 'issue.mjs')
 const port = Number(process.env.TRANCHANT_PORT ?? 0)
 // The re-read behind the folder watches, for the mounts whose writes they miss.
 const pollMs = Number(process.env.TRANCHANT_POLL_MS ?? 5000)
@@ -134,16 +139,16 @@ async function readJson(req) {
 const ID = /^[\w-]{1,64}$/
 const MAX_TEXT = 4000
 const MAX_DECISIONS = 500
-const ACTIONS = new Set(['fix', 'post', 'drop', 'skip'])
+const ACTIONS = new Set(['fix', 'post', 'issue', 'drop', 'skip'])
 
 /** @param {unknown} value */
-const text = (value) =>
-  typeof value === 'string' ? value.trim().slice(0, MAX_TEXT) : undefined
+const text = (value, max = MAX_TEXT) =>
+  typeof value === 'string' ? value.trim().slice(0, max) : undefined
 
 /**
  * One decision of a batch, as the page sends it; undefined when it is not one.
  * @param {any} input
- * @returns {{ id: string, action: 'fix' | 'post' | 'drop' | 'skip', context?: string, comment?: string, reason?: string } | undefined}
+ * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, reason?: string, title?: string, body?: string } | undefined}
  */
 function sanitiseDecision(input) {
   if (!input || typeof input !== 'object') return undefined
@@ -155,6 +160,8 @@ function sanitiseDecision(input) {
     context: text(input.context),
     comment: text(input.comment),
     reason: text(input.reason),
+    title: text(input.title, MAX_ISSUE_TITLE),
+    body: text(input.body, MAX_ISSUE_BODY),
   }
 }
 
@@ -231,6 +238,27 @@ function accountOnce() {
       return null
     })
   return account
+}
+
+/** @type {Promise<{ kind: string | null, web?: string, prefix?: string, reason?: string }> | undefined} */
+let tracker
+
+/**
+ * Where the project's issues go, from its origin remote, as issue.mjs reads
+ * it: the page names it and links an issue's anchor to the file on it.
+ * `kind` null, and why, when none; a failure is asked again next time.
+ */
+function trackerOnce() {
+  tracker ??= trackerOf(project, { gitlab: !!review.mr }).then(
+    ({ kind, web, prefix }) => ({ kind, web, prefix }),
+    (error) => {
+      const reason = String(error?.message ?? error)
+      console.error(`tranchant server: /api/tracker: ${oneLine(reason)}`)
+      tracker = undefined
+      return { kind: null, reason }
+    },
+  )
+  return tracker
 }
 
 /** The most MiB of diff the server reads from git and hands the page. */
@@ -723,6 +751,10 @@ async function handle(req, res) {
     return send(res, 200, { username: await accountOnce() })
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/tracker') {
+    return send(res, 200, await trackerOnce())
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/diff') {
     try {
       return send(res, 200, await diffOnce())
@@ -834,52 +866,98 @@ function print(line) {
 
 /**
  * What a decision just taken starts: the hooks start an agent on a FIX,
- * the server posts itself.
+ * the server posts or opens the issue itself.
  * @param {string} id
- * @param {'fix' | 'post' | 'drop' | 'skip'} action
+ * @param {'fix' | 'post' | 'issue' | 'drop' | 'skip'} action
  */
 function decided(id, action) {
   if (action === 'fix') print(`FIX ${id}`)
-  else if (action === 'post') enqueuePost(id)
+  else if (action === 'post') enqueue(POST_SCRIPT, id)
+  else if (action === 'issue') enqueue(ISSUE_SCRIPT, id)
   else print(`${action === 'drop' ? 'DROPPED' : 'SKIPPED'} ${id}`)
 }
 
-/** @type {Promise<void>} */
-let posting = Promise.resolve()
+/**
+ * A script the server runs on a decision, and the words it prints.
+ * @typedef {{ action: 'post' | 'issue', file: string, done: string, ok: string, failed: string }} Script
+ */
 
-/** Posts finding `id`'s comment after the posts under way: one at a time. */
-function enqueuePost(id) {
-  posting = posting.then(() => runPost(id)).catch(() => undefined)
+/** @type {Script} */
+const POST_SCRIPT = {
+  action: 'post',
+  file: POST,
+  done: 'posted ',
+  ok: 'POSTED',
+  failed: 'POST_FAILED',
+}
+/** @type {Script} */
+const ISSUE_SCRIPT = {
+  action: 'issue',
+  file: ISSUE,
+  done: 'moved ',
+  ok: 'MOVED',
+  failed: 'ISSUE_FAILED',
+}
+
+/** @type {Promise<void>} */
+let running = Promise.resolve()
+
+/** Runs `script` on finding `id` after the posts and issues under way: one at a time. */
+function enqueue(/** @type {Script} */ script, /** @type {string} */ id) {
+  running = running.then(() => runScript(script, id)).catch(() => undefined)
 }
 
 /**
- * Runs post.mjs on finding `id`, and prints POSTED or POST_FAILED from its
- * last line.
+ * Runs `script` on finding `id`, and prints its success or its failure from
+ * its last line.
+ * @param {Script} script
  * @param {string} id
  * @returns {Promise<void>}
  */
-function runPost(id) {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [POST, id, '--review', dir], {
-      env: process.env,
-      stdio: /** @type {const} */ (['ignore', 'pipe', 'inherit']),
-    })
-    let output = ''
-    child.stdout.on('data', (chunk) => (output += chunk))
-    child.on('error', (error) => {
-      print(`POST_FAILED ${id} ${String(error)}`)
-      resolve()
-    })
-    child.on('close', (code) => {
-      const last = output.trim().split('\n').at(-1) ?? ''
-      if (code === 0 && last.startsWith('posted ')) print(`POSTED ${id}`)
-      else
-        print(
-          `POST_FAILED ${id} ${last.replace(/^failed ?/, '') || `post.mjs exited with ${code}`}`,
-        )
-      resolve()
-    })
+async function runScript(script, id) {
+  const child = spawn(process.execPath, [script.file, id, '--review', dir], {
+    env: process.env,
+    stdio: /** @type {const} */ (['ignore', 'pipe', 'inherit']),
   })
+  let output = ''
+  child.stdout.on('data', (chunk) => (output += chunk))
+  // The first of the two settles it: a spawn that fails may still close, and says nothing twice.
+  /** @type {{ code: number | null } | { error: string }} */
+  const exit = await new Promise((resolve) => {
+    child.once('error', (error) => resolve({ error: String(error) }))
+    child.once('close', (code) => resolve({ code }))
+  })
+  const last = output.trim().split('\n').at(-1) ?? ''
+  if ('code' in exit && exit.code === 0 && last.startsWith(script.done)) {
+    print(`${script.ok} ${id}`)
+    return
+  }
+  const reason =
+    'error' in exit
+      ? exit.error
+      : last.replace(/^failed ?/, '') ||
+        `${path.basename(script.file)} exited with ${exit.code}`
+  print(await fallBack(script, id, reason))
+}
+
+/**
+ * A script that crashed before it could say why leaves its finding queued:
+ * the server fails it with `reason`, unless it moved on meanwhile.
+ * @param {Script} script
+ * @param {string} id
+ * @param {string} reason
+ * @returns {Promise<string>} The failure line to print.
+ */
+async function fallBack(script, id, reason) {
+  try {
+    const entry = (await store.readDecisions()).findings[id]
+    if (entry?.state === 'queued' && entry.decision?.action === script.action)
+      await store.fail(id, reason.slice(0, 300))
+  } catch (error) {
+    if (!(error instanceof StoreRefusal))
+      console.error(`tranchant server: ${script.action} ${id}: ${oneLine(String(error))}`)
+  }
+  return `${script.failed} ${id} ${reason}`
 }
 
 /**
@@ -1160,13 +1238,15 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 /**
  * What waited while no server ran: the hooks start an agent on each queued
  * fix again (they skip the ones they handed over already) and on each
- * question left unanswered, and the server posts each queued post.
+ * question left unanswered, and the server posts each queued post and
+ * opens each queued issue.
  */
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
     if (entry.state !== 'queued') continue
-    decided(id, entry.decision?.action === 'post' ? 'post' : 'fix')
+    const action = entry.decision?.action
+    decided(id, action === 'post' || action === 'issue' ? action : 'fix')
   }
   const discussions = await readDiscussions(dir).catch((error) => {
     // The questions left waiting stay so until the server starts again: said.

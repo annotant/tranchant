@@ -8,11 +8,13 @@ import {
   type Finding,
   hasComment,
   idsInBucket,
+  issueInput,
   plural,
   postInput,
   type Records,
   type Review,
   stateOf,
+  type Tracker,
 } from './domain'
 
 interface Props {
@@ -22,6 +24,8 @@ interface Props {
   ordered: readonly Finding[]
   selected: ReadonlySet<string>
   disabled: boolean
+  /** Where issues go: undefined until known, `kind` null when nowhere. */
+  tracker?: Tracker | undefined
   onSelect: (ids: readonly string[]) => void
   /** Resolves with the ids the server applied. */
   onDecide: (decisions: DecisionInput[]) => Promise<string[]>
@@ -42,6 +46,7 @@ interface Group {
 const VERBS: Record<Action, string> = {
   fix: 'Fix',
   post: 'Post',
+  issue: 'Issue',
   drop: 'Drop',
   skip: 'Skip',
 }
@@ -49,6 +54,7 @@ const VERBS: Record<Action, string> = {
 const DONE: Record<Action, string> = {
   fix: 'fixed',
   post: 'posted',
+  issue: 'moved to an issue',
   drop: 'dropped',
   skip: 'skipped',
 }
@@ -69,6 +75,7 @@ export function BatchBar({
   ordered,
   selected,
   disabled,
+  tracker,
   onSelect,
   onDecide,
 }: Props) {
@@ -82,8 +89,10 @@ export function BatchBar({
   const auto = new Set(idsInBucket(review, 'auto'))
   const openToPost = applicable(open, 'post', records, review)
   const actions: Action[] = posting
-    ? ['fix', 'post', 'drop', 'skip']
-    : ['fix', 'drop', 'skip']
+    ? ['fix', 'post', 'issue', 'drop', 'skip']
+    : ['fix', 'issue', 'drop', 'skip']
+  // Known to have none: no issue to open anywhere.
+  const noTracker = tracker?.kind === null
   const count = selected.size
   const allSelected = all.length > 0 && count === all.length
   const groups: Group[] = [
@@ -96,10 +105,10 @@ export function BatchBar({
     },
   ]
 
-  // One request for the batch; a single finding needs no confirmation, but a post leaves the page.
+  // One request for the batch; a single finding needs no confirmation, but a post or an issue leaves the page.
   function propose(action: Action, ids: string[]) {
     if (!ids.length) return
-    if (ids.length === 1 && action !== 'post') {
+    if (ids.length === 1 && action !== 'post' && action !== 'issue') {
       void send(ids.map((id) => ({ id, action })))
       setPending(undefined)
     } else setPending({ action, ids })
@@ -116,9 +125,10 @@ export function BatchBar({
     void send(
       pending.ids.map((id) => {
         const finding = byId.get(id)
-        return pending.action === 'post' && finding
-          ? postInput(finding, records[id])
-          : { id, action: pending.action }
+        if (pending.action === 'post' && finding) return postInput(finding, records[id])
+        if (pending.action === 'issue' && finding)
+          return issueInput(finding, review, tracker)
+        return { id, action: pending.action }
       }),
     )
     setPending(undefined)
@@ -188,7 +198,10 @@ export function BatchBar({
           aria-label="Actions on the selection"
         >
           {actions.map((action) => {
-            const ids = applicable(selected, action, records, review)
+            const ids =
+              action === 'issue' && noTracker
+                ? []
+                : applicable(selected, action, records, review)
             return (
               <button
                 key={action}
@@ -196,9 +209,13 @@ export function BatchBar({
                 className={`tr-btn tr-btn--small ${action === 'drop' ? 'tr-btn--danger' : ''}`}
                 disabled={disabled || !ids.length}
                 title={
-                  ids.length
-                    ? `${VERBS[action]} ${plural(ids.length, 'finding')}`
-                    : `None of the selection can be ${DONE[action]}`
+                  action === 'issue' && noTracker
+                    ? `No issue tracker: ${tracker?.kind === null ? tracker.reason : 'none'}`
+                    : ids.length
+                      ? action === 'issue'
+                        ? `Open ${plural(ids.length, 'issue')}, one per finding`
+                        : `${VERBS[action]} ${plural(ids.length, 'finding')}`
+                      : `None of the selection can be ${DONE[action]}`
                 }
                 onClick={() => propose(action, ids)}
               >
@@ -245,6 +262,19 @@ export function BatchBar({
                     </li>
                   )
                 })}
+              </ul>
+            </div>
+          ) : pending.action === 'issue' ? (
+            <div className="tr-confirm-post">
+              <span>
+                Open {plural(pending.ids.length, 'issue')}
+                {tracker?.kind ? ` on ${tracker.web}` : ''}, one per finding, as written
+                from its problem, why and fix?
+              </span>
+              <ul aria-label="Issues to open">
+                {pending.ids.map((id) => (
+                  <li key={id}>{byId.get(id)?.title ?? id}</li>
+                ))}
               </ul>
             </div>
           ) : (

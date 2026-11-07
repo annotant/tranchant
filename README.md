@@ -162,6 +162,13 @@ In the page:
   the comment to write or edit first, prefilled from its problem and fix when the
   finding has no comment; it is disabled until the MR's head is the commit reviewed (push your
   branch, then review again).
+- **Open an issue** moves a finding that is real but not for this change
+  (too big, out of scope, someone else's code) to the project's own tracker,
+  GitHub with your `gh` login or GitLab with your `glab` login, whichever the
+  checkout's `origin` is on (another forge has none: the action is then off,
+  and says why). The issue opens prefilled from its title,
+  problem, why, fix, anchor (linked to the file) and excerpt, to edit before
+  it is created; the finding is then settled, with the issue's link.
 - **Drop** records why the finding is wrong or intentional; **Skip** defers
   it.
 - **Discuss** opens a thread under the finding when you doubt it or its fix:
@@ -175,8 +182,9 @@ In the page:
   reload, a finding that has one shows its count in the diff and the list,
   and it reads as it stands once the finding is settled.
 - The bar at the top selects every finding, a group (To do, Safe to
-  auto-fix) or none, then applies one action to the selection; Post all to do
-  posts every open finding at once.
+  auto-fix) or none, then applies one action to the selection (**Issue**
+  opens one issue per finding, as drafted); Post all to do posts every open
+  finding at once.
 
 Nothing is committed or pushed: the fixes wait on your branch for your
 review.

@@ -8,7 +8,14 @@ import {
 } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import App from '../src/App'
-import type { Discussion, FindingRecord, Ownership, Review, State } from '../src/domain'
+import type {
+  Discussion,
+  FindingRecord,
+  Ownership,
+  Review,
+  State,
+  Tracker,
+} from '../src/domain'
 import { FindingDetail } from '../src/FindingDetail'
 import {
   fakeServer,
@@ -31,7 +38,9 @@ function renderDetail({
   reviewFields = {},
   discussion,
   sent = true,
+  tracker,
 }: {
+  tracker?: Tracker
   discussion?: Discussion
   /** What the server answers a message. */
   sent?: boolean
@@ -57,6 +66,7 @@ function renderDetail({
       }
       steps={[]}
       disabled={disabled}
+      tracker={tracker}
       onDecide={onDecide}
       onAnswer={onAnswer}
       onStop={onStop}
@@ -240,6 +250,66 @@ test('posted shows the discussion link; failed and dropped their reason', () => 
   expect(button('Drop')).toBeNull()
 })
 
+const github: Tracker = { kind: 'github', web: 'https://github.com/acme/app', prefix: '' }
+
+test('Open an issue prefills the title and body from the finding, and sends the edit', () => {
+  const { onDecide } = renderDetail({ tracker: github })
+  fireEvent.click(button('Open an issue')!)
+  expect(onDecide).not.toHaveBeenCalled()
+  const title = screen.getByLabelText<HTMLInputElement>('Issue title')
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Issue body')
+  expect(title.value).toBe(bug.title)
+  for (const part of [bug.problem, bug.why, bug.fix, ...bug.excerpt.lines])
+    expect(body.value).toContain(part)
+  const anchor = `${bug.path}:${bug.line}`
+  expect(body.value).toContain(
+    `[\`${anchor}\`](https://github.com/acme/app/blob/${review('ours').branch}/${bug.path}#L${bug.line})`,
+  )
+  fireEvent.change(title, { target: { value: '  Later: the crash  ' } })
+  fireEvent.click(button('Open the issue')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'issue', title: 'Later: the crash', body: body.value.trim() },
+  ])
+})
+
+test('an issue with an empty title cannot be opened; Cancel leaves the finding as it was', () => {
+  const { onDecide } = renderDetail({ ownership: 'theirs' })
+  fireEvent.click(button('Open an issue')!)
+  fireEvent.change(screen.getByLabelText('Issue title'), { target: { value: ' ' } })
+  expect(screen.getByPlaceholderText("The issue's title, one line")).toBeTruthy()
+  expect(button('Open the issue')).toHaveProperty('disabled', true)
+  fireEvent.click(button('Cancel')!)
+  expect(screen.queryByLabelText('Issue title')).toBeNull()
+  expect(onDecide).not.toHaveBeenCalled()
+})
+
+test('with no tracker, Open an issue is off and says why', () => {
+  renderDetail({ tracker: { kind: null, reason: 'the project has no origin remote' } })
+  const open = button('Open an issue')!
+  expect(open).toHaveProperty('disabled', true)
+  expect(open.getAttribute('title')).toContain('the project has no origin remote')
+})
+
+test('a finding moved to an issue shows its link, and is settled', () => {
+  renderDetail({
+    state: 'moved',
+    fields: {
+      issue: {
+        title: 't',
+        body: 'b',
+        url: 'https://github.com/acme/app/issues/12',
+        ref: '#12',
+        at: 'now',
+      },
+    },
+  })
+  const link = screen.getByRole('link', { name: /issues\/12/ })
+  expect(link.getAttribute('href')).toBe('https://github.com/acme/app/issues/12')
+  expect(link.textContent).toContain('#12')
+  for (const name of ['Fix now', 'Drop', 'Skip', 'Open an issue'])
+    expect(button(name)).toBeNull()
+})
+
 test('Fix now sends the context when some was added', () => {
   const { onDecide } = renderDetail()
   fireEvent.click(button('Fix now')!)
@@ -384,7 +454,7 @@ test('the chip names the group and its title the state; runs end in human words'
   })
   const chip = document.querySelector('.tr-chip--needs-you:not(.tr-runs *)')
   expect(chip?.textContent).toBe('Needs you')
-  expect(chip?.getAttribute('title')).toBe('The fix did not land')
+  expect(chip?.getAttribute('title')).toBe('The fix, the post or the issue did not land')
   expect(
     [...document.querySelectorAll('.tr-runs .tr-chip')].map((one) => [
       one.textContent,
@@ -408,6 +478,7 @@ const FAMILIES: Record<State, [string, string]> = {
   failed: ['needs-you', 'Needs you'],
   fixed: ['done', 'Done'],
   posted: ['done', 'Done'],
+  moved: ['done', 'Done'],
   dropped: ['set-aside', 'Set aside'],
   skipped: ['set-aside', 'Set aside'],
   stopped: ['set-aside', 'Set aside'],
@@ -573,4 +644,35 @@ test('an agent that ended without answering says so; Ask again sends the questio
   fireEvent.click(button('Ask again')!)
   expect(onDiscuss).toHaveBeenCalledWith('f-01', 'Why?')
   expect(box()).toBeDefined()
+})
+
+test('an issue that failed opens again as the reviewer wrote it', () => {
+  renderDetail({
+    state: 'failed',
+    fields: {
+      decision: { action: 'issue', at: 'now' },
+      issue: { title: 'My words', body: 'My body' },
+      reason: 'gh: HTTP 410',
+    },
+  })
+  fireEvent.click(button('Open an issue')!)
+  expect(screen.getByLabelText<HTMLInputElement>('Issue title').value).toBe('My words')
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Issue body').value).toBe('My body')
+})
+
+test('while its issue opens, the finding shows a spinner and offers nothing else', () => {
+  renderDetail({
+    state: 'queued',
+    fields: {
+      decision: { action: 'issue', at: 'now' },
+      issue: { title: 'T', body: 'B' },
+    },
+    tracker: github,
+  })
+  expect(screen.getByRole('status').textContent).toBe(
+    'Opening the issue on https://github.com/acme/app…',
+  )
+  expect(document.querySelector('.tr-pending .tr-spinner')).not.toBeNull()
+  for (const name of ['Stop', 'Drop', 'Skip', 'Fix now', 'Open an issue'])
+    expect(button(name)).toBeNull()
 })

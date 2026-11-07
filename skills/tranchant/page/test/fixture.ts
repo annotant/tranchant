@@ -11,6 +11,7 @@ import type {
   ReviewPayload,
   State,
   Step,
+  Tracker,
 } from '../src/domain'
 
 const HEAD = '3552e3ef0c5d4b1a9f0e8c7d6b5a4f3e2d1c0b9a'
@@ -416,6 +417,11 @@ export function fakeServer(
 ) {
   let diffAnswer = diff
   let account: AccountPayload | undefined = { username: null }
+  let tracker: Tracker = {
+    kind: 'github',
+    web: 'https://github.com/acme/app',
+    prefix: '',
+  }
   let current = initial
   let down = false
   /** What `/api/discuss` refuses with, as the server words it; undefined, it takes the message. */
@@ -457,6 +463,7 @@ export function fakeServer(
         ? Response.json(account)
         : Response.json({ error: 'not found' }, { status: 404 })
     }
+    if (url.pathname === '/api/tracker') return Response.json(tracker)
     if (url.pathname === '/api/diff') {
       return 'diff' in diffAnswer
         ? Response.json(diffAnswer)
@@ -474,6 +481,9 @@ export function fakeServer(
     /** undefined: a server without the route, which answers 404. */
     answerAccount(next: AccountPayload | undefined) {
       account = next
+    },
+    answerTracker(next: Tracker) {
+      tracker = next
     },
     answerDiff(next: DiffAnswer) {
       diffAnswer = next

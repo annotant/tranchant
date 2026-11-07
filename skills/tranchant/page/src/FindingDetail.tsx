@@ -8,6 +8,7 @@ import {
   type DecisionInput,
   discussable,
   type Discussion as Thread,
+  draftIssue,
   type Finding,
   type FindingRecord,
   postsFrom,
@@ -19,6 +20,7 @@ import {
   type Step,
   stateOf,
   tagOf,
+  type Tracker,
 } from './domain'
 import { Excerpt } from './Excerpt'
 import { FixChanges } from './FixChanges'
@@ -36,6 +38,8 @@ interface Props {
   /** No verifier confirmed it yet. */
   unverified?: boolean
   disabled: boolean
+  /** Where issues go: undefined until known, `kind` null when nowhere. */
+  tracker?: Tracker | undefined
   onDecide: (decisions: DecisionInput[]) => void
   onAnswer: (id: string, text: string, choices: string[]) => void
   onStop: (id: string) => void
@@ -43,7 +47,7 @@ interface Props {
   onDiscuss: (id: string, text: string) => Promise<boolean>
 }
 
-type Mode = 'idle' | 'editing' | 'dropping'
+type Mode = 'idle' | 'editing' | 'dropping' | 'issuing'
 
 function CopyAnchor({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -154,6 +158,7 @@ export function FindingDetail({
   discussion,
   unverified = false,
   disabled,
+  tracker,
   onDecide,
   onAnswer,
   onStop,
@@ -169,11 +174,15 @@ export function FindingDetail({
   const [context, setContext] = useState('')
   const [comment, setComment] = useState(() => draftComment(finding, record))
   const [reason, setReason] = useState('')
+  const [issue, setIssue] = useState<{ title: string; body: string }>()
+  const noTracker = tracker?.kind === null
   // Undefined: shown when the finding has a thread; the Discuss button opens or folds it.
   const [folded, setFolded] = useState<boolean>()
 
+  // The tool is opening it: nothing else is offered until it lands or fails.
+  const opening = state === 'queued' && record?.decision?.action === 'issue'
   const can = (move: Parameters<typeof allows>[0]) =>
-    !disabled && allows(move, state, review)
+    !disabled && !opening && allows(move, state, review)
   const theirs = review.ownership === 'theirs'
   // Ours with an MR: fixing comes first, posting is the secondary choice.
   const oursWithMr = !theirs && !!review.mr?.diffRefs
@@ -215,6 +224,23 @@ export function FindingDetail({
         ? { action: 'post', comment: comment.trim() }
         : { action: 'post' },
     )
+  const startIssue = () => {
+    // Drafted when opened, not when mounted: the tracker may have answered since.
+    // A failed attempt's issue comes back as the reviewer wrote it.
+    const last = record?.decision?.action === 'issue' ? record.issue : undefined
+    setIssue(
+      (draft) =>
+        draft ??
+        (last
+          ? { title: last.title, body: last.body }
+          : draftIssue(finding, review, tracker)),
+    )
+    setMode('issuing')
+  }
+  const openIssue = () => {
+    if (!issue?.title.trim() || !issue.body.trim()) return
+    decide({ action: 'issue', title: issue.title.trim(), body: issue.body.trim() })
+  }
   const drop = () =>
     decide(reason.trim() ? { action: 'drop', reason: reason.trim() } : { action: 'drop' })
 
@@ -299,6 +325,15 @@ export function FindingDetail({
             </a>
           </p>
         )}
+        {state === 'moved' && record?.issue?.url && (
+          <p className="tr-outcome">
+            Moved to an issue:{' '}
+            <a href={record.issue.url} target="_blank" rel="noreferrer">
+              {record.issue.ref ? `${record.issue.ref} · ` : ''}
+              {record.issue.url}
+            </a>
+          </p>
+        )}
         {state === 'fixed' && (
           <div className="tr-outcome">
             <p>{lastRun?.summary ?? 'Fixed on the working tree.'}</p>
@@ -344,19 +379,26 @@ export function FindingDetail({
       </section>
 
       <section className="tr-section tr-decide" aria-label="Actions">
-        {can('stop') && (
-          <div className="tr-actions">
-            <span className="tr-muted">
-              {state === 'queued' ? 'Waiting for an agent…' : 'An agent is on it…'}
-            </span>
-            <button
-              type="button"
-              className="tr-btn tr-btn--danger"
-              onClick={() => onStop(finding.id)}
-            >
-              Stop
-            </button>
-          </div>
+        {opening ? (
+          <p className="tr-outcome tr-pending" role="status">
+            <span className="tr-spinner" aria-hidden="true" />
+            Opening the issue{tracker?.kind ? ` on ${tracker.web}` : ''}…
+          </p>
+        ) : (
+          can('stop') && (
+            <div className="tr-actions">
+              <span className="tr-muted">
+                {state === 'queued' ? 'Waiting for an agent…' : 'An agent is on it…'}
+              </span>
+              <button
+                type="button"
+                className="tr-btn tr-btn--danger"
+                onClick={() => onStop(finding.id)}
+              >
+                Stop
+              </button>
+            </div>
+          )
         )}
         {mode === 'dropping' ? (
           <form
@@ -380,6 +422,45 @@ export function FindingDetail({
             <button type="button" className="tr-btn" onClick={() => setMode('idle')}>
               Cancel
             </button>
+          </form>
+        ) : mode === 'issuing' && issue ? (
+          <form
+            className="tr-inline-form tr-inline-form--column"
+            aria-label="Open an issue"
+            onSubmit={(event) => {
+              event.preventDefault()
+              openIssue()
+            }}
+          >
+            <input
+              className="tr-input"
+              value={issue.title}
+              onChange={(event) => setIssue({ ...issue, title: event.target.value })}
+              aria-label="Issue title"
+              placeholder="The issue's title, one line"
+              autoFocus
+            />
+            <textarea
+              className="tr-textarea"
+              value={issue.body}
+              onChange={(event) => setIssue({ ...issue, body: event.target.value })}
+              aria-label="Issue body"
+              placeholder="What the issue says: the problem, why it matters, the fix"
+              rows={12}
+            />
+            <div className="tr-actions">
+              <button
+                type="submit"
+                className="tr-btn tr-btn--primary"
+                disabled={!issue.title.trim() || !issue.body.trim()}
+              >
+                Open the issue
+              </button>
+              <button type="button" className="tr-btn" onClick={() => setMode('idle')}>
+                Cancel
+              </button>
+              {tracker?.kind && <span className="tr-muted">on {tracker.web}</span>}
+            </div>
           </form>
         ) : mode === 'editing' ? (
           <form
@@ -449,6 +530,21 @@ export function FindingDetail({
                   onClick={() => setMode('editing')}
                 >
                   Post a comment
+                </button>
+              )}
+              {can('issue') && (
+                <button
+                  type="button"
+                  className="tr-btn"
+                  disabled={noTracker}
+                  title={
+                    tracker?.kind === null
+                      ? `No issue tracker: ${tracker.reason}`
+                      : 'Settle it later: open an issue on the project, prefilled from the finding'
+                  }
+                  onClick={startIssue}
+                >
+                  Open an issue
                 </button>
               )}
               {can('drop') && (

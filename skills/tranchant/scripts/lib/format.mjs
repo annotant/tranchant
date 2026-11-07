@@ -24,7 +24,7 @@ export const statusOf = (review) =>
 
 /**
  * Where a finding stands. Absent from the decisions file, it is `open`.
- * @typedef {'open' | 'queued' | 'working' | 'asking' | 'fixed' | 'posted' | 'dropped' | 'skipped' | 'failed' | 'stopped'} State
+ * @typedef {'open' | 'queued' | 'working' | 'asking' | 'fixed' | 'posted' | 'moved' | 'dropped' | 'skipped' | 'failed' | 'stopped'} State
  */
 
 /** @type {readonly State[]} */
@@ -35,6 +35,7 @@ export const STATES = [
   'asking',
   'fixed',
   'posted',
+  'moved',
   'dropped',
   'skipped',
   'failed',
@@ -44,10 +45,10 @@ export const STATES = [
 /** @typedef {'reviewer' | 'agent' | 'server'} Actor */
 
 /**
- * The moves of a finding: a reviewer's decision (`fix`, `post`, `drop`,
- * `skip`, `answer`, `stop`), an agent's (`claim`, `done`, `ask`) or the
- * server's (`posted`, `fail`).
- * @typedef {'fix' | 'post' | 'drop' | 'skip' | 'answer' | 'stop' | 'claim' | 'done' | 'ask' | 'posted' | 'fail'} Move
+ * The moves of a finding: a reviewer's decision (`fix`, `post`, `issue`,
+ * `drop`, `skip`, `answer`, `stop`), an agent's (`claim`, `done`, `ask`) or
+ * the server's (`posted`, `moved`, `fail`).
+ * @typedef {'fix' | 'post' | 'issue' | 'drop' | 'skip' | 'answer' | 'stop' | 'claim' | 'done' | 'ask' | 'posted' | 'moved' | 'fail'} Move
  */
 
 /** The states a reviewer may still drop or skip from: nothing has landed yet. */
@@ -60,14 +61,15 @@ const UNDECIDED = /** @type {readonly State[]} */ ([
 ])
 
 /**
- * Each move, the states it leaves and the one it reaches. A `fixed` or
- * `posted` finding is final: no move leaves it. A question is answered with
+ * Each move, the states it leaves and the one it reaches. A `fixed`,
+ * `posted` or `moved` finding is final: no move leaves it. A question is answered with
  * `answer`, never with another `fix`.
  * @type {Readonly<Record<Move, { from: readonly State[], to: State }>>}
  */
 export const MOVES = {
   fix: { from: ['open', 'dropped', 'skipped', 'failed', 'stopped'], to: 'queued' },
   post: { from: ['open', 'dropped', 'skipped', 'failed'], to: 'queued' },
+  issue: { from: ['open', 'dropped', 'skipped', 'failed'], to: 'queued' },
   drop: { from: [...UNDECIDED, 'skipped'], to: 'dropped' },
   skip: { from: [...UNDECIDED, 'dropped'], to: 'skipped' },
   answer: { from: ['asking'], to: 'queued' },
@@ -76,6 +78,7 @@ export const MOVES = {
   done: { from: ['working'], to: 'fixed' },
   ask: { from: ['working'], to: 'asking' },
   posted: { from: ['queued'], to: 'posted' },
+  moved: { from: ['queued'], to: 'moved' },
   fail: { from: ['queued', 'working'], to: 'failed' },
 }
 
@@ -93,6 +96,7 @@ const STATE_WORDS = {
   asking: 'waiting on your answer',
   fixed: 'fixed already',
   posted: 'posted already',
+  moved: 'moved to an issue already',
   dropped: 'dropped',
   skipped: 'skipped',
   failed: 'failed',
@@ -223,7 +227,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
 
 /**
  * @typedef {object} Decision
- * @property {'fix' | 'post' | 'drop' | 'skip'} action
+ * @property {'fix' | 'post' | 'issue' | 'drop' | 'skip'} action
  * @property {string} [context] `fix`: the reviewer's constraint or choice.
  * @property {string} at
  */
@@ -256,6 +260,16 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} discussionId
  * @property {string} url The MR's url with `#note_<id>`.
  * @property {string} at
+ */
+
+/**
+ * The issue a finding moves to: what the reviewer wrote, then where it landed.
+ * @typedef {object} Issue
+ * @property {string} title
+ * @property {string} body Markdown.
+ * @property {string} [url] Once created: the issue's page.
+ * @property {string} [ref] Once created: `#<number>` on GitHub, `#<iid>` on GitLab.
+ * @property {string} [at] Once created.
  */
 
 /**
@@ -302,6 +316,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Answer} [answer]
  * @property {string} [reason] `dropped`: the reviewer's words; `failed`: the error.
  * @property {Posted} [posted]
+ * @property {Issue} [issue] An issue decision: its title and body, then its `url` once created.
  * @property {Run[]} runs
  * @property {Event[]} events
  * @property {Cancellation} [cancellation]
