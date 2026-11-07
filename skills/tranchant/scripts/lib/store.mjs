@@ -141,8 +141,8 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
   readSteps(history ? historyPath(dir, id) : progressPath(dir, id), limit)
 
 /**
- * One review agent, a lens's reviewer (`rv-<lens>`) or a finding's verifier
- * (`vf-<id>`), as its run file tells it: running until its `end` step.
+ * One review agent, the summary agent (`sm-summary`), a lens's reviewer
+ * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until its `end` step.
  * @typedef {{ name: string, running: boolean, outcome?: 'done' | 'failed', steps: Step[] }} ReviewAgent
  */
 

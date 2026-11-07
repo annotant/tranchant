@@ -18,10 +18,10 @@
 //      working, neither done nor asked about, fails, so the reviewer can
 //      send it again. Prints `AGENT_ENDED <id>` when it did.
 //
-// `--reviewer`: a review agent's (a lens's reviewer, `rv-<lens>`, a
-// finding's verifier, `vf-<id>`, or the agent discussing a finding with the
-// reviewer, `ds-<id>`, or the summary agent, `sm-summary`): it has no writing tool and takes no lock;
-// its steps go to reviewers/<name>.jsonl. pre allows only reading commands
+// `--reviewer`: a review agent's (the summary agent, `sm-summary`, a lens's
+// reviewer, `rv-<lens>`, a finding's verifier, `vf-<id>`, or the agent
+// discussing a finding with the reviewer, `ds-<id>`): it has no writing tool
+// and takes no lock; its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
 // `--lock-root`: the git repository the project is in, which the hooks module

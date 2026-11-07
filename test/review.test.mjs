@@ -459,6 +459,16 @@ test('summarize.mjs writes the summary and strengths while reviewing, then refus
   )
   assert.deepEqual(envelope.strengths, ['A test covers the empty cart.'])
   assert.equal(envelope.status, 'reviewing')
+  // The rest of the review stays: its findings still wait for their verifiers.
+  assert.equal(
+    (await verify(['--pending', '--review', dir])).stdout,
+    'UNVERIFIED f-01\nUNVERIFIED f-02\n',
+  )
+  const longest = await summarize(
+    ['--review', dir],
+    JSON.stringify({ summary: 'x'.repeat(12_000), strengths: ['y'.repeat(500)] }),
+  )
+  assert.equal(longest.stdout, 'SUMMARIZED\n', longest.stderr)
   // Again: it replaces the first, strengths optional.
   const again = await summarize(
     ['--review', dir],
@@ -476,6 +486,7 @@ test('summarize.mjs writes the summary and strengths while reviewing, then refus
     [JSON.stringify({ summary: 'x', strengths: 'good' }), /an array of texts/],
     [JSON.stringify({ summary: 'x', strengths: [''] }), /an array of texts/],
     [JSON.stringify({ summary: 'x', strengths: Array(11).fill('y') }), /10 at most/],
+    [JSON.stringify({ summary: 'x', strengths: ['y'.repeat(501)] }), /500 characters/],
   ])) {
     const refused = await summarize(['--review', dir], input)
     assert.equal(refused.code, 2, input)

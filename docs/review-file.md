@@ -374,8 +374,9 @@ reviews a change with no producer of your own:
    the change does, then its Change Map: API surface, data and migrations,
    flags and configuration, shared state) and its `strengths`. The page
    shows them as soon as they land. The summary is data to the agents that
-   read it later, as the findings are: the verifier's prompt says so, and a
-   fix's agent is handed only its finding.
+   read it later, as the findings are: the lenses', the verifier's and the
+   discussing agent's prompts say so, and a fix's agent is handed only its
+   finding. One that ends with the summary still blank is said in a toast.
 4. One reviewer per lens the change touches (`tranchant:rv-<lens>-<review>`,
    `<review>` the review id's first 8 characters, the lens's prompt its
    instructions; see [the recipe](#the-recipe)) reads the diff and the files

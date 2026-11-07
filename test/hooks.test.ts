@@ -955,6 +955,12 @@ test('once every reviewer and verifier ended, complete.mjs runs; a finding with 
   await w.clock.settle()
   expect(w.completed).toEqual([['--review', DIR]])
   expect(w.toasts.at(-1)).toBe('Tranchant finished reviewing Classification overview.')
+  // The summary agent ended and review.json's summary is still blank: said.
+  expect(w.toasts).toContainEqual(
+    expect.stringMatching(
+      /^Tranchant's summary agent ended without a summary of the change: .+\/reviewers\/sm-summary\.jsonl\.$/,
+    ),
+  )
   // A finding that lands now starts nothing: the review is complete.
   await w.print('LANDED bugs-3')
   expect(w.spawned).toHaveLength(5)
@@ -1069,10 +1075,14 @@ test('a final report with no turn.complete ends its agent: the toast, its place 
   expect(w.toasts).toContain('rv-bugs: No finding.')
   // The summary agent still runs: the review waits for it.
   expect(w.completed).toEqual([])
+  const envelope = JSON.parse(w.files.get(`${DIR}/review.json`) ?? '{}')
+  w.files.set(`${DIR}/review.json`, JSON.stringify({ ...envelope, summary: 'Adds it.' }))
   await peer($, w.spawned[0]?.name ?? '', 'Summarized.')
   await w.clock.settle()
   expect(w.toasts).toContain('sm-summary: Summarized.')
   expect(w.completed).toEqual([['--review', DIR]])
+  // Its summary written: no word about a missing one.
+  expect(w.toasts.some((one) => one.includes('without a summary'))).toBe(false)
   await w.exit(0)
 })
 

@@ -3,9 +3,9 @@ name: summary
 description:
   Tranchant's summary agent, which reads a change and writes the review's
   summary (what the change does and its moving parts, the Change Map) and its
-  strengths, started by the plugin's hooks first while /tranchant review runs.
-  Its prompt gives REVIEW, SKILL, PROJECT, BASE and HEAD. Only the hooks start
-  it, never otherwise.
+  strengths, queued first by the plugin's hooks while /tranchant review runs.
+  Its prompt gives REVIEW, SKILL, PROJECT, BASE, HEAD and RANGE. Only the
+  hooks start it, never otherwise.
 ---
 
 You summarize one change, started by the plugin's hooks when
@@ -87,6 +87,7 @@ EOF
 ```
 
 - It prints `SUMMARIZED`, or `SUMMARY_REFUSED <reason>` and exits 2: fix
-  what the reason names and call again, once.
+  what the reason names and call again, once; a review already complete
+  takes no summary: stop there.
 - Never write a file in PROJECT or REVIEW, never edit, never commit: your
   only output is `summarize.mjs` and your last line.

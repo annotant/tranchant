@@ -1179,11 +1179,17 @@ async function discussPrompt($: $, review: Review, id: string) {
   ].join('\n')
 }
 
+/** The plugin's own instructions files, by kind; a reviewer's is its lens's. */
+const PLUGIN_AGENT = {
+  summarizer: 'review/summary',
+  verifier: 'review/verifier',
+  discusser: 'discuss',
+} as const
 /** A review agent's instructions file: its lens's, the plugin's summary agent, verifier or discussing agent. */
 const reviewInstructions = ($: $, job: ReviewJob) =>
   job.kind === 'reviewer'
     ? job.lens.prompt
-    : `${$.plugin.root}/agents/${{ summarizer: 'review/summary', verifier: 'review/verifier', discusser: 'discuss' }[job.kind]}.md`
+    : `${$.plugin.root}/agents/${PLUGIN_AGENT[job.kind]}.md`
 
 /** Review agents at work and starting, the three the cap counts. */
 async function busyReviewing($: $) {
@@ -1431,7 +1437,8 @@ async function completeIfDone($: $, dir: string) {
     for (const id of missed) await verifyLanded($, dir, id)
     return
   }
-  await finishReview($, dir, 'every reviewer and verifier ended')
+  await sayNoSummary($, dir, agents)
+  await finishReview($, dir, 'the summary agent, every reviewer and verifier ended')
   // Verifiers that ended without a verdict: their findings stay dimmed, and said so.
   if (left === undefined)
     $.ui.toast(
@@ -1441,6 +1448,23 @@ async function completeIfDone($: $, dir: string) {
     $.ui.toast(
       `${left.length} finding(s) stay unverified: ${left.slice(0, 5).join(', ')}.`,
     )
+}
+
+/** The summary agent ran and ended with the summary still blank: said, as the page then hides it. */
+async function sayNoSummary($: $, dir: string, agents: ReviewAgent[]) {
+  if (!agents.some((one) => one.review === dir && one.kind === 'summarizer')) return
+  const envelope: unknown = await $.fs
+    .read(`${dir}/review.json`)
+    .then((text) => JSON.parse(text) as unknown)
+    .catch(() => undefined)
+  const summary =
+    envelope && typeof envelope === 'object' && 'summary' in envelope
+      ? envelope.summary
+      : undefined
+  if (typeof summary === 'string' && summary.trim()) return
+  $.ui.toast(
+    `Tranchant's summary agent ended without a summary of the change: its steps are in ${dir}/reviewers/sm-summary.jsonl.`,
+  )
 }
 
 /** Ends review `dir`'s run: complete.mjs, and the toast; `stopped` by /tranchant stop. */

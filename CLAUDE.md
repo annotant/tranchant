@@ -22,7 +22,7 @@ pattern, read how annotant does it.
   as a type of its own (`tranchant:tr-<id>`) whose settings hooks run
   `skills/tranchant/scripts/hook.mjs` (file locks, steps) around its tools.
   `/tranchant review` starts the review agents the same way: the summary
-  agent first (`tranchant:sm-summary-<review>`), which writes the review's
+  agent, queued first (`tranchant:sm-summary-<review>`), which writes the review's
   summary and strengths with `summarize.mjs`, one reviewer per
   lens (`tranchant:rv-<lens>-<review>`), one verifier per finding
   (`tranchant:vf-<id>-<review>`), `<review>` the review id's first 8
