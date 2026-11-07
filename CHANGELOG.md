@@ -34,6 +34,9 @@ released to the `stable` branch.
 - **The page reads in Figtree**, annotant's font, in place of the system's:
   the two pages read as one family. The font ships inside the page, so
   nothing is fetched from the network; code stays in a monospace font.
+- **Inline code stands out.** In a finding, the summary, a discussion and
+  the review agents' reports, inline code sits on a chip, with a background
+  and a border, so a symbol's start and end show in a dense paragraph.
 
 ## 0.2.0 - 2026-11-06
 
