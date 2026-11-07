@@ -415,6 +415,16 @@ test('the summary renders the Markdown and the strengths, and remembers being cl
   expect(screen.getByRole('heading', { name: 'What looks good' })).toBeDefined()
   expect(screen.getByText('Tests cover the empty state.')).toBeDefined()
   cleanup()
+  await renderApp(
+    payload({ review: { strengths: ['`parseRange` rejects a **reversed** range.'] } }),
+  )
+  const strength = screen
+    .getByRole('region', { name: 'What looks good' })
+    .querySelector('li')
+  expect(strength?.querySelector('code')?.textContent).toBe('parseRange')
+  expect(strength?.querySelector('strong')?.textContent).toBe('reversed')
+  expect(strength?.textContent).not.toContain('`')
+  cleanup()
   localStorage.setItem('tranchant:summary', 'closed')
   render(<App />)
   const closed = (await screen.findByText('Summary')).closest('details')

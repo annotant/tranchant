@@ -996,7 +996,17 @@ test('a review opened before its findings grows as they land, then completes', a
       assert.equal(added.stdout, `ADDED ${finding.id}\n`, added.stderr)
       await events.changed(finding.id)
     }
+    // The summary agent's write alone tells the page: no finding changed.
+    const summarized = await run(
+      process.execPath,
+      [path.join(SCRIPTS, 'summarize.mjs'), '--review', imported.dir],
+      { input: JSON.stringify({ summary: 'Adds discounts.', strengths: ['A test.'] }) },
+    )
+    assert.equal(summarized.stdout, 'SUMMARIZED\n', summarized.stderr)
+    assert.match(await events.changed(), /"ids":\[\]/)
     const grown = await json(await fetch(`${server.base}/api/review`))
+    assert.equal(grown.review.summary, 'Adds discounts.')
+    assert.deepEqual(grown.review.strengths, ['A test.'])
     assert.deepEqual(
       grown.review.findings.map((finding) => finding.id),
       ['f-02', 'f-01'],

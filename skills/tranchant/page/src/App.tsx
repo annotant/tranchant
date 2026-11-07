@@ -32,7 +32,7 @@ import {
 } from './domain'
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
-import { Markdown } from './markdown'
+import { Inline, Markdown } from './markdown'
 import { ReviewAgents } from './ReviewAgents'
 import { readStored, writeStored } from './storage'
 import { ThemeToggle } from './ThemeToggle'
@@ -545,11 +545,13 @@ export default function App() {
           <div className="tr-summary-body">
             {review.summary.trim() && <Markdown source={review.summary} />}
             {strengths.length > 0 && (
-              <section aria-label="What looks good">
+              <section className="tr-md" aria-label="What looks good">
                 <h3>What looks good</h3>
                 <ul>
                   {strengths.map((strength) => (
-                    <li key={strength}>{strength}</li>
+                    <li key={strength}>
+                      <Inline source={strength} />
+                    </li>
                   ))}
                 </ul>
               </section>
