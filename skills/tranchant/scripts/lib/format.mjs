@@ -218,7 +218,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} title
  * @property {MergeRequest} [mr] Required to post, with its `diffRefs` at `headSha`.
  * @property {{ key: string, url: string }} [jira]
- * @property {string} summary Markdown, shown above the findings.
+ * @property {string} summary Markdown, shown above the findings; may be blank.
  * @property {string[]} strengths
  * @property {Record<string, number>} [sources]
  * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.

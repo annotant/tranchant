@@ -37,6 +37,9 @@ released to the `stable` branch.
 - **Inline code stands out.** In a finding, the summary, a discussion and
   the review agents' reports, inline code sits on a chip, with a background
   and a border, so a symbol's start and end show in a dense paragraph.
+- **No empty Summary.** The Summary section shows only when the review
+  carries a summary or a strength. `/tranchant review` writes none for now:
+  the review agents' band already names its lenses.
 
 ## 0.2.0 - 2026-11-06
 
