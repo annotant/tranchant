@@ -20,7 +20,7 @@
 //
 // `--reviewer`: a review agent's (a lens's reviewer, `rv-<lens>`, a
 // finding's verifier, `vf-<id>`, or the agent discussing a finding with the
-// reviewer, `ds-<id>`): it has no writing tool and takes no lock;
+// reviewer, `ds-<id>`, or the summary agent, `sm-summary`): it has no writing tool and takes no lock;
 // its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
@@ -98,7 +98,7 @@ const GIT_READS = new Set([
 ])
 // git options that write a file or run a program.
 const GIT_RISKY = /^(?:--output|--ext-diff|-O|--open-files-in-pager)/
-const REVIEW_SCRIPT = /^(add|verify|remove|reply)\.mjs$/
+const REVIEW_SCRIPT = /^(add|verify|remove|reply|summarize)\.mjs$/
 /** This folder, its real path: a review agent's `node` runs one of its scripts, by path, and nothing else. */
 const SCRIPTS_DIR = realOrUndefined(path.dirname(new URL(import.meta.url).pathname))
 /** The scripts each kind of review agent runs, by the prefix of its name. */
@@ -106,6 +106,7 @@ const SCRIPTS_OF = /** @type {Record<string, string[]>} */ ({
   rv: ['add'],
   vf: ['verify', 'remove'],
   ds: ['reply'],
+  sm: ['summarize'],
 })
 // A Bash command that writes files takes no lock: refused, the agent must use
 // Edit or Write. Best effort, on the usual forms. What an inline script writes
@@ -325,8 +326,9 @@ function reviewArgRefusal(args, review) {
  * Why review agent `name` may not run `command`, or undefined when it may: a
  * chain of reading commands, and the agent's own script (a reviewer's
  * add.mjs; a verifier's verify.mjs or remove.mjs, a discussing agent's
- * reply.mjs, on its own finding), by its path, on its own review.
- * @param {string} name `rv-<lens>`, `vf-<finding id>` or `ds-<finding id>`.
+ * reply.mjs, on its own finding; the summary agent's summarize.mjs), by its
+ * path, on its own review.
+ * @param {string} name `rv-<lens>`, `vf-<finding id>`, `ds-<finding id>` or `sm-summary`.
  * @param {string} command
  * @param {string} review The agent's review folder.
  */
@@ -352,8 +354,10 @@ function reviewerRefusal(name, command, review) {
             ? script === 'add'
               ? 'a verifier checks a finding, it adds none'
               : `a verifier gives its verdict, ${script}.mjs is not its script`
-            : `a discussing agent answers with reply.mjs, ${script}.mjs is not its script`
-      if (kind !== 'rv' && args[1] !== name.slice(3))
+            : kind === 'sm'
+              ? `the summary agent writes the summary, ${script}.mjs is not its script`
+              : `a discussing agent answers with reply.mjs, ${script}.mjs is not its script`
+      if ((kind === 'vf' || kind === 'ds') && args[1] !== name.slice(3))
         return `${kind === 'vf' ? 'a verifier gives its verdict' : 'it answers'} on ${name.slice(3)} only`
       const outside = reviewArgRefusal(args.slice(1), review)
       if (outside) return outside

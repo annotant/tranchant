@@ -11,9 +11,10 @@
 // in: file locks, refused Bash writes, and the steps the page shows.
 //
 // `/tranchant review` writes a review's envelope, opens it the same way, then
-// starts one reviewer per lens of a recipe and, as each finding lands, a
-// verifier on it, three at a time, each a type of its own
-// (`tranchant:rv-<lens>-<review>`, `tranchant:vf-<id>-<review>`, `<review>` the
+// starts the summary agent, one reviewer per lens of a recipe and, as each
+// finding lands, a verifier on it, three at a time, each a type of its own
+// (`tranchant:sm-summary-<review>`, `tranchant:rv-<lens>-<review>`,
+// `tranchant:vf-<id>-<review>`, `<review>` the
 // first 8 characters of the review's id) whose hooks record its steps for the
 // page. Once every one ended, the review completes.
 //
@@ -90,8 +91,8 @@ const FINDING_AGENT = /^tranchant:tr-[\w-]+$/
 const REVIEW_FILE_AGENT = /^tranchant:review:[\w-]+$/
 /** The discussing agent's file, agents/discuss.md: loaded as the plugin's agent too. */
 const DISCUSS_FILE_AGENT = 'tranchant:discuss'
-/** The review agents' types: `rv-<lens>`, `vf-<id>`, `ds-<id>`, with the review's id. */
-const REVIEW_AGENT = /^tranchant:(?:rv|vf|ds)-[\w-]+$/
+/** The review agents' types: `sm-summary`, `rv-<lens>`, `vf-<id>`, `ds-<id>`, with the review's id. */
+const REVIEW_AGENT = /^tranchant:(?:sm|rv|vf|ds)-[\w-]+$/
 const REVIEW_TOOLS = ['Read', 'Bash', 'Grep', 'Glob']
 const OPEN_TOOL = 'mcp__tranchant__open'
 const INHERIT = 'inherit'
@@ -1011,8 +1012,9 @@ async function workerDone($: $, agent: string, answer: string) {
 }
 
 // ---------------------------------------------------------------------------
-// `/tranchant review`: the review written and served first, then one reviewer
-// per lens and one verifier per finding that lands, three at a time, started
+// `/tranchant review`: the review written and served first, then the summary
+// agent, one reviewer per lens and one verifier per finding that lands, three
+// at a time, started
 // with no model turn; once every one ended, the review completes.
 
 /** Review agents starting, by key: their review folder, and whether a stop came meanwhile. */
@@ -1024,11 +1026,16 @@ const MAX_REVIEWING = 3
 const REVIEW_USAGE =
   'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]'
 
-const AGENT_PREFIX = { reviewer: 'rv', verifier: 'vf', discusser: 'ds' } as const
-/** A review agent's name: `rv-<lens>`, `vf-<finding id>` or `ds-<finding id>`. */
+const AGENT_PREFIX = {
+  summarizer: 'sm',
+  reviewer: 'rv',
+  verifier: 'vf',
+  discusser: 'ds',
+} as const
+/** A review agent's name: `sm-summary`, `rv-<lens>`, `vf-<finding id>` or `ds-<finding id>`. */
 // Lens names and finding ids are `[\w-]`, 40 and 64 at most: whole, two never meet.
 const reviewAgentName = (job: ReviewJob) =>
-  `${AGENT_PREFIX[job.kind]}-${job.kind === 'reviewer' ? job.lens.name : job.id}`
+  `${AGENT_PREFIX[job.kind]}-${job.kind === 'summarizer' ? 'summary' : job.kind === 'reviewer' ? job.lens.name : job.id}`
 /**
  * A review agent's type: its name and its review's id, since two reviews may
  * run at once and an agent's hooks come from its type, registered again per review.
@@ -1144,6 +1151,7 @@ function reviewPrompt($: $, review: Review, job: ReviewJob) {
     `RANGE=${review.range}`,
     `OWNERSHIP=${review.ownership}`,
   ]
+  if (job.kind === 'summarizer') return paths.join('\n')
   if (job.kind !== 'reviewer') return [job.id, ...paths].join('\n')
   return [`LENS=${job.lens.name}`, ...paths, `PATHS=${job.lens.paths.join(' ')}`].join(
     '\n',
@@ -1171,11 +1179,11 @@ async function discussPrompt($: $, review: Review, id: string) {
   ].join('\n')
 }
 
-/** A review agent's instructions file: its lens's, the plugin's verifier or discussing agent. */
+/** A review agent's instructions file: its lens's, the plugin's summary agent, verifier or discussing agent. */
 const reviewInstructions = ($: $, job: ReviewJob) =>
   job.kind === 'reviewer'
     ? job.lens.prompt
-    : `${$.plugin.root}/agents/${job.kind === 'verifier' ? 'review/verifier' : 'discuss'}.md`
+    : `${$.plugin.root}/agents/${{ summarizer: 'review/summary', verifier: 'review/verifier', discusser: 'discuss' }[job.kind]}.md`
 
 /** Review agents at work and starting, the three the cap counts. */
 async function busyReviewing($: $) {
@@ -1288,9 +1296,11 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
       at: Date.now(),
       kind: 'start',
       label:
-        job.kind === 'reviewer'
-          ? `Reviewing: ${job.lens.name}`
-          : `${job.kind === 'verifier' ? 'Verifying' : 'Discussing'} ${job.id}`,
+        job.kind === 'summarizer'
+          ? 'Summarizing the change'
+          : job.kind === 'reviewer'
+            ? `Reviewing: ${job.lens.name}`
+            : `${job.kind === 'verifier' ? 'Verifying' : 'Discussing'} ${job.id}`,
       state: 'done',
       model,
     },
@@ -1531,7 +1541,7 @@ function reviewArgs(words: string[]) {
 /**
  * `/tranchant review`: prepare.mjs writes the envelope, it opens through the
  * same path as a review file, so the server and the page start first; then
- * the reviewers queue, one per lens.
+ * the summary agent and the reviewers queue, one per lens.
  */
 async function startReview($: $, target: string | undefined, recipe: string | undefined) {
   const cwd = normalize(await $.session.cwd())
@@ -1582,13 +1592,17 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
-      queue: lenses.map((lens): ReviewJob => ({ kind: 'reviewer', lens })),
+      // The summary first: the page shows it while the lenses still run.
+      queue: [
+        { kind: 'summarizer' },
+        ...lenses.map((lens): ReviewJob => ({ kind: 'reviewer', lens })),
+      ],
       verifying: [],
     },
   }))
   await pumpReviews($)
   return [
-    `Reviewing with ${lenses.length} lens(es): ${lenses.map((lens) => lens.name).join(', ')}. Findings land on the page as the reviewers find them, each verified in turn.`,
+    `Reviewing with ${lenses.length} lens(es): ${lenses.map((lens) => lens.name).join(', ')}. The summary of the change and the findings land on the page as the agents write them, each finding verified in turn.`,
     ...(unread.length
       ? [`prepare.mjs printed lenses that are not JSON, left out: ${unread.join('; ')}`]
       : []),

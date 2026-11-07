@@ -21,7 +21,9 @@ pattern, read how annotant does it.
   mod's hooks for an agent the plugin starts: each fix's agent is registered
   as a type of its own (`tranchant:tr-<id>`) whose settings hooks run
   `skills/tranchant/scripts/hook.mjs` (file locks, steps) around its tools.
-  `/tranchant review` starts the review agents the same way: one reviewer per
+  `/tranchant review` starts the review agents the same way: the summary
+  agent first (`tranchant:sm-summary-<review>`), which writes the review's
+  summary and strengths with `summarize.mjs`, one reviewer per
   lens (`tranchant:rv-<lens>-<review>`), one verifier per finding
   (`tranchant:vf-<id>-<review>`), `<review>` the review id's first 8
   characters. A question asked in a finding's discussion starts one
@@ -32,7 +34,8 @@ pattern, read how annotant does it.
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
   `agents/discuss.md`, the discussing agent's;
   `agents/review/`, the default recipe of `/tranchant review`, its lenses'
-  prompts (each a reviewer's whole instructions) and the verifier's. Hidden
+  prompts (each a reviewer's whole instructions), the summary agent's and
+  the verifier's. Hidden
   from the model.
 - `skills/tranchant/SKILL.md`: the skill itself, a prompt. Keep it short:
   every line is read in every user's session.
