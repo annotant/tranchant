@@ -437,6 +437,7 @@ export function FindingDetail({
               value={issue.title}
               onChange={(event) => setIssue({ ...issue, title: event.target.value })}
               aria-label="Issue title"
+              placeholder="The issue's title, one line"
               autoFocus
             />
             <textarea
@@ -444,6 +445,7 @@ export function FindingDetail({
               value={issue.body}
               onChange={(event) => setIssue({ ...issue, body: event.target.value })}
               aria-label="Issue body"
+              placeholder="What the issue says: the problem, why it matters, the fix"
               rows={12}
             />
             <div className="tr-actions">

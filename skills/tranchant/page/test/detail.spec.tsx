@@ -276,6 +276,7 @@ test('an issue with an empty title cannot be opened; Cancel leaves the finding a
   const { onDecide } = renderDetail({ ownership: 'theirs' })
   fireEvent.click(button('Open an issue')!)
   fireEvent.change(screen.getByLabelText('Issue title'), { target: { value: ' ' } })
+  expect(screen.getByPlaceholderText("The issue's title, one line")).toBeTruthy()
   expect(button('Open the issue')).toHaveProperty('disabled', true)
   fireEvent.click(button('Cancel')!)
   expect(screen.queryByLabelText('Issue title')).toBeNull()
