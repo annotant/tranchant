@@ -46,6 +46,10 @@ export const MAX_OPTIONS = 6
 /** The most steps of a run in progress the review lists. */
 const PROGRESS_SHOWN = 50
 const MAX_SUMMARY = 2000
+/** What summarize.mjs takes: a Change Map and a few sentences, a few strengths. */
+const MAX_REVIEW_SUMMARY = 12_000
+const MAX_STRENGTHS = 10
+const MAX_STRENGTH = 500
 const MAX_TEXT = 4000
 /** An issue's title and body: GitLab caps a title at 255 characters, GitHub a body at 65,536. */
 export const MAX_ISSUE_TITLE = 255
@@ -137,8 +141,8 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
   readSteps(history ? historyPath(dir, id) : progressPath(dir, id), limit)
 
 /**
- * One review agent, a lens's reviewer (`rv-<lens>`) or a finding's verifier
- * (`vf-<id>`), as its run file tells it: running until its `end` step.
+ * One review agent, the summary agent (`sm-summary`), a lens's reviewer
+ * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until its `end` step.
  * @typedef {{ name: string, running: boolean, outcome?: 'done' | 'failed', steps: Step[] }} ReviewAgent
  */
 
@@ -517,6 +521,40 @@ export function createStore(dir) {
         const { verified: _verified, ...landed } = finding
         await writeFinding({ ...landed, addedAt: new Date().toISOString() })
         return { id: finding.id, added: true }
+      })
+    },
+
+    /**
+     * The review's summary and strengths, replacing the previous ones, while
+     * the review is `reviewing`: the page shows them as soon as they land.
+     * @param {any} given `{ summary, strengths }`
+     * @returns {Promise<void>}
+     */
+    summarize(given) {
+      const summary = typeof given?.summary === 'string' ? given.summary.trim() : ''
+      if (!summary) throw new StoreRefusal('summary: a Markdown text is required')
+      if (summary.length > MAX_REVIEW_SUMMARY)
+        throw new StoreRefusal(`summary: ${MAX_REVIEW_SUMMARY} characters at most`)
+      const strengths = given.strengths ?? []
+      if (
+        !Array.isArray(strengths) ||
+        strengths.some((one) => typeof one !== 'string' || !one.trim())
+      )
+        throw new StoreRefusal('strengths: an array of texts is required')
+      if (strengths.length > MAX_STRENGTHS)
+        throw new StoreRefusal(`strengths: ${MAX_STRENGTHS} at most`)
+      if (strengths.some((one) => one.trim().length > MAX_STRENGTH))
+        throw new StoreRefusal(`strengths: ${MAX_STRENGTH} characters each at most`)
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        if (statusOf(envelope) === 'complete') {
+          throw new StoreRefusal('the review is complete: its summary stays')
+        }
+        await writeEnvelope({
+          ...envelope,
+          summary,
+          strengths: strengths.map((one) => one.trim()),
+        })
       })
     },
 

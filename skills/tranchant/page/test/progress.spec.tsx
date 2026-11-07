@@ -200,3 +200,13 @@ test('a gist skips the sentence that only repeats the verdict', () => {
     'Everything renders as text.',
   )
 })
+
+test('the summary agent is no lens: it counts as an agent, summarizing the change', () => {
+  const progress = progressOf([running('sm-summary'), running('rv-bugs')], [])
+  expect(progress.lenses.map((one) => one.lens)).toEqual(['bugs'])
+  expect(progress.now).toEqual([
+    { name: 'sm-summary', who: 'summarizing the change', step: 'Starting' },
+    { name: 'rv-bugs', who: 'bugs', step: 'Starting' },
+  ])
+  expect([progress.done, progress.total]).toEqual([0, 2])
+})

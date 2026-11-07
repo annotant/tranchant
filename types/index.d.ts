@@ -23,10 +23,12 @@ export type Lens = {
 }
 
 /**
- * What waits for a free review agent: a lens's reviewer, a finding's
- * verifier, or the agent answering the reviewer's question on a finding.
+ * What waits for a free review agent: the agent summarizing the change, a
+ * lens's reviewer, a finding's verifier, or the agent answering the
+ * reviewer's question on a finding.
  */
 export type ReviewJob =
+  | { kind: 'summarizer' }
   | { kind: 'reviewer'; lens: Lens }
   | { kind: 'verifier'; id: string }
   | { kind: 'discusser'; id: string }
@@ -41,16 +43,16 @@ export type ReviewRun = {
 }
 
 /**
- * An agent the hooks started for a review: a lens's reviewer (`rv-<lens>`), a
- * finding's verifier (`vf-<id>`) or the agent discussing a finding
- * (`ds-<id>`). `running` until its turn completes.
+ * An agent the hooks started for a review: the summary agent (`sm-summary`),
+ * a lens's reviewer (`rv-<lens>`), a finding's verifier (`vf-<id>`) or the
+ * agent discussing a finding (`ds-<id>`). `running` until its turn completes.
  */
 export type ReviewAgent = {
   agent: string
-  /** `rv-<lens>`, `vf-<id>` or `ds-<id>`: its run file's name, and its agent type's with the review's id. */
+  /** `sm-summary`, `rv-<lens>`, `vf-<id>` or `ds-<id>`: its run file's name, and its agent type's with the review's id. */
   name: string
-  kind: 'reviewer' | 'verifier' | 'discusser'
-  /** Its instructions file, absolute: its lens's, agents/review/verifier.md or agents/discuss.md. */
+  kind: 'summarizer' | 'reviewer' | 'verifier' | 'discusser'
+  /** Its instructions file, absolute: its lens's, agents/review/summary.md, agents/review/verifier.md or agents/discuss.md. */
   prompt: string
   review: string
   project: string

@@ -33,7 +33,8 @@ wrong.
   wrote, your decisions, and the agents' steps. See
   [the review file](docs/review-file.md).
 - **Tranchant reviews, or a producer does.** `/tranchant review` opens the
-  page at once and runs the reviewers in the background: one agent per lens
+  page at once and runs the reviewers in the background: one agent that
+  summarizes the change and what it does well, one agent per lens
   of a recipe, then a verifier on each finding as it lands, which confirms,
   corrects or removes it. Unverified findings show dimmed. A producer of
   your own works too: any tool that writes the review file. A review
@@ -83,6 +84,11 @@ is anchored on its line with an excerpt and marks on the exact spots, worded
 as a problem, why it matters and a fix, with the comment to post when the
 change is someone else's, or when it is yours with an MR and the finding is
 worth posting.
+
+The summary agent (`agents/review/summary.md`) starts first and writes what
+the change does, its Change Map (API surface, data and migrations, flags and
+configuration, shared state) and its strengths: the page shows them above the
+findings while the lenses still run.
 
 The verifier (`agents/review/verifier.md`) re-reads the code behind every
 finding, checks the anchor and the claim, removes what it cannot confirm,
