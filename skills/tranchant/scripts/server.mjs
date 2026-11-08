@@ -11,6 +11,8 @@
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
 // It computes the change's diff (/api/diff) once, with git, for the page's main view.
+// It serves and writes the user's settings (/api/settings, lib/settings.mjs),
+// one write at a time, and pushes `settings` when the file changes.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -24,6 +26,16 @@ import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, statusOf } from './lib/format.mjs'
 import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
+import {
+  DEFAULTS,
+  SETTINGS_DIR,
+  SETTINGS_FILE,
+  SettingsRefusal,
+  loadSettings,
+  recipeInForce,
+  recipeLenses,
+  writeSettings,
+} from './lib/settings.mjs'
 import { trackerOf } from './lib/tracker.mjs'
 import {
   MAX_ISSUE_BODY,
@@ -168,22 +180,27 @@ function sanitiseDecision(input) {
 /** @param {string} value */
 const escapeHtml = (value) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
-/** The page's shell: the bundle draws everything in #root. */
-const SHELL = [
-  '<!doctype html>',
-  '<html lang="en">',
-  '<head>',
-  '<meta charset="utf-8">',
-  '<meta name="viewport" content="width=device-width, initial-scale=1">',
-  `<title>Tranchant · ${escapeHtml(review.title)}</title>`,
-  '</head>',
-  '<body>',
-  '<div id="root"></div>',
-  '<script type="module" src="/page.js"></script>',
-  '</body>',
-  '</html>',
-  '',
-].join('\n')
+/**
+ * The page's shell: the bundle draws everything in #root. The theme the
+ * settings pick is on `<html>` from the start, so nothing flashes.
+ * @param {'light' | 'dark' | 'system'} theme
+ */
+const shell = (theme) =>
+  [
+    '<!doctype html>',
+    `<html lang="en"${theme === 'system' ? '' : ` data-theme="${theme}"`}>`,
+    '<head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    `<title>Tranchant · ${escapeHtml(review.title)}</title>`,
+    '</head>',
+    '<body>',
+    '<div id="root"></div>',
+    '<script type="module" src="/page.js"></script>',
+    '</body>',
+    '</html>',
+    '',
+  ].join('\n')
 
 // The page draws inline SVG the producer wrote: a script in it, missed by the
 // page's sanitizer, would still not run.
@@ -215,20 +232,30 @@ async function currentHead() {
   }
 }
 
-/** @type {Promise<string | null> | undefined} */
-let account
+/** By tool, the account it posts as, asked once each. @type {Map<'glab' | 'gh', Promise<string | null>>} */
+const accounts = new Map()
 
 /**
- * The username glab posts as, read once from the project (glab takes the
- * host from its remote); null when glab cannot say, and never asked again.
+ * The username `tool` posts as, read once from the project (glab takes the
+ * host from its remote, gh too); null when the tool cannot say, and never
+ * asked again.
+ * @param {'glab' | 'gh'} tool
  */
-function accountOnce() {
-  account ??= gitExec(process.env.TRANCHANT_GLAB || 'glab', ['api', 'user'], {
+function accountOnce(tool) {
+  let account = accounts.get(tool)
+  if (account) return account
+  const command =
+    tool === 'gh'
+      ? process.env.TRANCHANT_GH || 'gh'
+      : process.env.TRANCHANT_GLAB || 'glab'
+  account = gitExec(command, ['api', 'user'], {
     cwd: existsSync(project) ? project : undefined,
     timeout: 10_000,
   })
     .then(({ stdout }) => {
-      const username = JSON.parse(stdout)?.username
+      const answer = JSON.parse(stdout)
+      // GitLab answers `username`, GitHub `login`.
+      const username = tool === 'gh' ? answer?.login : answer?.username
       return typeof username === 'string' && username.trim() ? username.trim() : null
     })
     .catch((error) => {
@@ -237,28 +264,76 @@ function accountOnce() {
       )
       return null
     })
+  accounts.set(tool, account)
   return account
 }
 
-/** @type {Promise<{ kind: string | null, web?: string, prefix?: string, reason?: string }> | undefined} */
-let tracker
+/**
+ * The CLI the settings post and open issues with: `glab` or `gh` as set,
+ * else the tracker's forge, else glab, which posts the MR comments.
+ * @param {import('./lib/settings.mjs').Values} values
+ */
+async function postingTool(values) {
+  if (values.postWith !== 'auto') return values.postWith
+  const { kind } = await trackerOnce(values)
+  return kind === 'github' ? 'gh' : 'glab'
+}
+
+/** @typedef {{ kind: string | null, web?: string, prefix?: string, reason?: string }} TrackerAnswer */
+
+/** By forge forced (`auto` when none), the tracker read once. @type {Map<string, Promise<TrackerAnswer>>} */
+const trackers = new Map()
 
 /**
  * Where the project's issues go, from its origin remote, as issue.mjs reads
- * it: the page names it and links an issue's anchor to the file on it.
+ * it: the page names it and links an issue's anchor to the file on it. The
+ * settings' `postWith` names the forge for a host neither tool recognises.
  * `kind` null, and why, when none; a failure is asked again next time.
+ * @param {import('./lib/settings.mjs').Values} values
  */
-function trackerOnce() {
-  tracker ??= trackerOf(project, { gitlab: !!review.mr }).then(
+function trackerOnce(values) {
+  const forge =
+    values.postWith === 'auto'
+      ? undefined
+      : values.postWith === 'gh'
+        ? 'github'
+        : 'gitlab'
+  const key = forge ?? 'auto'
+  let tracker = trackers.get(key)
+  if (tracker) return tracker
+  tracker = trackerOf(project, { gitlab: !!review.mr, forge }).then(
     ({ kind, web, prefix }) => ({ kind, web, prefix }),
     (error) => {
       const reason = String(error?.message ?? error)
       console.error(`tranchant server: /api/tracker: ${oneLine(reason)}`)
-      tracker = undefined
+      trackers.delete(key)
       return { kind: null, reason }
     },
   )
+  trackers.set(key, tracker)
   return tracker
+}
+
+/**
+ * What `GET /api/settings` answers: the file as it stands, the values in
+ * force, the keys an environment variable locks, and the lenses of the
+ * recipe in force, which the page lists to turn off.
+ */
+async function settingsPayload() {
+  const { settings, values, locked, problem } = await loadSettings()
+  const recipe = recipeInForce(values)
+  const lenses = await recipeLenses(recipe)
+  return {
+    path: SETTINGS_FILE,
+    settings,
+    values,
+    defaults: DEFAULTS,
+    locked,
+    recipe,
+    lenses: lenses.lenses,
+    ...(lenses.problem && { recipeProblem: lenses.problem }),
+    ...(problem && { problem }),
+  }
 }
 
 /** The most MiB of diff the server reads from git and hands the page. */
@@ -684,13 +759,14 @@ async function handle(req, res) {
   if (!origins.has(`http://${req.headers.host}`)) throw new ClientError(403)
 
   if (req.method === 'GET' && url.pathname === '/') {
+    const { values } = await loadSettings()
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'content-security-policy': CSP,
       'x-content-type-options': 'nosniff',
       'cache-control': 'no-store',
     })
-    return res.end(SHELL)
+    return res.end(shell(values.theme))
   }
 
   const chunk = CHUNK.exec(url.pathname)?.[1]
@@ -748,11 +824,26 @@ async function handle(req, res) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/account') {
-    return send(res, 200, { username: await accountOnce() })
+    const asked = url.searchParams.get('tool')
+    // `?tool=glab`: the batch bar's, since MR comments always go through glab.
+    const tool =
+      asked === 'glab' || asked === 'gh'
+        ? asked
+        : await postingTool((await loadSettings()).values)
+    return send(res, 200, { username: await accountOnce(tool), tool })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/tracker') {
-    return send(res, 200, await trackerOnce())
+    return send(res, 200, await trackerOnce((await loadSettings()).values))
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/settings') {
+    return send(res, 200, await settingsPayload())
+  }
+
+  if (req.method === 'PUT' && url.pathname === '/api/settings') {
+    const input = await readJson(req)
+    return writeSettingsInTurn(res, input)
   }
 
   if (req.method === 'GET' && url.pathname === '/api/diff') {
@@ -853,6 +944,41 @@ async function handle(req, res) {
   }
 
   return send(res, 404, { error: 'not found' })
+}
+
+/** The settings writes, one after the other: two pages saving at once never cross. @type {Promise<unknown>} */
+let settingsWriting = Promise.resolve()
+
+/**
+ * Writes the settings `input` once the writes before it ended, and answers
+ * the file as it then stands.
+ * @param {http.ServerResponse} res
+ * @param {unknown} input
+ */
+function writeSettingsInTurn(res, input) {
+  const turn = settingsWriting.then(async () => {
+    const { problem } = await loadSettings()
+    // A file this Tranchant cannot read is the person's to mend: never written over.
+    if (problem) return send(res, 409, { error: problem })
+    try {
+      await writeSettings(input)
+    } catch (error) {
+      if (error instanceof SettingsRefusal)
+        return send(res, 400, { error: error.message })
+      // The person's own file and folder: the cause may be theirs to mend (rights, disk).
+      console.error(`tranchant server: PUT /api/settings: ${oneLine(String(error))}`)
+      const code = errorCode(error)
+      return send(res, 500, {
+        error: `${SETTINGS_FILE} could not be written (${typeof code === 'string' ? code : 'error'})`,
+      })
+    }
+    // The first write makes the folder: watched from now on; every page told, this one included.
+    watchFolders()
+    settingsChanged()
+    return send(res, 200, await settingsPayload())
+  })
+  settingsWriting = turn.catch(() => undefined)
+  return turn
 }
 
 /**
@@ -969,7 +1095,8 @@ const listeners = new Set()
 /**
  * Opens a stream of server-sent events: `changed`, with the ids of the
  * findings whose decisions or steps changed, each time a file under the
- * review folder changes; `page` when a dev build replaced the bundle.
+ * review folder changes; `page` when a dev build replaced the bundle;
+ * `settings` when the settings file changed.
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  */
@@ -1141,6 +1268,33 @@ function pageChanged(_event, file) {
   }, BATCH_MS)
 }
 
+/** The settings file's size and time at the last look, or '' while it is missing. */
+function settingsStamp() {
+  try {
+    const file = statSync(SETTINGS_FILE)
+    return `${file.size} ${file.mtimeMs}`
+  } catch {
+    return ''
+  }
+}
+let settingsSeen = settingsStamp()
+/** @type {NodeJS.Timeout | undefined} */
+let settingsBatch
+
+/**
+ * Tells the pages the settings changed under them (another page, another
+ * session, an editor), once the write is over.
+ */
+function settingsChanged() {
+  clearTimeout(settingsBatch)
+  settingsBatch = setTimeout(() => {
+    const now = settingsStamp()
+    if (now === settingsSeen) return
+    settingsSeen = now
+    for (const res of listeners) res.write('event: settings\ndata: {}\n\n')
+  }, BATCH_MS)
+}
+
 /**
  * By folder, its watch and the folder's inode. The folders, not the files:
  * the store writes a temp file and renames it over the decisions file, which
@@ -1171,6 +1325,8 @@ function watchFolders() {
     [agentsDir, changeSeen],
     [discussionsDir, changeSeen],
     [path.dirname(PAGE), pageChanged],
+    // Made by the first write: watched from then on, as findings/ is.
+    [SETTINGS_DIR, settingsChanged],
   ]
   for (const [folder, onChange] of folders) {
     const ino = inodeOf(folder)
@@ -1278,6 +1434,7 @@ server.listen(port, '127.0.0.1', async () => {
   await refreshNext()
   setInterval(() => {
     watchFolders()
+    settingsChanged()
     void refreshNext()
   }, pollMs)
 })

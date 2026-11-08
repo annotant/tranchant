@@ -151,6 +151,35 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 }
 .tr-theme-toggle:hover { color: var(--tr-text); border-color: var(--tr-border); background: var(--tr-bg-3); }
 .tr-theme-toggle:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: 1px; }
+.tr-header-tools { display: flex; gap: 6px; }
+a.tr-theme-toggle { text-decoration: none; }
+.tr-theme-toggle[aria-current="page"] { color: var(--tr-accent); border-color: var(--tr-accent); background: var(--tr-accent-weak); }
+
+.tr-settings { max-width: 900px; padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 28px; overflow: auto; }
+.tr-settings-head { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.tr-settings-head h2 { font-size: 20px; font-weight: 700; }
+.tr-settings-back { display: inline-flex; align-items: center; gap: 4px; }
+.tr-settings .tr-notice { border: 1px solid var(--tr-border); border-radius: var(--tr-radius); }
+.tr-settings .tr-section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tr-muted); }
+.tr-setting { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 8px 24px; padding: 14px 0; }
+.tr-setting + .tr-setting { border-top: 1px solid var(--tr-border); }
+.tr-setting-label { font-weight: 600; }
+.tr-setting-help { margin-top: 2px; font-size: 13px; color: var(--tr-muted); }
+.tr-setting-control { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.tr-setting-value { line-height: 32px; }
+.tr-setting-default { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--tr-muted); }
+.tr-setting-default .tr-btn--link { font-size: 12px; }
+.tr-setting-lock { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tr-muted); }
+.tr-segment { display: inline-flex; gap: 6px; }
+.tr-settings .tr-input { height: 32px; padding: 0 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
+.tr-settings .tr-input:focus { outline: none; border-color: var(--tr-accent); }
+.tr-settings .tr-text { width: 100%; max-width: 380px; min-width: 0; flex: none; }
+.tr-settings .tr-number { width: 88px; min-width: 0; flex: none; }
+.tr-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; width: 100%; }
+.tr-checks label { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.tr-checks .tr-check { margin: 0; accent-color: var(--tr-accent); }
+.tr-settings .tr-input:disabled, .tr-checks .tr-check:disabled, .tr-segment .tr-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.tr-settings-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding-top: 16px; border-top: 1px solid var(--tr-border); }
 
 .tr-chip {
   display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 10px;

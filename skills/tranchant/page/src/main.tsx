@@ -1,9 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { PAGE_CSS } from './styles'
-import { applyStoredTheme } from './theme'
-
-applyStoredTheme()
 
 function mount() {
   const root = document.getElementById('root')

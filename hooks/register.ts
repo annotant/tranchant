@@ -3,7 +3,7 @@
 // `/tranchant <review.json>` (or the skill, through mcp__tranchant__open)
 // imports the review, serves its page for the session's life and reads the
 // server's lines: each fix starts its agent at once, in the background, with
-// no model turn, three at a time; a stop ends it.
+// no model turn, three at a time (the settings may say otherwise); a stop ends it.
 //
 // Claude Code runs none of this module's hooks for an agent it starts, so each
 // finding's agent is a type of its own, `tranchant:tr-<id>`, whose settings
@@ -12,7 +12,7 @@
 //
 // `/tranchant review` writes a review's envelope, opens it the same way, then
 // starts one reviewer per lens of a recipe and, as each finding lands, a
-// verifier on it, three at a time, each a type of its own
+// verifier on it, three at a time (or as the settings say), each a type of its own
 // (`tranchant:rv-<lens>-<review>`, `tranchant:vf-<id>-<review>`, `<review>` the
 // first 8 characters of the review's id) whose hooks record its steps for the
 // page. Once every one ended, the review completes.
@@ -23,6 +23,10 @@
 // The workers, the reviews served and run, the review agents and the fixes
 // handed over live in $.state, so they survive a reload of the module and
 // vanish with the session, like the agents themselves.
+//
+// The user's settings (~/.config/tranchant/settings.json, docs/settings.md)
+// choose the agents' models and how many run at a time: read anew before
+// each start, so a change applies to the next agent.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
@@ -98,7 +102,10 @@ const INHERIT = 'inherit'
 const TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']
 /** The tools hook.mjs may refuse or lock for; Read, Grep and Glob are recorded once they end. */
 const PRE_TOOLS = 'Edit|Write|Bash'
-const MAX_RUNNING = 3
+/** Agents of a kind at a time, unless the settings say otherwise. */
+const DEFAULT_CAP = 3
+/** The most the settings may ask for, as lib/settings.mjs bounds it. */
+const MAX_AGENTS = 8
 // A hook's own time is bounded: past this, the command answers and the server
 // keeps starting.
 const START_MS = 8_000
@@ -188,6 +195,100 @@ async function gitTop($: $, dir: string) {
   return said.startsWith('/') ? normalize(said) : undefined
 }
 
+/**
+ * What the hooks read from the settings: the agents' models (none, the
+ * session's) and the caps. lib/settings.mjs is the reference; this reads the
+ * same file by the same rules, a file that breaks one reading as none.
+ */
+type Settings = {
+  fixModel?: string
+  reviewModel?: string
+  verifyModel?: string
+  maxFixAgents: number
+  maxReviewAgents: number
+}
+const DEFAULT_SETTINGS: Settings = {
+  maxFixAgents: DEFAULT_CAP,
+  maxReviewAgents: DEFAULT_CAP,
+}
+const MODEL_ID = /^[\w.:-]{1,80}$/
+const SETTING_CHOICES: Record<string, readonly string[]> = {
+  theme: ['light', 'dark', 'system'],
+  view: ['diff', 'list'],
+  summary: ['open', 'closed'],
+  postWith: ['auto', 'glab', 'gh'],
+}
+const MODEL_KEYS = ['fixModel', 'reviewModel', 'verifyModel'] as const
+const CAP_KEYS = ['maxFixAgents', 'maxReviewAgents'] as const
+
+const isCap = (value: unknown) =>
+  Number.isInteger(value) && Number(value) >= 1 && Number(value) <= MAX_AGENTS
+
+/** Whether `raw` is a settings file this Tranchant reads: known keys, right types. */
+function soundSettings(raw: unknown): raw is Record<string, unknown> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+  return Object.entries(raw).every(([key, value]) => {
+    if (value === null || value === undefined) return true
+    if (key === 'version') return value === 1
+    if (Object.hasOwn(SETTING_CHOICES, key))
+      return typeof value === 'string' && SETTING_CHOICES[key]?.includes(value)
+    if ((MODEL_KEYS as readonly string[]).includes(key))
+      return typeof value === 'string' && MODEL_ID.test(value)
+    if ((CAP_KEYS as readonly string[]).includes(key)) return isCap(value)
+    // An absolute path, or `~`, `~/…`: as lib/settings.mjs reads it.
+    if (key === 'recipe')
+      return (
+        typeof value === 'string' &&
+        value.length <= 1024 &&
+        /^(?:\/|~(?:\/|$))/.test(value.trim())
+      )
+    if (key === 'disabledLenses')
+      return (
+        Array.isArray(value) &&
+        value.length <= 12 &&
+        value.every((one) => typeof one === 'string' && /^[\w-]{1,40}$/.test(one))
+      )
+    return false
+  })
+}
+
+/** An environment variable that cannot be read is unset. */
+const unset = () => undefined
+
+/**
+ * The settings file, read anew: `$XDG_CONFIG_HOME/tranchant/settings.json`,
+ * else `~/.config/tranchant/settings.json`. `TRANCHANT_MODEL` in the
+ * environment names every agent's model, whatever the file says.
+ */
+async function readSettings($: $): Promise<Settings> {
+  // Each variable named in full: Claude Code lists what a module reads.
+  const xdg = await $.env.get('XDG_CONFIG_HOME').catch(unset)
+  const home = await $.env.get('HOME').catch(unset)
+  const file = `${xdg || `${home ?? ''}/.config`}/tranchant/settings.json`
+  let raw: unknown
+  try {
+    raw = JSON.parse(await $.fs.read(file))
+  } catch {
+    raw = undefined
+  }
+  const stored = soundSettings(raw) ? raw : {}
+  const text = (key: string) =>
+    typeof stored[key] === 'string' ? stored[key] : undefined
+  const cap = (key: string) =>
+    typeof stored[key] === 'number' ? stored[key] : DEFAULT_CAP
+  const forced = (await $.env.get('TRANCHANT_MODEL').catch(unset))?.trim() || undefined
+  return {
+    fixModel: forced ?? text('fixModel'),
+    reviewModel: forced ?? text('reviewModel'),
+    verifyModel: forced ?? text('verifyModel'),
+    maxFixAgents: cap('maxFixAgents'),
+    maxReviewAgents: cap('maxReviewAgents'),
+  }
+}
+
+/** The settings, or the defaults when reading them fails. */
+const settingsOf = ($: $) => readSettings($).catch(() => DEFAULT_SETTINGS)
+
 const reviews = new Map<string, Promise<Review>>()
 
 async function loadReviewOnce($: $, dir: string): Promise<Review> {
@@ -273,9 +374,9 @@ const hookArgv = ($: $, mode: string, id: string, review: Review) => [
 ]
 
 /**
- * The agent type of one finding: the worker's instructions on the session's
- * model, and hook.mjs around each tool, the finding and review written in.
- * Re-registered for each agent the finding gets.
+ * The agent type of one finding: the worker's instructions on the model the
+ * settings choose (else the session's), and hook.mjs around each tool, the
+ * finding and review written in. Re-registered for each agent the finding gets.
  */
 async function registerFindingAgent($: $, review: Review, id: string) {
   const run = (mode: string) => [
@@ -285,7 +386,7 @@ async function registerFindingAgent($: $, review: Review, id: string) {
     name: agentName(id),
     description: `Tranchant: finding ${tag(id)}. Only the plugin's hooks start it.`,
     prompt: await readWorkerPrompt($),
-    model: INHERIT,
+    model: (await settingsOf($)).fixModel ?? INHERIT,
     tools: TOOLS,
     hooks: {
       PreToolUse: [{ matcher: PRE_TOOLS, hooks: run('pre') }],
@@ -434,14 +535,16 @@ async function workerOf($: $, agent: string) {
   return found && { id: found[0], worker: found[1] }
 }
 
-/** Agents at work, and those starting: the three the cap counts. */
+/** Agents at work, and those starting: what the cap counts. */
 async function busy($: $) {
   const all = Object.values(await read($, workers))
   return all.filter((one) => one.running).length + starting.size
 }
 
 async function startQueued($: $) {
-  while ((await busy($)) < MAX_RUNNING) {
+  // Read once per round: the next fix asked for reads the settings again.
+  const cap = (await settingsOf($)).maxFixAgents
+  while ((await busy($)) < cap) {
     const watched = [...watches.values()].find((one) => one.queue.length)
     const next = watched?.queue.shift()
     if (!watched || !next) return
@@ -449,7 +552,7 @@ async function startQueued($: $) {
   }
 }
 
-/** Starts the agents the queues hold, three at a time, one start at a time. */
+/** Starts the agents the queues hold, as many at a time as the settings say, one start at a time. */
 function pump($: $) {
   dispatching = dispatching.then(() => startQueued($)).catch(ignore)
   return dispatching
@@ -721,7 +824,7 @@ function startedText(watched: Watch, first: string | undefined, again: boolean) 
     case 'READY':
       return [
         `Tranchant ${again ? 'already serves' : 'serves'} ${title} at ${rest[0] ?? ''}.`,
-        'Settle the findings in the page: each fix starts an agent in the background at once, three at a time, even while you work with Claude here.',
+        "Settle the findings in the page: each fix starts an agent in the background at once, a few at a time (the page's Settings say how many), even while you work with Claude here.",
         'The server stops with this session; /tranchant status says what runs, /tranchant stop ends it.',
       ].join('\n')
     case 'PORT_BUSY':
@@ -857,8 +960,9 @@ async function statusText($: $) {
   ])
   if (!dirs.size)
     return 'Tranchant is not serving any review in this session: /tranchant <review.json> or /tranchant review starts it.'
+  const settings = await settingsOf($)
   const lines = [
-    `Tranchant: ${running.length + starting.size} of ${MAX_RUNNING} agents at work in this session.`,
+    `Tranchant: ${running.length + starting.size} of ${settings.maxFixAgents} agents at work in this session.`,
   ]
   for (const dir of dirs) {
     const review = await loadReview($, dir).catch(() => undefined)
@@ -1012,7 +1116,7 @@ async function workerDone($: $, agent: string, answer: string) {
 
 // ---------------------------------------------------------------------------
 // `/tranchant review`: the review written and served first, then one reviewer
-// per lens and one verifier per finding that lands, three at a time, started
+// per lens and one verifier per finding that lands, three at a time (or as the settings say), started
 // with no model turn; once every one ended, the review completes.
 
 /** Review agents starting, by key: their review folder, and whether a stop came meanwhile. */
@@ -1020,7 +1124,6 @@ const startingReview = new Map<string, { dir: string; since: number; stop: boole
 let reviewDispatching: Promise<void> = Promise.resolve()
 let completing: Promise<void> = Promise.resolve()
 
-const MAX_REVIEWING = 3
 const REVIEW_USAGE =
   'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]'
 
@@ -1097,8 +1200,9 @@ async function reviewNote(
 
 /**
  * The agent type of one review agent: its instructions, `prompt` (a lens's
- * file, or the verifier's), on the session's model, read-only tools, and
- * hook.mjs around them, recording its steps.
+ * file, or the verifier's), on the model the settings choose for its kind
+ * (a discusser reads as a reviewer does; none, the session's), read-only
+ * tools, and hook.mjs around them, recording its steps.
  */
 async function registerReviewAgent(
   $: $,
@@ -1115,11 +1219,12 @@ async function registerReviewAgent(
         .join(' '),
     },
   ]
+  const settings = await settingsOf($)
   const { agent } = await $.agent.register({
     name: reviewAgentType(name, review),
     description: `Tranchant: ${kind} ${tag(name)}. Only the plugin's hooks start it.`,
     prompt: (await $.fs.read(prompt)).replace(FRONTMATTER, ''),
-    model: INHERIT,
+    model: (kind === 'verifier' ? settings.verifyModel : settings.reviewModel) ?? INHERIT,
     tools: REVIEW_TOOLS,
     hooks: {
       PreToolUse: [{ matcher: 'Bash', hooks: run('pre') }],
@@ -1177,14 +1282,15 @@ const reviewInstructions = ($: $, job: ReviewJob) =>
     ? job.lens.prompt
     : `${$.plugin.root}/agents/${job.kind === 'verifier' ? 'review/verifier' : 'discuss'}.md`
 
-/** Review agents at work and starting, the three the cap counts. */
+/** Review agents at work and starting, what the cap counts. */
 async function busyReviewing($: $) {
   const all = Object.values(await read($, reviewAgents))
   return all.filter((one) => one.running).length + startingReview.size
 }
 
 async function startReviewQueued($: $) {
-  while ((await busyReviewing($)) < MAX_REVIEWING) {
+  const cap = (await settingsOf($)).maxReviewAgents
+  while ((await busyReviewing($)) < cap) {
     let next: { dir: string; job: ReviewJob } | undefined
     await update($, reviewRuns, (all) => {
       const dir = Object.keys(all).find((one) => all[one]?.queue.length)
@@ -1210,7 +1316,7 @@ async function startReviewQueued($: $) {
   }
 }
 
-/** Starts the review agents the queues hold, three at a time, one start at a time. */
+/** Starts the review agents the queues hold, as many at a time as the settings say, one start at a time. */
 function pumpReviews($: $) {
   reviewDispatching = reviewDispatching
     .then(() => startReviewQueued($))
@@ -1571,6 +1677,11 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   })
   if (!inbox || !lenses.length)
     return `Tranchant could not prepare the review: ${short(ran.stderr.trim() || `prepare.mjs exited ${ran.exitCode}`, 300)}`
+  // A settings file prepare.mjs could not read: the review ran on the defaults, said.
+  const settingsNote = ran.stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('settings: '))
   const found = await reviewDir($, inbox, true)
   if ('error' in found) return found.error
   const { dir } = found
@@ -1591,6 +1702,9 @@ async function startReview($: $, target: string | undefined, recipe: string | un
     `Reviewing with ${lenses.length} lens(es): ${lenses.map((lens) => lens.name).join(', ')}. Findings land on the page as the reviewers find them, each verified in turn.`,
     ...(unread.length
       ? [`prepare.mjs printed lenses that are not JSON, left out: ${unread.join('; ')}`]
+      : []),
+    ...(settingsNote
+      ? [`The settings were not read, the defaults apply: ${short(settingsNote, 300)}`]
       : []),
     served,
   ].join('\n')
@@ -1616,8 +1730,9 @@ async function reviewStatus($: $, dir: string) {
   const queue = (run?.queue ?? []).map(
     (job, index) => `${index + 1}. ${reviewAgentName(job)}`,
   )
+  const cap = (await settingsOf($)).maxReviewAgents
   return [
-    `  Reviewing${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${MAX_REVIEWING} review agents at work.`,
+    `  Reviewing${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${cap} review agents at work.`,
     ...lines.map((line) => `    ${line}`),
     ...(queue.length
       ? ['  Review agents waiting, in order:', ...queue.map((one) => `    ${one}`)]

@@ -23,6 +23,8 @@ const TITLE = 'Classification overview'
 const READY = `READY http://127.0.0.1:4599 review=rev-1 project=${ROOT}`
 const HEAD = '3552e3ef0c1d'
 const INBOX = '/home/u/.cache/tranchant/inbox/rev-1.json'
+/** The user's settings, where the hooks read them with HOME alone. */
+const SETTINGS = '/home/u/.config/tranchant/settings.json'
 const lens = (name: string) =>
   `LENS ${JSON.stringify({ name, prompt: `/lenses/${name}.md`, paths: ['**'] })}`
 /** prepare.mjs's lines: the envelope it wrote, and two lenses. */
@@ -45,6 +47,7 @@ const ok = (stdout: string, exitCode = 0) => ({
 /** `preparing`: what prepare.mjs prints; `pending`: what each `verify.mjs --pending` prints, in turn. */
 /** `spawnRefused`: why every spawn is refused; `completeSays`: complete.mjs's refusal, exit 2. */
 /** `unreadable`: the review's review.json, which the hooks cannot load; `mr`: its MR. */
+/** `settings`: the user's settings file, as JSON; `env`: the session's environment, besides HOME. */
 function world(
   on: On,
   {
@@ -58,6 +61,8 @@ function world(
     completeSays,
     unreadable,
     mr,
+    settings,
+    env = {},
   }: {
     spawnRefused?: string
     completeSays?: string
@@ -69,6 +74,8 @@ function world(
     preparing?: string
     pending?: string[]
     mr?: { diffRefs: { baseSha: string; headSha: string; startSha: string } }
+    settings?: unknown
+    env?: Record<string, string>
   } = {},
 ) {
   const files = new Map<string, string>([
@@ -102,6 +109,7 @@ function world(
     ],
   ])
   if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
+  if (settings !== undefined) files.set(SETTINGS, JSON.stringify(settings))
   for (const id of ['f-02', 'f-03', 'f-04']) {
     files.set(`${DIR}/findings/${id}.json`, JSON.stringify({ id }))
     files.set(
@@ -260,7 +268,7 @@ function world(
     if (e.key === 'serving') seed = undefined
     return next(e)
   })
-  mock.env(on, { HOME: '/home/u' })
+  mock.env(on, { HOME: '/home/u', ...env })
   const clock = mock.clock(on, { now: 1_000 })
 
   // The review's server: the lines the test prints, until it ends.
@@ -557,6 +565,107 @@ test('each fix starts its agent at once, three at a time', async ($, on) => {
     'tranchant:tr-f-03',
     'tranchant:tr-f-04',
   ])
+  await w.exit(0)
+})
+
+test("the settings choose the agents' models and how many run at a time", async ($, on) => {
+  const w = world(on, {
+    settings: {
+      version: 1,
+      fixModel: 'claude-haiku-5-5',
+      reviewModel: 'opus',
+      verifyModel: 'haiku',
+      maxFixAgents: 1,
+      maxReviewAgents: 2,
+    },
+  })
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'))
+  // One fix at a time: the second waits.
+  expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:tr-f-01'])
+  expect(w.registered.get('tranchant:tr-f-01')?.model).toBe('claude-haiku-5-5')
+  expect((await $.command.run(command('status'))).text).toMatch(
+    /^Tranchant: 1 of 1 agents at work in this session\./,
+  )
+  // Read again for the next start: a change applies to it, never to an agent running.
+  w.files.set(
+    SETTINGS,
+    JSON.stringify({ version: 1, fixModel: 'sonnet', maxFixAgents: 2 }),
+  )
+  await w.print(fix('f-03'))
+  expect(w.spawned.map((one) => one.type)).toEqual([
+    'tranchant:tr-f-01',
+    'tranchant:tr-f-02',
+  ])
+  expect(w.registered.get('tranchant:tr-f-02')?.model).toBe('sonnet')
+  await w.exit(0)
+})
+
+test('the review agents take their models from the settings, reviewers and verifiers apart, under their own cap', async ($, on) => {
+  const w = world(on, {
+    settings: {
+      version: 1,
+      reviewModel: 'opus',
+      verifyModel: 'haiku',
+      maxReviewAgents: 2,
+    },
+  })
+  await review($, w)
+  await w.print('LANDED bugs-1')
+  // Two review agents at a time: both reviewers run, the verifier waits.
+  expect(w.spawned.map((one) => one.type)).toEqual([
+    'tranchant:rv-bugs-rev-1',
+    'tranchant:rv-style-rev-1',
+  ])
+  expect(w.registered.get('tranchant:rv-bugs-rev-1')?.model).toBe('opus')
+  expect((await $.command.run(command('status'))).text).toContain(
+    '  Reviewing: 2 of 2 review agents at work.',
+  )
+  await $.turn.complete(turnEnded('a1', 'Added 1 finding.'))
+  await w.clock.settle()
+  expect(w.spawned.map((one) => one.type).at(-1)).toBe('tranchant:vf-bugs-1-rev-1')
+  expect(w.registered.get('tranchant:vf-bugs-1-rev-1')?.model).toBe('haiku')
+  await w.exit(0)
+})
+
+test('TRANCHANT_MODEL wins over the settings, which still set the caps', async ($, on) => {
+  const w = world(on, {
+    settings: { version: 1, fixModel: 'claude-haiku-5-5', maxFixAgents: 2 },
+    env: { TRANCHANT_MODEL: 'claude-opus-5-5' },
+  })
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'))
+  expect(w.spawned).toHaveLength(2)
+  expect(w.registered.get('tranchant:tr-f-01')?.model).toBe('claude-opus-5-5')
+  await w.exit(0)
+})
+
+test('a settings file that breaks a rule reads as none, as the server reads it', async ($, on) => {
+  // A relative recipe: refused by lib/settings.mjs, so by the hooks too.
+  const w = world(on, {
+    settings: {
+      version: 1,
+      fixModel: 'claude-haiku-5-5',
+      maxFixAgents: 1,
+      recipe: 'mine.json',
+    },
+  })
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'))
+  expect(w.spawned).toHaveLength(3)
+  expect(w.registered.get('tranchant:tr-f-01')?.model).toBe('inherit')
+  await w.exit(0)
+})
+
+test('XDG_CONFIG_HOME names the settings folder, as it does for the server', async ($, on) => {
+  const w = world(on, { env: { XDG_CONFIG_HOME: '/xdg' } })
+  w.files.set(
+    '/xdg/tranchant/settings.json',
+    JSON.stringify({ version: 1, maxFixAgents: 1 }),
+  )
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'))
+  expect(w.spawned).toHaveLength(1)
   await w.exit(0)
 })
 

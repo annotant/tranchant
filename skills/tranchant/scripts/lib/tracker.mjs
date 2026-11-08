@@ -96,10 +96,13 @@ const field = (/** @type {unknown} */ value, /** @type {string} */ key) =>
 /**
  * The tracker of the checkout at `project`: its `origin` remote's project.
  * @param {string} project
- * @param {{ gitlab?: boolean }} [options] `gitlab`: the review has a GitLab MR.
+ * @param {{ gitlab?: boolean, forge?: 'github' | 'gitlab' }} [options] `gitlab`: the
+ * review has a GitLab MR. `forge`: the settings' choice, for a host neither
+ * tool recognises; a host the other forge owns is refused, so a token never
+ * goes to the wrong forge.
  * @returns {Promise<Tracker>} Rejects with the reason there is none.
  */
-export async function trackerOf(project, { gitlab = false } = {}) {
+export async function trackerOf(project, { gitlab = false, forge } = {}) {
   if (!existsSync(project)) throw new Error(`the project ${project} is not there`)
   const git = (/** @type {string[]} */ args) =>
     exec('git', ['-C', project, ...args], { timeout: 5000 }).then(({ stdout }) =>
@@ -127,7 +130,12 @@ export async function trackerOf(project, { gitlab = false } = {}) {
   }
   const where = webOfRemote(remote)
   if (!where) throw new Error(`the origin remote is not a url: ${remote}`)
-  const kind = forgeOf(where.host, gitlab)
+  const named = forgeOf(where.host, gitlab)
+  if (forge && named && named !== forge)
+    throw new Error(
+      `the origin's host ${where.host} is on ${named === 'github' ? 'GitHub' : 'GitLab'}: the settings' ${forge === 'github' ? 'gh' : 'glab'} cannot open issues there`,
+    )
+  const kind = forge ?? named
   if (!kind)
     throw new Error(`the origin's host ${where.host} is neither GitHub nor GitLab`)
   const prefix = await git(['rev-parse', '--show-prefix'])

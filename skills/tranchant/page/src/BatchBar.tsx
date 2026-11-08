@@ -81,7 +81,8 @@ export function BatchBar({
 }: Props) {
   const [pending, setPending] = useState<Pending>()
   const posting = canPost(review)
-  const account = useAccount(posting)
+  // MR comments go through glab whatever the settings' issue tool: that login.
+  const account = useAccount(posting, 'glab')?.username
   const byId = new Map(ordered.map((finding) => [finding.id, finding]))
   // In the list's order: the batch runs top to bottom.
   const all = ordered.map((finding) => finding.id)

@@ -19,6 +19,7 @@ import {
   ORDER,
   payload,
   record,
+  settingsPayload,
   STACKED,
 } from './fixture'
 
@@ -406,7 +407,7 @@ test('clicking a row opens it; the detail shows the excerpt, related and the dia
   expect(screen.getByText('The admin branch bypasses the tenant check.')).toBeDefined()
 })
 
-test('the summary renders the Markdown and the strengths, and remembers being closed', async () => {
+test('the summary renders the Markdown and the strengths, and opens as the settings say', async () => {
   await renderApp()
   const summary = screen.getByText('Summary').closest('details')
   expect(summary?.open).toBe(true)
@@ -415,10 +416,14 @@ test('the summary renders the Markdown and the strengths, and remembers being cl
   expect(screen.getByRole('heading', { name: 'What looks good' })).toBeDefined()
   expect(screen.getByText('Tests cover the empty state.')).toBeDefined()
   cleanup()
-  localStorage.setItem('tranchant:summary', 'closed')
+  const server = fakeServer(payload())
+  server.answerSettings(settingsPayload({ summary: 'closed' }))
   render(<App />)
   const closed = (await screen.findByText('Summary')).closest('details')
   expect(closed?.open).toBe(false)
+  // Opening it is for this visit: nothing is written to the settings.
+  fireEvent(closed!, new Event('toggle'))
+  expect(server.settingsPut()).toBeUndefined()
 })
 
 test('an empty summary without strengths shows no Summary section', async () => {
@@ -656,8 +661,8 @@ test('j/k walk the findings in the diff’s order, across files; a marker click 
   ).toHaveProperty('checked', true)
 })
 
-test('the list view is a toggle, remembered across loads', async () => {
-  await renderDiffApp()
+test('the list view is a toggle for the visit; the settings say which view opens', async () => {
+  const server = await renderDiffApp()
   fireEvent.click(screen.getByRole('button', { name: 'List' }))
   expect(
     screen.getAllByRole('option').map((o) => o.id.replace('tr-option-', '')),
@@ -667,10 +672,12 @@ test('the list view is a toggle, remembered across loads', async () => {
     'Null tenantId crashes the loop',
   )
   expect(screen.queryByRole('region', { name: 'Diff' })).toBeNull()
-  expect(localStorage.getItem('tranchant:view')).toBe('list')
+  expect(server.settingsPut()).toBeUndefined()
   cleanup()
+  server.answerSettings(settingsPayload({ view: 'list' }))
   render(<App />)
   await screen.findByRole('heading', { name: TITLE })
+  await screen.findByRole('navigation', { name: 'Findings' })
   expect(screen.getAllByRole('option')).toHaveLength(5)
   fireEvent.click(screen.getByRole('button', { name: 'Diff' }))
   await screen.findByRole('region', { name: 'Diff' })
@@ -942,13 +949,32 @@ test('a review done names its stopped lenses together, and no verified count unl
   expect(agents.textContent).not.toContain('verified')
 })
 
-test('the header has the button that switches the theme', async () => {
-  await renderApp()
+test('the header switches the theme through the settings, for every page', async () => {
+  const server = await renderApp()
   const header = document.querySelector<HTMLElement>('.tr-header')
   expect(header).not.toBeNull()
-  expect(
-    within(header!).getByRole('button', { name: /^Switch to (dark|light) theme$/ }),
-  ).toBeTruthy()
+  const toggle = within(header!).getByRole('button', {
+    name: /^Switch to (dark|light) theme$/,
+  })
+  const other = /dark/.test(toggle.getAttribute('aria-label') ?? '') ? 'dark' : 'light'
+  fireEvent.click(toggle)
+  await waitFor(() => expect(server.settingsPut()).toEqual({ theme: other }))
+  await waitFor(() =>
+    expect(document.documentElement.getAttribute('data-theme')).toBe(other),
+  )
+})
+
+test('the gear opens the Settings, and leads back to the review', async () => {
+  await renderApp()
+  const header = document.querySelector<HTMLElement>('.tr-header')
+  fireEvent.click(within(header!).getByRole('link', { name: 'Settings' }))
+  expect(await screen.findByRole('heading', { name: 'Settings' })).toBeDefined()
+  expect(screen.queryByRole('navigation', { name: 'Findings' })).toBeNull()
+  // The shortcuts are the review's: none fires here.
+  fireEvent.keyDown(document, { key: 'd' })
+  fireEvent.click(screen.getByRole('link', { name: 'Back to the review' }))
+  expect(await screen.findByRole('navigation', { name: 'Findings' })).toBeDefined()
+  expect(screen.queryByRole('heading', { name: 'Settings' })).toBeNull()
 })
 
 test('a message in a discussion goes to /api/discuss; a refusal shows and keeps it', async () => {

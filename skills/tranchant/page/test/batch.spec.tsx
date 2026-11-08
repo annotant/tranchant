@@ -177,8 +177,9 @@ test('confirming a post names the merge request, the account and each finding', 
   ])
 })
 
+// glab's account by name: MR comments go through glab whatever the settings' issue tool.
 const askedAccount = (server: ReturnType<typeof fakeServer>) =>
-  server.fetch.mock.calls.some(([url]) => url === '/api/account')
+  server.fetch.mock.calls.some(([url]) => url === '/api/account?tool=glab')
 
 for (const [what, account] of [
   ['glab cannot read', { username: null }],

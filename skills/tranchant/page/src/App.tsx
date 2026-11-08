@@ -7,6 +7,7 @@ import {
   postStop,
   useDiff,
   useReview,
+  useSettings,
   useTracker,
 } from './api'
 import { BatchBar } from './BatchBar'
@@ -34,18 +35,28 @@ import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
 import { Markdown } from './markdown'
 import { ReviewAgents } from './ReviewAgents'
-import { readStored, writeStored } from './storage'
-import { ThemeToggle } from './ThemeToggle'
+import type { View } from './settings'
+import { SettingsView } from './SettingsView'
+import { applyTheme, type Theme } from './theme'
+import { SettingsLink, ThemeToggle } from './ThemeToggle'
 
-const SUMMARY_KEY = 'tranchant:summary'
-const VIEW_KEY = 'tranchant:view'
 const NO_SECTIONS: readonly Section[] = []
 
-/** The main view: the change's diff, or the findings by bucket and topic. */
-type View = 'diff' | 'list'
+/** What the page shows: the review, or the Settings (`#settings`). */
+type Route = 'review' | 'settings'
 
-const readView = (): View => (readStored(VIEW_KEY) === 'list' ? 'list' : 'diff')
-const readSummaryOpen = () => readStored(SUMMARY_KEY) !== 'closed'
+const readRoute = (): Route => (location.hash === '#settings' ? 'settings' : 'review')
+
+/** The route the URL's hash names, following the gear and the browser's back. */
+function useRoute(): Route {
+  const [route, setRoute] = useState<Route>(readRoute)
+  useEffect(() => {
+    const onChange = () => setRoute(readRoute())
+    window.addEventListener('hashchange', onChange)
+    return () => window.removeEventListener('hashchange', onChange)
+  }, [])
+  return route
+}
 
 const isEditing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
@@ -55,13 +66,19 @@ function Header({
   review,
   tally,
   moved,
+  settingsOpen,
   onNeedsYou,
+  onTheme,
 }: {
   review: Review
   tally: ReturnType<typeof counts>
   moved: boolean
+  /** The Settings are shown: the gear leads back. */
+  settingsOpen: boolean
   /** Opens the next finding waiting on the reviewer. */
   onNeedsYou: () => void
+  /** The theme toggle: written to the settings, for every page. */
+  onTheme: (theme: Theme) => void
 }) {
   return (
     <header className="tr-header">
@@ -155,7 +172,10 @@ function Header({
         ))}
       </dl>
       <div className="tr-header-end">
-        <ThemeToggle />
+        <div className="tr-header-tools">
+          <SettingsLink open={settingsOpen} />
+          <ThemeToggle onPick={onTheme} />
+        </div>
         <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
       </div>
     </header>
@@ -213,13 +233,30 @@ function ViewToggle({
 }
 
 export default function App() {
-  const { payload, reachable, loaded, reload } = useReview()
-  const tracker = useTracker()
+  const settings = useSettings()
+  const { tracker, reload: reloadTracker } = useTracker()
+  const { reload: reloadSettings } = settings
+  // The settings changed under the page: `postWith` moves the tracker too.
+  const onSettings = useCallback(
+    () => Promise.all([reloadSettings(), reloadTracker()]).then(() => undefined),
+    [reloadSettings, reloadTracker],
+  )
+  const { payload, reachable, loaded, reload } = useReview(onSettings)
+  const route = useRoute()
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [cursorState, setCursor] = useState<string>()
   const [openState, setOpenId] = useState<string>()
-  const [summaryOpen, setSummaryOpen] = useState(readSummaryOpen)
-  const [view, setView] = useState<View>(readView)
+  // The session's picks; absent, the settings decide, as when a review opens.
+  const [summaryPick, setSummaryOpen] = useState<boolean>()
+  const [viewPick, setView] = useState<View>()
+  const values = settings.payload?.values
+  const summaryOpen = summaryPick ?? values?.summary !== 'closed'
+  const view: View = viewPick ?? values?.view ?? 'diff'
+  const theme = values?.theme
+  // The server put the pick on <html> before the page loaded; this follows a change.
+  useEffect(() => {
+    if (theme) applyTheme(theme)
+  }, [theme])
   const [notice, setNotice] = useState<string>()
   // A decision left no open finding to move to: the detail says so until the reviewer opens one.
   const [settled, setSettled] = useState(false)
@@ -399,7 +436,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!review) return undefined
+    if (!review || route !== 'review') return undefined
     function onKey(event: KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey || isEditing(event.target))
         return
@@ -433,9 +470,21 @@ export default function App() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [review, ordered, cursor, openId, records, disabled, decide, decideShown, toggle])
+  }, [
+    review,
+    route,
+    ordered,
+    cursor,
+    openId,
+    records,
+    disabled,
+    decide,
+    decideShown,
+    toggle,
+  ])
 
-  if (!loaded) return <div className="tr-loading">Loading the review…</div>
+  if (!loaded || !settings.loaded)
+    return <div className="tr-loading">Loading the review…</div>
   if (!review) {
     return (
       <div className="tr-app">
@@ -449,6 +498,49 @@ export default function App() {
   const tally = counts(review, records)
   const moved =
     payload?.head.current !== null && payload?.head.current !== payload?.head.reviewed
+  const header = (
+    <Header
+      review={review}
+      tally={tally}
+      moved={moved}
+      settingsOpen={route === 'settings'}
+      onNeedsYou={openNextNeedingYou}
+      onTheme={(next) => {
+        // No settings read yet (an older server): the switch holds for this visit.
+        if (!settings.payload) applyTheme(next)
+        else void settings.save((stored) => ({ ...stored, theme: next }))
+      }}
+    />
+  )
+  const settingsNotice = settings.error && (
+    <p className="tr-notice" role="status">
+      The change was not kept: {settings.error}
+      <button type="button" className="tr-btn tr-btn--link" onClick={settings.dismiss}>
+        dismiss
+      </button>
+    </p>
+  )
+  if (route === 'settings') {
+    return (
+      <div className="tr-app">
+        {!reachable && (
+          <div className="tr-banner" role="alert">
+            Tranchant stopped serving this review. Settings are read-only until it is
+            back; retrying every 5 seconds…
+          </div>
+        )}
+        {header}
+        <SettingsView
+          settings={settings.payload}
+          offline={!reachable}
+          unavailable={settings.unavailable}
+          error={settings.error}
+          onDismiss={settings.dismiss}
+          onSave={(change) => void settings.save(change)}
+        />
+      </div>
+    )
+  }
   const current = ordered.find((finding) => finding.id === openId)
   const keys = (
     <p className="tr-keys tr-muted">
@@ -466,7 +558,6 @@ export default function App() {
         setOpenId(openId)
         setCursor(cursor)
         setView(next)
-        writeStored(VIEW_KEY, next)
       }}
     />
   )
@@ -514,12 +605,7 @@ export default function App() {
           Tranchant stopped serving this review. Retrying every 5 seconds…
         </div>
       )}
-      <Header
-        review={review}
-        tally={tally}
-        moved={moved}
-        onNeedsYou={openNextNeedingYou}
-      />
+      {header}
       <ReviewAgents
         agents={(payload?.reviewers ?? []).map((agent) =>
           // An agent whose end step was never written ended with its review all the same.
@@ -535,11 +621,7 @@ export default function App() {
         <details
           className="tr-summary"
           open={summaryOpen}
-          onToggle={(event) => {
-            const next = event.currentTarget.open
-            setSummaryOpen(next)
-            writeStored(SUMMARY_KEY, next ? 'open' : 'closed')
-          }}
+          onToggle={(event) => setSummaryOpen(event.currentTarget.open)}
         >
           <summary>Summary</summary>
           <div className="tr-summary-body">
@@ -567,6 +649,7 @@ export default function App() {
         onSelect={(ids) => setSelected(new Set(ids))}
         onDecide={decide}
       />
+      {settingsNotice}
       {notice && (
         <p className="tr-notice" role="status">
           {notice}

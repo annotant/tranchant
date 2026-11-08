@@ -1,6 +1,7 @@
 import { act } from '@testing-library/react'
 import { expect, vi } from 'vitest'
 import type { AccountPayload, ChangesPayload, DiffPayload } from '../src/api'
+import type { SettingsPayload, SettingsValues, StoredSettings } from '../src/settings'
 import type {
   DecisionInput,
   Finding,
@@ -381,6 +382,59 @@ export function payload({
 export interface Post {
   url: string
   body: unknown
+  /** `PUT` for the settings; absent, a POST. */
+  method?: string
+}
+
+const SETTINGS_DEFAULTS: SettingsValues = {
+  theme: 'system',
+  view: 'diff',
+  summary: 'open',
+  fixModel: null,
+  reviewModel: null,
+  verifyModel: null,
+  maxFixAgents: 3,
+  maxReviewAgents: 3,
+  recipe: null,
+  disabledLenses: [],
+  postWith: 'auto',
+}
+
+export const LENSES = [
+  'correctness',
+  'types',
+  'accessibility',
+  'performance',
+  'security',
+  'tests',
+  'conventions',
+  'bugs',
+]
+
+const isStored = (value: unknown): value is StoredSettings =>
+  !!value && typeof value === 'object' && !Array.isArray(value)
+
+/** What `/api/settings` answers for the file `stored`, as the server computes it. */
+export function settingsPayload(
+  stored: StoredSettings = {},
+  extra: Partial<SettingsPayload> = {},
+): SettingsPayload {
+  const locked = extra.locked ?? {}
+  const values = { ...SETTINGS_DEFAULTS, ...stored }
+  for (const key of Object.keys(locked)) {
+    if (key === 'fixModel' || key === 'reviewModel' || key === 'verifyModel')
+      values[key] = 'claude-sonnet-5-5'
+  }
+  return {
+    path: '/Users/me/.config/tranchant/settings.json',
+    settings: stored,
+    values,
+    defaults: SETTINGS_DEFAULTS,
+    locked,
+    recipe: '/plugin/agents/review/recipe.json',
+    lenses: LENSES,
+    ...extra,
+  }
 }
 
 const isDecision = (value: unknown): value is DecisionInput =>
@@ -426,10 +480,33 @@ export function fakeServer(
   let down = false
   /** What `/api/discuss` refuses with, as the server words it; undefined, it takes the message. */
   let discussRefusal: string | undefined
+  /** The settings file as the server holds it; a PUT replaces it, as the server does. */
+  let settings: SettingsPayload | undefined = settingsPayload()
+  /** What a PUT of the settings is refused with (400); undefined, it is applied. */
+  let settingsRefusal: string | undefined
   const posts: Post[] = []
   const fetch = vi.fn(async (input: string, init?: RequestInit) => {
     if (down) throw new TypeError('Failed to fetch')
     const url = new URL(input, 'http://127.0.0.1')
+    if (init?.method === 'PUT' && url.pathname === '/api/settings') {
+      const body: unknown =
+        typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+      posts.push({ url: url.pathname, body, method: 'PUT' })
+      if (settingsRefusal !== undefined)
+        return Response.json({ error: settingsRefusal }, { status: 400 })
+      // The body is the whole file: what the test sends is what the server keeps.
+      const stored: StoredSettings = isStored(body) ? body : {}
+      settings = settingsPayload(stored, {
+        ...(settings?.locked && { locked: settings.locked }),
+        ...(settings?.lenses && { lenses: settings.lenses }),
+      })
+      return Response.json(settings)
+    }
+    if (url.pathname === '/api/settings') {
+      return settings
+        ? Response.json(settings)
+        : Response.json({ error: 'not found' }, { status: 404 })
+    }
     if (init?.method === 'POST') {
       const body: unknown =
         typeof init.body === 'string' ? JSON.parse(init.body) : undefined
@@ -491,6 +568,15 @@ export function fakeServer(
     refuseDiscuss(reason: string | undefined) {
       discussRefusal = reason
     },
+    /** undefined: a server without the route, which answers 404. */
+    answerSettings(next: SettingsPayload | undefined) {
+      settings = next
+    },
+    refuseSettings(reason: string | undefined) {
+      settingsRefusal = reason
+    },
+    /** The settings the last PUT carried. */
+    settingsPut: () => posts.findLast((post) => post.method === 'PUT')?.body,
     down() {
       down = true
     },

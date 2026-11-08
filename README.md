@@ -51,7 +51,7 @@ wrong.
   finding keeps its own state.
 - **No session waits on another.** The plugin's hooks read the server and
   start each fix's agent at once, in the background, with no model turn.
-  Three agents run at a time; a fourth starts when one ends. Each agent takes
+  Three agents run at a time (or as many as the Settings say); the next starts when one ends. Each agent takes
   a per-file lock before every write, so two agents never edit the same file
   at once, and Bash commands that write files are refused.
 
@@ -141,7 +141,7 @@ run script.
 `/tranchant review` takes `--recipe <file>` to use your own lenses instead of
 the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)).
 A lens whose globs the change does not touch is skipped. Three review agents
-run at a time; nothing is written in the reviewed working tree (a merge
+run at a time (the Settings say how many); nothing is written in the reviewed working tree (a merge
 request's head is fetched when the checkout lacks it). On a branch, `glab`
 looks for the branch's open MR: found, the page offers posting next to
 fixing; not found, or `glab` missing or logged out, the review goes on with
@@ -188,6 +188,22 @@ In the page:
 
 Nothing is committed or pushed: the fixes wait on your branch for your
 review.
+
+### Settings
+
+The gear next to the theme toggle opens **Settings**, every option of
+Tranchant in one page, grouped, each with its value, its default, one line
+on what it does and a **Reset**: the theme, the view and the summary a
+review opens with; the model of the fix agents, the reviewers and the
+verifiers (the session's by default) and how many fix agents and review
+agents run at a time; the default recipe of `/tranchant review` and the
+lenses turned on; the CLI that opens issues (`glab`, `gh`, or whichever the
+remote names) and the account it posts as. A change applies to the next
+agent, review or post, never to an agent already running. The settings are
+kept in `~/.config/tranchant/settings.json` (`$XDG_CONFIG_HOME/tranchant/settings.json`
+when the variable is set), one file for every review on the machine; an option an environment variable sets
+(`TRANCHANT_MODEL`) shows read-only, the variable named. See
+[the settings file](docs/settings.md).
 
 ## Troubleshooting
 
