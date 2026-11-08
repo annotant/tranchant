@@ -132,3 +132,46 @@ for (const scheme of ['light', 'dark'] as const)
     })
     expect(failing).toEqual([])
   })
+
+test('the text is Figtree, under a name of its own, upright and italic', () => {
+  const faces = [...PAGE_CSS.matchAll(/@font-face \{([^}]*)\}/g)].map(
+    (face) => face[1] ?? '',
+  )
+  expect(faces.map((face) => /font-style: (\w+)/.exec(face)?.[1])).toEqual([
+    'normal',
+    'italic',
+  ])
+  expect(faces.every((face) => face.includes("font-family: 'Tranchant Figtree'"))).toBe(
+    true,
+  )
+  expect(faces.every((face) => face.includes('font-display: swap'))).toBe(true)
+  // Rebalanced, or the text sits high in its buttons.
+  expect(
+    faces.every((face) => face.includes('ascent-override: 100%; descent-override: 20%')),
+  ).toBe(true)
+  expect(/--tr-font: ([^;]+);/.exec(PAGE_CSS)?.[1]).toMatch(
+    /^'Tranchant Figtree', system-ui,/,
+  )
+  expect(/--tr-mono: ([^;]+);/.exec(PAGE_CSS)?.[1]).not.toContain('Figtree')
+})
+
+for (const scheme of ['light', 'dark'] as const)
+  test(`the ${scheme} inline code is a chip set apart from the prose, read at 4.5:1`, () => {
+    // The only rule on a code in Markdown, so fenced code inside a pre never gets the chip.
+    expect(
+      [...PAGE_CSS.matchAll(/\.tr-md[^{}]*\bcode\b[^{}]*\{/g)].map((m) => m[0]),
+    ).toEqual(['.tr-md :not(pre) > code {'])
+    const rules = [...PAGE_CSS.matchAll(/\.tr-md :not\(pre\) > code\s*\{([^}]*)\}/g)]
+    const rule = rules[0]![1]!
+    expect(rule).toContain('background: var(--tr-bg-3)')
+    expect(rule).toContain('border: 1px solid var(--tr-border)')
+    expect(rule).toContain('box-decoration-break: clone')
+    const get = palette(scheme)
+    const chip = rgb(get('bg-3'))[0]
+    expect(contrast(rgb(get('text'))[0], chip)).toBeGreaterThanOrEqual(4.5)
+    // The border, not the fill, is what separates the chip from the page and from a panel.
+    for (const surface of ['bg', 'bg-2'])
+      expect(contrast(rgb(get('border'))[0], rgb(get(surface))[0])).toBeGreaterThan(
+        contrast(chip, rgb(get(surface))[0]),
+      )
+  })

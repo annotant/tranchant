@@ -18,19 +18,22 @@
 //      working, neither done nor asked about, fails, so the reviewer can
 //      send it again. Prints `AGENT_ENDED <id>` when it did.
 //
-// `--reviewer`: a review agent's (a lens's reviewer, `rv-<lens>`, or a
-// finding's verifier, `vf-<id>`): it has no writing tool and takes no lock;
-// its steps go to reviewers/<name>.jsonl. pre allows only reading commands
+// `--reviewer`: a review agent's (the summary agent, `sm-summary`, a lens's
+// reviewer, `rv-<lens>`, a finding's verifier, `vf-<id>`, or the agent
+// discussing a finding with the reviewer, `ds-<id>`): it has no writing tool
+// and takes no lock; its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
 // `--lock-root`: the git repository the project is in, which the hooks module
 // found; the locks are tabled per repository. A hook never fails the agent:
 // on any error, it lets the tool run.
+import { realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { withFileLock } from './lib/filelock.mjs'
 import { currentRun, parseDecisions } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
+import { SETTINGS_FILE, loadSettings } from './lib/settings.mjs'
 import { createStore, historyPath, progressPath, reviewAgentPath } from './lib/store.mjs'
 
 /** @typedef {import('./lib/format.mjs').Entry} Entry */
@@ -96,7 +99,16 @@ const GIT_READS = new Set([
 ])
 // git options that write a file or run a program.
 const GIT_RISKY = /^(?:--output|--ext-diff|-O|--open-files-in-pager)/
-const REVIEW_SCRIPT = /\/scripts\/(add|verify|remove)\.mjs$/
+const REVIEW_SCRIPT = /^(add|verify|remove|reply|summarize)\.mjs$/
+/** This folder, its real path: a review agent's `node` runs one of its scripts, by path, and nothing else. */
+const SCRIPTS_DIR = realOrUndefined(path.dirname(new URL(import.meta.url).pathname))
+/** The scripts each kind of review agent runs, by the prefix of its name. */
+const SCRIPTS_OF = /** @type {Record<string, string[]>} */ ({
+  rv: ['add'],
+  vf: ['verify', 'remove'],
+  ds: ['reply'],
+  sm: ['summarize'],
+})
 // A Bash command that writes files takes no lock: refused, the agent must use
 // Edit or Write. Best effort, on the usual forms. What an inline script writes
 // cannot be told: always refused.
@@ -284,27 +296,72 @@ function argumentRefusal(program, args) {
   return undefined
 }
 
+/** The real path of `file`, or undefined when there is none (no such file, not a path). */
+function realOrUndefined(file) {
+  try {
+    return realpathSync(file)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Why a review script's arguments reach outside the agent's own review: its
+ * `--review` must be `review`, and `--ended` is the hooks' alone.
+ * @param {string[]} args After the script.
+ * @param {string} review
+ */
+function reviewArgRefusal(args, review) {
+  if (args.some((arg) => arg.startsWith('--review=') || arg === '--ended'))
+    return 'pass --review <folder> as two words, and never --ended'
+  const at = args.indexOf('--review')
+  const given = at === -1 ? undefined : args[at + 1]
+  if (at === -1 || args.lastIndexOf('--review') !== at || !given)
+    return 'a review script takes --review once'
+  if (realOrUndefined(given) !== realOrUndefined(review))
+    return `a review script works on its own review, --review ${review}`
+  return undefined
+}
+
 /**
  * Why review agent `name` may not run `command`, or undefined when it may: a
  * chain of reading commands, and the agent's own script (a reviewer's
- * add.mjs; a verifier's verify.mjs or remove.mjs, on its own finding).
- * @param {string} name `rv-<lens>` or `vf-<finding id>`.
+ * add.mjs; a verifier's verify.mjs or remove.mjs, a discussing agent's
+ * reply.mjs, on its own finding; the summary agent's summarize.mjs), by its
+ * path, on its own review.
+ * @param {string} name `rv-<lens>`, `vf-<finding id>`, `ds-<finding id>` or `sm-summary`.
  * @param {string} command
+ * @param {string} review The agent's review folder.
  */
-function reviewerRefusal(name, command) {
+function reviewerRefusal(name, command, review) {
   const parsed = shellWords(command)
   if ('refusal' in parsed) return parsed.refusal
+  const kind = name.slice(0, 2)
+  const own = SCRIPTS_OF[kind] ?? []
   for (const [program, ...args] of parsed.segments) {
     if (!program) continue
     if (program === 'node') {
-      const script = REVIEW_SCRIPT.exec(args[0] ?? '')?.[1]
-      const verifier = name.startsWith('vf-')
-      if (!script) return 'node runs only the review scripts'
-      if (!verifier && script !== 'add')
-        return `a reviewer adds findings, ${script}.mjs is a verifier's`
-      if (verifier && script === 'add') return 'a verifier checks a finding, it adds none'
-      if (verifier && args[1] !== name.slice(3))
-        return `a verifier gives its verdict on ${name.slice(3)} only`
+      // The script itself, first: a node option ending like a script's path would run anything.
+      const file = realOrUndefined(args[0] ?? '')
+      const script =
+        file && SCRIPTS_DIR && path.dirname(file) === SCRIPTS_DIR
+          ? REVIEW_SCRIPT.exec(path.basename(file))?.[1]
+          : undefined
+      if (!script) return 'node runs only the review scripts, by their path'
+      if (!own.includes(script))
+        return kind === 'rv'
+          ? `a reviewer adds findings, ${script}.mjs is not its script`
+          : kind === 'vf'
+            ? script === 'add'
+              ? 'a verifier checks a finding, it adds none'
+              : `a verifier gives its verdict, ${script}.mjs is not its script`
+            : kind === 'sm'
+              ? `the summary agent writes the summary, ${script}.mjs is not its script`
+              : `a discussing agent answers with reply.mjs, ${script}.mjs is not its script`
+      if ((kind === 'vf' || kind === 'ds') && args[1] !== name.slice(3))
+        return `${kind === 'vf' ? 'a verifier gives its verdict' : 'it answers'} on ${name.slice(3)} only`
+      const outside = reviewArgRefusal(args.slice(1), review)
+      if (outside) return outside
       continue
     }
     if (!READERS.has(program)) return `${program} is not a reading command`
@@ -517,7 +574,9 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     return targets.some((target) => {
       const file = unquote(target)
       return (
-        !path.isAbsolute(file) || within(lockRoot, path.normalize(file)) !== undefined
+        !path.isAbsolute(file) ||
+        within(lockRoot, path.normalize(file)) !== undefined ||
+        path.normalize(file) === SETTINGS_FILE
       )
     })
   }
@@ -528,6 +587,11 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     if (entry !== undefined && !mayWorkOn(entry ?? undefined)) {
       await log(`refused ${target}: the reviewer stopped, dropped or settled the finding`)
       return `Finding ${finding} was stopped, dropped or settled by the reviewer. Stop now: make no further changes and reply "CANCELLED".`
+    }
+    // The settings choose the agents' models and recipe, for every review: never an agent's to write.
+    if (target !== '@build' && path.resolve(root, target) === SETTINGS_FILE) {
+      await log(`refused ${target}: the settings file`)
+      return "Tranchant's settings file is the person's own: an agent never writes it."
     }
     const key =
       target === '@build' ? target : within(lockRoot, path.resolve(root, target))
@@ -591,7 +655,8 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
       /** @type {Step} */
       const step = { at: Date.now(), ...(id && { id }), ...describe(tool, input) }
       const command = (tool === 'Bash' && textOf(input, 'command')) || ''
-      const refused = reviewer && command ? reviewerRefusal(finding, command) : undefined
+      const refused =
+        reviewer && command ? reviewerRefusal(finding, command, review) : undefined
       if (refused) {
         await log(`refused a review agent's command: ${short(command, 120)}`)
         await record([{ ...step, state: 'failed', detail: refused }])
@@ -644,8 +709,9 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
       const entry = await readEntry()
       if (CLAIM.test(command) && entry) {
         // The Started step says which model the agent runs on: claim.mjs
-        // recorded it on the run.
-        const model = currentRun(entry)?.model
+        // recorded it on the run, else the settings chose it.
+        const model =
+          currentRun(entry)?.model ?? (await loadSettings()).values.fixModel ?? undefined
         if (model) step.model = model
       }
       const ended = ENDS.exec(command)?.[1]

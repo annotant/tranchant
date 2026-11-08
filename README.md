@@ -33,7 +33,8 @@ wrong.
   wrote, your decisions, and the agents' steps. See
   [the review file](docs/review-file.md).
 - **Tranchant reviews, or a producer does.** `/tranchant review` opens the
-  page at once and runs the reviewers in the background: one agent per lens
+  page at once and runs the reviewers in the background: one agent that
+  summarizes the change and what it does well, one agent per lens
   of a recipe, then a verifier on each finding as it lands, which confirms,
   corrects or removes it. Unverified findings show dimmed. A producer of
   your own works too: any tool that writes the review file. A review
@@ -51,7 +52,7 @@ wrong.
   finding keeps its own state.
 - **No session waits on another.** The plugin's hooks read the server and
   start each fix's agent at once, in the background, with no model turn.
-  Three agents run at a time; a fourth starts when one ends. Each agent takes
+  Three agents run at a time (or as many as the Settings say); the next starts when one ends. Each agent takes
   a per-file lock before every write, so two agents never edit the same file
   at once, and Bash commands that write files are refused.
 
@@ -83,6 +84,11 @@ is anchored on its line with an excerpt and marks on the exact spots, worded
 as a problem, why it matters and a fix, with the comment to post when the
 change is someone else's, or when it is yours with an MR and the finding is
 worth posting.
+
+The summary agent (`agents/review/summary.md`) starts first and writes what
+the change does, its Change Map (API surface, data and migrations, flags and
+configuration, shared state) and its strengths: the page shows them above the
+findings while the lenses still run.
 
 The verifier (`agents/review/verifier.md`) re-reads the code behind every
 finding, checks the anchor and the claim, removes what it cannot confirm,
@@ -141,7 +147,7 @@ run script.
 `/tranchant review` takes `--recipe <file>` to use your own lenses instead of
 the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)).
 A lens whose globs the change does not touch is skipped. Three review agents
-run at a time; nothing is written in the reviewed working tree (a merge
+run at a time (the Settings say how many); nothing is written in the reviewed working tree (a merge
 request's head is fetched when the checkout lacks it). On a branch, `glab`
 looks for the branch's open MR: found, the page offers posting next to
 fixing; not found, or `glab` missing or logged out, the review goes on with
@@ -162,14 +168,48 @@ In the page:
   the comment to write or edit first, prefilled from its problem and fix when the
   finding has no comment; it is disabled until the MR's head is the commit reviewed (push your
   branch, then review again).
+- **Open an issue** moves a finding that is real but not for this change
+  (too big, out of scope, someone else's code) to the project's own tracker,
+  GitHub with your `gh` login or GitLab with your `glab` login, whichever the
+  checkout's `origin` is on (another forge has none: the action is then off,
+  and says why). The issue opens prefilled from its title,
+  problem, why, fix, anchor (linked to the file) and excerpt, to edit before
+  it is created; the finding is then settled, with the issue's link.
 - **Drop** records why the finding is wrong or intentional; **Skip** defers
   it.
+- **Discuss** opens a thread under the finding when you doubt it or its fix:
+  ask ("is this really reachable?", "what about doing X instead?"), or pick
+  a suggested question, and an agent answers from the code, which it reads
+  and never changes; its current step shows while it works. Enter sends,
+  Shift+Enter breaks the line. Its answer may propose another fix, a comment
+  or a reason to drop: **Fix with this**, **Post this** (the comment opens
+  in place, to edit before it posts) or **Drop with this reason** turn it
+  into a decision in one click. A discussion decides nothing; it survives a
+  reload, a finding that has one shows its count in the diff and the list,
+  and it reads as it stands once the finding is settled.
 - The bar at the top selects every finding, a group (To do, Safe to
-  auto-fix) or none, then applies one action to the selection; Post all to do
-  posts every open finding at once.
+  auto-fix) or none, then applies one action to the selection (**Issue**
+  opens one issue per finding, as drafted); Post all to do posts every open
+  finding at once.
 
 Nothing is committed or pushed: the fixes wait on your branch for your
 review.
+
+### Settings
+
+The gear next to the theme toggle opens **Settings**, every option of
+Tranchant in one page, grouped, each with its value, its default, one line
+on what it does and a **Reset**: the theme, the view and the summary a
+review opens with; the model of the fix agents, the reviewers and the
+verifiers (the session's by default) and how many fix agents and review
+agents run at a time; the default recipe of `/tranchant review` and the
+lenses turned on; the CLI that opens issues (`glab`, `gh`, or whichever the
+remote names) and the account it posts as. A change applies to the next
+agent, review or post, never to an agent already running. The settings are
+kept in `~/.config/tranchant/settings.json` (`$XDG_CONFIG_HOME/tranchant/settings.json`
+when the variable is set), one file for every review on the machine; an option an environment variable sets
+(`TRANCHANT_MODEL`) shows read-only, the variable named. See
+[the settings file](docs/settings.md).
 
 ## Troubleshooting
 

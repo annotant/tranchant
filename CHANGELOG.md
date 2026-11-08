@@ -7,6 +7,64 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.3.0 - 2026-11-08
+
+### Added
+
+- **A summary of the change.** `/tranchant review` starts a summary agent
+  beside the lenses: it writes what the change does, its Change Map (API
+  surface, data and migrations, flags and configuration, shared state) and
+  what it does well. The page shows them under **Summary** and **What looks
+  good** as soon as they are written, while the lenses still run: one line,
+  closed, with a spinner while the agent writes and a "ready" chip when it
+  lands, so the findings below never move.
+- **Settings.** The gear next to the theme toggle opens a page with every
+  option of Tranchant, in four groups: Display (the theme, the view and the
+  summary a review opens with), Agents (the model of the fix agents, the
+  reviewers and the verifiers; how many fix agents and review agents run at
+  a time), Review (the default recipe of `/tranchant review`, the lenses
+  turned on) and Posting (the CLI that opens issues, and the account it
+  posts as). Each option shows its value, its default, one line on what it
+  does and a **Reset**; **Reset everything to defaults** clears the page. A
+  change applies to the next agent, review or post. The settings live in
+  `~/.config/tranchant/settings.json` (`$XDG_CONFIG_HOME` when set), one
+  file for every review and every browser, which the display options now use
+  instead of the browser's storage; an option an environment variable sets
+  (`TRANCHANT_MODEL`) shows read-only, the variable named. Offline, the page
+  shows the values read-only and says why. See
+  [the settings file](docs/settings.md).
+- **Open an issue.** A finding that is real but not for this change (too
+  big, out of scope, someone else's code) moves to the project's own
+  tracker: GitHub with `gh`, GitLab with `glab`, whichever the checkout's
+  `origin` is on. The issue opens prefilled from the finding's title,
+  problem, why, fix, anchor (linked to the file) and excerpt, to edit
+  before it is created; the finding is then settled, **Moved to an issue**,
+  with the issue's link. **Issue** in the selection bar opens one per
+  finding. A failure leaves the finding to try again, and says why.
+- **Discuss a finding.** When you doubt a finding or its fix, **Discuss**
+  opens a thread under it, laid out as annotant's: your messages on the
+  right, the agent's on the left, its current step live while it reads.
+  Ask a question, or pick a suggested one, and an agent answers with the
+  finding and the repository as context. It reads the code and never
+  changes it, and the finding's state stays as it is. When its answer
+  proposes another fix, a comment to post or a reason to drop, **Fix with
+  this**, **Post this** (edited in place first) or **Drop with this reason**
+  turns it into a decision in one click. The thread is kept with the
+  review, survives a reload, shows its count on the finding in the diff and
+  the list, and reads as it stands once the finding is settled.
+
+### Changed
+
+- **The page reads in Figtree**, annotant's font, in place of the system's:
+  the two pages read as one family. The font ships inside the page, so
+  nothing is fetched from the network; code stays in a monospace font.
+- **Inline code stands out.** In a finding, the summary, a discussion and
+  the review agents' reports, inline code sits on a chip, with a background
+  and a border, so a symbol's start and end show in a dense paragraph.
+- **No empty Summary.** The Summary section shows only when the review
+  carries a summary or a strength: a review file written without them no
+  longer opens on an empty section.
+
 ## 0.2.0 - 2026-11-06
 
 ### Added

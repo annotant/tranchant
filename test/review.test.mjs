@@ -1,8 +1,9 @@
 // The scripts of `/tranchant review`: prepare.mjs, which writes the review's
-// envelope from a branch or a merge request; verify.mjs and remove.mjs, a
-// verifier's verdicts; and hook.mjs as a review agent's hooks.
+// envelope from a branch or a merge request; summarize.mjs, the summary
+// agent's; verify.mjs and remove.mjs, a verifier's verdicts; and hook.mjs as a
+// review agent's hooks.
 import assert from 'node:assert/strict'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import { createStore, findingPath } from '../skills/tranchant/scripts/lib/store.mjs'
@@ -10,14 +11,26 @@ import { SCRIPTS, fixture, importReview, run, tempDir } from './helpers.mjs'
 
 /** @type {string} */
 let stateDir
+/** The settings folder prepare.mjs reads: a test writes `tranchant/settings.json` in it. */
+let configDir = ''
 
 before(async (t) => {
   stateDir = await tempDir(t)
+  configDir = await tempDir(t, 'tranchant-config-')
 })
+
+/** Writes the settings file prepare.mjs reads, or removes it with `undefined`. */
+async function settings(/** @type {object | string | undefined} */ content) {
+  const file = path.join(configDir, 'tranchant', 'settings.json')
+  if (content === undefined) return rm(file, { force: true })
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, typeof content === 'string' ? content : JSON.stringify(content))
+}
 
 const PREPARE = path.join(SCRIPTS, 'prepare.mjs')
 const VERIFY = path.join(SCRIPTS, 'verify.mjs')
 const REMOVE = path.join(SCRIPTS, 'remove.mjs')
+const SUMMARIZE = path.join(SCRIPTS, 'summarize.mjs')
 const HOOK = path.join(SCRIPTS, 'hook.mjs')
 
 /**
@@ -65,10 +78,12 @@ async function repository(t) {
 const prepare = (cwd, args = [], env = {}) =>
   run(process.execPath, [PREPARE, ...args], {
     cwd,
-    // No glab unless a test fakes one: the branch's MR is never the machine's.
+    // No glab unless a test fakes one: the branch's MR is never the machine's;
+    // nor are its settings, which a test writes under configDir.
     env: {
       TRANCHANT_STATE_DIR: stateDir,
       TRANCHANT_GLAB: path.join(stateDir, 'no-glab'),
+      XDG_CONFIG_HOME: configDir,
       ...env,
     },
   })
@@ -115,8 +130,7 @@ test('prepare.mjs writes the current branch against the default one, reviewing, 
       status: 'reviewing',
       verify: true,
       title: 'feature/cart',
-      summary:
-        'Reviewed by Tranchant, lens by lens: correctness, accessibility, performance, security, tests, conventions, bugs.',
+      summary: '',
       strengths: [],
       findings: [],
     },
@@ -171,6 +185,64 @@ test('prepare.mjs reviews a named branch with a recipe of its own, its lenses fi
   assert.deepEqual(lenses, [
     { name: 'js', prompt: path.join(recipes, 'js.md'), paths: ['src/**/*.js'] },
   ])
+})
+
+test('prepare.mjs reads the recipe the settings name, --recipe still first, and leaves the lenses turned off out', async (t) => {
+  const { dir } = await repository(t)
+  const recipes = await tempDir(t)
+  await writeFile(path.join(recipes, 'js.md'), 'Look at the JavaScript.\n')
+  await writeFile(path.join(recipes, 'all.md'), 'Look at everything.\n')
+  const recipe = path.join(recipes, 'recipe.json')
+  await writeFile(
+    recipe,
+    JSON.stringify({
+      version: 1,
+      lenses: [
+        { name: 'js', prompt: 'js.md', paths: ['src/**/*.js'] },
+        { name: 'all', prompt: 'all.md' },
+      ],
+    }),
+  )
+  try {
+    await settings({ version: 1, recipe, disabledLenses: ['all', 'security'] })
+    const ran = await prepare(dir)
+    assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+    const { lenses } = await prepared(ran.stdout)
+    assert.deepEqual(
+      lenses.map((lens) => lens.name),
+      ['js'],
+    )
+    // Every lens off: nothing to run.
+    await settings({ version: 1, recipe, disabledLenses: ['all', 'js'] })
+    const refused = await prepare(dir)
+    assert.equal(refused.code, 2)
+    assert.equal(
+      refused.stdout.trim(),
+      'REVIEW_REFUSED every lens of the recipe is turned off in the settings',
+    )
+    // --recipe on the run wins over the settings' recipe, and runs whole: the lenses off are the other recipe's.
+    const own = path.join(recipes, 'own.json')
+    await writeFile(
+      own,
+      JSON.stringify({ version: 1, lenses: [{ name: 'all', prompt: 'all.md' }] }),
+    )
+    const whole = await prepare(dir, ['--recipe', own])
+    assert.equal(whole.code, 0, whole.stdout + whole.stderr)
+    assert.deepEqual(
+      (await prepared(whole.stdout)).lenses.map((lens) => lens.name),
+      ['all'],
+    )
+    // A settings file this Tranchant cannot read: said on stderr, the defaults apply.
+    await settings('{ not json')
+    const fallen = await prepare(dir)
+    assert.equal(fallen.code, 0, fallen.stdout + fallen.stderr)
+    assert.match(fallen.stderr, /^settings: .*settings\.json is not JSON/m)
+    assert.ok(
+      (await prepared(fallen.stdout)).lenses.some((lens) => lens.name === 'correctness'),
+    )
+  } finally {
+    await settings(undefined)
+  }
 })
 
 test('prepare.mjs refuses what it cannot review, and says why', async (t) => {
@@ -398,6 +470,148 @@ test("a verifier's hooks let it give its verdict on its own finding only", async
   assert.equal(await pre(`node ${REMOVE} f-01 --review ${dir}`), undefined)
   assert.match(await pre(`node ${REMOVE} f-02 --review ${dir}`), /on f-01 only/)
   assert.match(await pre(`node ${SCRIPTS}add.mjs --review ${dir}`), /adds none/)
+})
+
+test("a discussing agent's hooks let it read and answer on its own finding only", async (t) => {
+  const { dir } = await live(t, 'agent-3')
+  const project = await tempDir(t)
+  const reply = path.join(SCRIPTS, 'reply.mjs')
+  /** @param {string} command */
+  const pre = async (command) => {
+    const ran = await run(
+      process.execPath,
+      [HOOK, 'pre', '--reviewer', 'ds-f-01', '--review', dir, '--project', project],
+      { input: JSON.stringify(bash(command)), env: { TRANCHANT_STATE_DIR: stateDir } },
+    )
+    return ran.stdout
+      ? JSON.parse(ran.stdout).hookSpecificOutput.permissionDecisionReason
+      : undefined
+  }
+  const answer = `node ${reply} f-01 --review ${dir} <<'EOF'\n{"text":"$(rm -rf /)"}\nEOF`
+  assert.equal(await pre(answer), undefined)
+  assert.equal(
+    await pre(`git -C ${project} log -3 && grep -rn tenantId ${project}`),
+    undefined,
+  )
+  assert.match(await pre(`node ${reply} f-02 --review ${dir}`), /on f-01 only/)
+  assert.match(await pre(`node ${VERIFY} f-01 --review ${dir}`), /reply\.mjs/)
+  assert.match(await pre(`echo x > ${project}/a.ts`), /redirection/)
+  assert.match(await pre(`npm test`), /not a reading command/)
+  // node runs the script by its path, nothing that only ends like it, on its own review.
+  const evil = `node "--eval=require('fs').writeFileSync('/tmp/x','x')//scripts/reply.mjs" f-01`
+  assert.match(await pre(evil), /by their path/)
+  assert.match(
+    await pre(`node --import=${reply} ${reply} f-01 --review ${dir}`),
+    /by their path/,
+  )
+  assert.match(await pre(`node ${reply} f-01 --review ${project}`), /its own review/)
+  assert.match(await pre(`node ${reply} f-01 --review=${dir}`), /two words/)
+  assert.match(await pre(`node ${reply} f-01 --review ${dir} --ended`), /never --ended/)
+})
+
+/** @param {string[]} args @param {string} [input] */
+const summarize = (args, input = '') =>
+  run(process.execPath, [SUMMARIZE, ...args], { input })
+
+test('summarize.mjs writes the summary and strengths while reviewing, then refuses', async (t) => {
+  const { dir } = await live(t, 'summary-1')
+  const said = await summarize(
+    ['--review', dir],
+    JSON.stringify({
+      summary: '  Adds a total.\n\n## Change Map\n\n- `src/cart.js`: `total`  ',
+      strengths: [' A test covers the empty cart. '],
+    }),
+  )
+  assert.equal(said.stdout, 'SUMMARIZED\n', said.stderr)
+  const envelope = JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8'))
+  assert.equal(
+    envelope.summary,
+    'Adds a total.\n\n## Change Map\n\n- `src/cart.js`: `total`',
+  )
+  assert.deepEqual(envelope.strengths, ['A test covers the empty cart.'])
+  assert.equal(envelope.status, 'reviewing')
+  // The rest of the review stays: its findings still wait for their verifiers.
+  assert.equal(
+    (await verify(['--pending', '--review', dir])).stdout,
+    'UNVERIFIED f-01\nUNVERIFIED f-02\n',
+  )
+  const longest = await summarize(
+    ['--review', dir],
+    JSON.stringify({ summary: 'x'.repeat(12_000), strengths: ['y'.repeat(500)] }),
+  )
+  assert.equal(longest.stdout, 'SUMMARIZED\n', longest.stderr)
+  // Again: it replaces the first, strengths optional.
+  const again = await summarize(
+    ['--review', dir],
+    JSON.stringify({ summary: 'Fixes it.' }),
+  )
+  assert.equal(again.stdout, 'SUMMARIZED\n', again.stderr)
+  const after = JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8'))
+  assert.equal(after.summary, 'Fixes it.')
+  assert.deepEqual(after.strengths, [])
+  for (const [input, why] of /** @type {[string, RegExp][]} */ ([
+    ['', /no summary given/],
+    ['not json', /not JSON/],
+    [JSON.stringify({ summary: '  ' }), /summary: a Markdown text is required/],
+    [JSON.stringify({ summary: 'x'.repeat(12_001) }), /12000 characters at most/],
+    [JSON.stringify({ summary: 'x', strengths: 'good' }), /an array of texts/],
+    [JSON.stringify({ summary: 'x', strengths: [''] }), /an array of texts/],
+    [JSON.stringify({ summary: 'x', strengths: Array(11).fill('y') }), /10 at most/],
+    [JSON.stringify({ summary: 'x', strengths: ['y'.repeat(501)] }), /500 characters/],
+  ])) {
+    const refused = await summarize(['--review', dir], input)
+    assert.equal(refused.code, 2, input)
+    assert.match(refused.stdout, /^SUMMARY_REFUSED /)
+    assert.match(refused.stdout, why)
+  }
+  await createStore(dir).complete()
+  const late = await summarize(['--review', dir], JSON.stringify({ summary: 'Late.' }))
+  assert.equal(late.code, 2)
+  assert.match(late.stdout, /^SUMMARY_REFUSED the review is complete/)
+  const kept = JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8'))
+  assert.equal(kept.summary, 'Fixes it.')
+})
+
+test("the summary agent's hooks let it read and write the summary of its own review only", async (t) => {
+  const { dir } = await live(t, 'summary-2')
+  const other = await live(t, 'summary-3')
+  const project = await tempDir(t)
+  /** @param {string} command */
+  const pre = async (command) => {
+    const ran = await run(
+      process.execPath,
+      [HOOK, 'pre', '--reviewer', 'sm-summary', '--review', dir, '--project', project],
+      { input: JSON.stringify(bash(command)), env: { TRANCHANT_STATE_DIR: stateDir } },
+    )
+    return ran.stdout
+      ? JSON.parse(ran.stdout).hookSpecificOutput.permissionDecisionReason
+      : undefined
+  }
+  const write = `node ${SUMMARIZE} --review ${dir} <<'EOF'\n{"summary":"$(rm -rf /)"}\nEOF`
+  assert.equal(await pre(write), undefined)
+  assert.equal(
+    await pre(
+      `git -C ${project} log --oneline main...HEAD && git -C ${project} diff --stat`,
+    ),
+    undefined,
+  )
+  assert.match(await pre(`node ${SUMMARIZE} --review ${other.dir}`), /its own review/)
+  assert.match(await pre(`node ${SCRIPTS}add.mjs --review ${dir}`), /writes the summary/)
+  assert.match(await pre(`node ${VERIFY} f-01 --review ${dir}`), /writes the summary/)
+  assert.match(await pre(`echo x > ${project}/a.ts`), /redirection/)
+  // A reviewer or a verifier never writes the summary.
+  const reviewer = await run(
+    process.execPath,
+    [HOOK, 'pre', '--reviewer', 'rv-bugs', '--review', dir, '--project', project],
+    {
+      input: JSON.stringify(bash(`node ${SUMMARIZE} --review ${dir}`)),
+      env: { TRANCHANT_STATE_DIR: stateDir },
+    },
+  )
+  assert.match(
+    JSON.parse(reviewer.stdout).hookSpecificOutput.permissionDecisionReason,
+    /summarize\.mjs is not its script/,
+  )
 })
 
 test('a finding lands unverified, whatever it says', async (t) => {

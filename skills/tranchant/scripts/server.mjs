@@ -2,13 +2,17 @@
 // server.mjs --review <dir>
 // Serves the page and its API on a free port of 127.0.0.1, and prints one
 // line per decision the plugin's hooks act on: FIX, STOP, DROPPED, SKIPPED,
-// and POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
-// time); LANDED for each finding a verifier must check, while a review whose
-// findings are verified (`verify`) runs. It watches the review folder, its
+// POSTED or POST_FAILED for the posts it runs itself (post.mjs, one at a
+// time), MOVED or ISSUE_FAILED for the issues it opens (issue.mjs, in the
+// same queue); LANDED for each finding a verifier must check, while a review whose
+// findings are verified (`verify`) runs; DISCUSS for each question the
+// reviewer asks about a finding. It watches the review folder, its
 // findings, its run files and its review agents' (reviewers/), and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
 // It computes the change's diff (/api/diff) once, with git, for the page's main view.
+// It serves and writes the user's settings (/api/settings, lib/settings.mjs),
+// one write at a time, and pushes `settings` when the file changes.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -21,7 +25,21 @@ import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, statusOf } from './lib/format.mjs'
+import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
 import {
+  DEFAULTS,
+  SETTINGS_DIR,
+  SETTINGS_FILE,
+  SettingsRefusal,
+  loadSettings,
+  recipeInForce,
+  recipeLenses,
+  writeSettings,
+} from './lib/settings.mjs'
+import { trackerOf } from './lib/tracker.mjs'
+import {
+  MAX_ISSUE_BODY,
+  MAX_ISSUE_TITLE,
   StoreRefusal,
   WRITE_KINDS,
   createStore,
@@ -67,6 +85,7 @@ if (!existsSync(PAGE)) {
 const CHUNKS = path.join(path.dirname(PAGE), 'chunks')
 const CHUNK = /^\/chunks\/([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\.js$/
 const POST = path.join(SKILL_DIR, 'scripts', 'post.mjs')
+const ISSUE = path.join(SKILL_DIR, 'scripts', 'issue.mjs')
 const port = Number(process.env.TRANCHANT_PORT ?? 0)
 // The re-read behind the folder watches, for the mounts whose writes they miss.
 const pollMs = Number(process.env.TRANCHANT_POLL_MS ?? 5000)
@@ -74,6 +93,9 @@ const { project } = review
 const runsDir = path.join(dir, 'runs')
 const findingsDir = path.join(dir, 'findings')
 const agentsDir = path.join(dir, 'reviewers')
+const discussionsDir = path.join(dir, 'discussions')
+/** A discussing agent's name: its steps are the discussion's, not a review agent's. */
+const DISCUSSER = /^ds-/
 
 /** The server's own origins, once it listens: the page's requests carry one of them. */
 const origins = new Set()
@@ -129,16 +151,16 @@ async function readJson(req) {
 const ID = /^[\w-]{1,64}$/
 const MAX_TEXT = 4000
 const MAX_DECISIONS = 500
-const ACTIONS = new Set(['fix', 'post', 'drop', 'skip'])
+const ACTIONS = new Set(['fix', 'post', 'issue', 'drop', 'skip'])
 
 /** @param {unknown} value */
-const text = (value) =>
-  typeof value === 'string' ? value.trim().slice(0, MAX_TEXT) : undefined
+const text = (value, max = MAX_TEXT) =>
+  typeof value === 'string' ? value.trim().slice(0, max) : undefined
 
 /**
  * One decision of a batch, as the page sends it; undefined when it is not one.
  * @param {any} input
- * @returns {{ id: string, action: 'fix' | 'post' | 'drop' | 'skip', context?: string, comment?: string, reason?: string } | undefined}
+ * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, reason?: string, title?: string, body?: string } | undefined}
  */
 function sanitiseDecision(input) {
   if (!input || typeof input !== 'object') return undefined
@@ -150,28 +172,35 @@ function sanitiseDecision(input) {
     context: text(input.context),
     comment: text(input.comment),
     reason: text(input.reason),
+    title: text(input.title, MAX_ISSUE_TITLE),
+    body: text(input.body, MAX_ISSUE_BODY),
   }
 }
 
 /** @param {string} value */
 const escapeHtml = (value) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
-/** The page's shell: the bundle draws everything in #root. */
-const SHELL = [
-  '<!doctype html>',
-  '<html lang="en">',
-  '<head>',
-  '<meta charset="utf-8">',
-  '<meta name="viewport" content="width=device-width, initial-scale=1">',
-  `<title>Tranchant · ${escapeHtml(review.title)}</title>`,
-  '</head>',
-  '<body>',
-  '<div id="root"></div>',
-  '<script type="module" src="/page.js"></script>',
-  '</body>',
-  '</html>',
-  '',
-].join('\n')
+/**
+ * The page's shell: the bundle draws everything in #root. The theme the
+ * settings pick is on `<html>` from the start, so nothing flashes.
+ * @param {'light' | 'dark' | 'system'} theme
+ */
+const shell = (theme) =>
+  [
+    '<!doctype html>',
+    `<html lang="en"${theme === 'system' ? '' : ` data-theme="${theme}"`}>`,
+    '<head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    `<title>Tranchant · ${escapeHtml(review.title)}</title>`,
+    '</head>',
+    '<body>',
+    '<div id="root"></div>',
+    '<script type="module" src="/page.js"></script>',
+    '</body>',
+    '</html>',
+    '',
+  ].join('\n')
 
 // The page draws inline SVG the producer wrote: a script in it, missed by the
 // page's sanitizer, would still not run.
@@ -203,20 +232,30 @@ async function currentHead() {
   }
 }
 
-/** @type {Promise<string | null> | undefined} */
-let account
+/** By tool, the account it posts as, asked once each. @type {Map<'glab' | 'gh', Promise<string | null>>} */
+const accounts = new Map()
 
 /**
- * The username glab posts as, read once from the project (glab takes the
- * host from its remote); null when glab cannot say, and never asked again.
+ * The username `tool` posts as, read once from the project (glab takes the
+ * host from its remote, gh too); null when the tool cannot say, and never
+ * asked again.
+ * @param {'glab' | 'gh'} tool
  */
-function accountOnce() {
-  account ??= gitExec(process.env.TRANCHANT_GLAB || 'glab', ['api', 'user'], {
+function accountOnce(tool) {
+  let account = accounts.get(tool)
+  if (account) return account
+  const command =
+    tool === 'gh'
+      ? process.env.TRANCHANT_GH || 'gh'
+      : process.env.TRANCHANT_GLAB || 'glab'
+  account = gitExec(command, ['api', 'user'], {
     cwd: existsSync(project) ? project : undefined,
     timeout: 10_000,
   })
     .then(({ stdout }) => {
-      const username = JSON.parse(stdout)?.username
+      const answer = JSON.parse(stdout)
+      // GitLab answers `username`, GitHub `login`.
+      const username = tool === 'gh' ? answer?.login : answer?.username
       return typeof username === 'string' && username.trim() ? username.trim() : null
     })
     .catch((error) => {
@@ -225,7 +264,76 @@ function accountOnce() {
       )
       return null
     })
+  accounts.set(tool, account)
   return account
+}
+
+/**
+ * The CLI the settings post and open issues with: `glab` or `gh` as set,
+ * else the tracker's forge, else glab, which posts the MR comments.
+ * @param {import('./lib/settings.mjs').Values} values
+ */
+async function postingTool(values) {
+  if (values.postWith !== 'auto') return values.postWith
+  const { kind } = await trackerOnce(values)
+  return kind === 'github' ? 'gh' : 'glab'
+}
+
+/** @typedef {{ kind: string | null, web?: string, prefix?: string, reason?: string }} TrackerAnswer */
+
+/** By forge forced (`auto` when none), the tracker read once. @type {Map<string, Promise<TrackerAnswer>>} */
+const trackers = new Map()
+
+/**
+ * Where the project's issues go, from its origin remote, as issue.mjs reads
+ * it: the page names it and links an issue's anchor to the file on it. The
+ * settings' `postWith` names the forge for a host neither tool recognises.
+ * `kind` null, and why, when none; a failure is asked again next time.
+ * @param {import('./lib/settings.mjs').Values} values
+ */
+function trackerOnce(values) {
+  const forge =
+    values.postWith === 'auto'
+      ? undefined
+      : values.postWith === 'gh'
+        ? 'github'
+        : 'gitlab'
+  const key = forge ?? 'auto'
+  let tracker = trackers.get(key)
+  if (tracker) return tracker
+  tracker = trackerOf(project, { gitlab: !!review.mr, forge }).then(
+    ({ kind, web, prefix }) => ({ kind, web, prefix }),
+    (error) => {
+      const reason = String(error?.message ?? error)
+      console.error(`tranchant server: /api/tracker: ${oneLine(reason)}`)
+      trackers.delete(key)
+      return { kind: null, reason }
+    },
+  )
+  trackers.set(key, tracker)
+  return tracker
+}
+
+/**
+ * What `GET /api/settings` answers: the file as it stands, the values in
+ * force, the keys an environment variable locks, and the lenses of the
+ * recipe in force, which the page lists to turn off.
+ */
+async function settingsPayload() {
+  const { settings, values, locked, problem } = await loadSettings()
+  const recipe = recipeInForce(values)
+  const lenses = await recipeLenses(recipe)
+  return {
+    path: SETTINGS_FILE,
+    settings,
+    values,
+    defaults: DEFAULTS,
+    locked,
+    recipe,
+    lenses: lenses.lenses,
+    ...(lenses.problem && { recipeProblem: lenses.problem }),
+    ...(problem && { problem }),
+  }
 }
 
 /** The most MiB of diff the server reads from git and hands the page. */
@@ -651,13 +759,14 @@ async function handle(req, res) {
   if (!origins.has(`http://${req.headers.host}`)) throw new ClientError(403)
 
   if (req.method === 'GET' && url.pathname === '/') {
+    const { values } = await loadSettings()
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'content-security-policy': CSP,
       'x-content-type-options': 'nosniff',
       'cache-control': 'no-store',
     })
-    return res.end(SHELL)
+    return res.end(shell(values.theme))
   }
 
   const chunk = CHUNK.exec(url.pathname)?.[1]
@@ -685,23 +794,56 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
     // Read anew: findings land and the status flips while the review runs.
-    const [{ review: latest, decisions }, runs, reviewers, current] = await Promise.all([
-      store.readAll(),
-      store.runs(),
-      readReviewAgents(dir),
-      currentHead(),
-    ])
+    const [{ review: latest, decisions }, runs, agents, discussions, current] =
+      await Promise.all([
+        store.readAll(),
+        store.runs(),
+        readReviewAgents(dir),
+        readDiscussions(dir),
+        currentHead(),
+      ])
     return send(res, 200, {
       review: latest,
       findings: decisions.findings,
       runs,
-      reviewers,
+      reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
+      discussions: Object.fromEntries(
+        Object.entries(discussions).map(([id, discussion]) => {
+          // While it answers: its agent's last step, the page's progress line.
+          const steps = isWaiting(discussion)
+            ? agents.find((agent) => agent.name === `ds-${id}`)?.steps
+            : undefined
+          // The file holds every agent the thread had: an end is a past one's.
+          const last = steps?.at(-1)
+          const step = last && last.kind !== 'end' ? last : undefined
+          return [id, { ...discussion, ...(step && { step }) }]
+        }),
+      ),
       head: { reviewed: latest.headSha, current },
     })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/account') {
-    return send(res, 200, { username: await accountOnce() })
+    const asked = url.searchParams.get('tool')
+    // `?tool=glab`: the batch bar's, since MR comments always go through glab.
+    const tool =
+      asked === 'glab' || asked === 'gh'
+        ? asked
+        : await postingTool((await loadSettings()).values)
+    return send(res, 200, { username: await accountOnce(tool), tool })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/tracker') {
+    return send(res, 200, await trackerOnce((await loadSettings()).values))
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/settings') {
+    return send(res, 200, await settingsPayload())
+  }
+
+  if (req.method === 'PUT' && url.pathname === '/api/settings') {
+    const input = await readJson(req)
+    return writeSettingsInTurn(res, input)
   }
 
   if (req.method === 'GET' && url.pathname === '/api/diff') {
@@ -781,6 +923,16 @@ async function handle(req, res) {
     return send(res, 200, { finding: entry })
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/discuss') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id)) {
+      return send(res, 400, { error: 'id is required' })
+    }
+    const discussion = await say(dir, input.id, text(input.text) ?? '')
+    print(`DISCUSS ${input.id}`)
+    return send(res, 200, { discussion })
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     const input = await readJson(req)
     if (typeof input?.id !== 'string' || !ID.test(input.id)) {
@@ -794,6 +946,41 @@ async function handle(req, res) {
   return send(res, 404, { error: 'not found' })
 }
 
+/** The settings writes, one after the other: two pages saving at once never cross. @type {Promise<unknown>} */
+let settingsWriting = Promise.resolve()
+
+/**
+ * Writes the settings `input` once the writes before it ended, and answers
+ * the file as it then stands.
+ * @param {http.ServerResponse} res
+ * @param {unknown} input
+ */
+function writeSettingsInTurn(res, input) {
+  const turn = settingsWriting.then(async () => {
+    const { problem } = await loadSettings()
+    // A file this Tranchant cannot read is the person's to mend: never written over.
+    if (problem) return send(res, 409, { error: problem })
+    try {
+      await writeSettings(input)
+    } catch (error) {
+      if (error instanceof SettingsRefusal)
+        return send(res, 400, { error: error.message })
+      // The person's own file and folder: the cause may be theirs to mend (rights, disk).
+      console.error(`tranchant server: PUT /api/settings: ${oneLine(String(error))}`)
+      const code = errorCode(error)
+      return send(res, 500, {
+        error: `${SETTINGS_FILE} could not be written (${typeof code === 'string' ? code : 'error'})`,
+      })
+    }
+    // The first write makes the folder: watched from now on; every page told, this one included.
+    watchFolders()
+    settingsChanged()
+    return send(res, 200, await settingsPayload())
+  })
+  settingsWriting = turn.catch(() => undefined)
+  return turn
+}
+
 /**
  * Prints `line` for the hooks. One event a line: a line break in what the
  * reviewer sent would forge another event.
@@ -805,52 +992,98 @@ function print(line) {
 
 /**
  * What a decision just taken starts: the hooks start an agent on a FIX,
- * the server posts itself.
+ * the server posts or opens the issue itself.
  * @param {string} id
- * @param {'fix' | 'post' | 'drop' | 'skip'} action
+ * @param {'fix' | 'post' | 'issue' | 'drop' | 'skip'} action
  */
 function decided(id, action) {
   if (action === 'fix') print(`FIX ${id}`)
-  else if (action === 'post') enqueuePost(id)
+  else if (action === 'post') enqueue(POST_SCRIPT, id)
+  else if (action === 'issue') enqueue(ISSUE_SCRIPT, id)
   else print(`${action === 'drop' ? 'DROPPED' : 'SKIPPED'} ${id}`)
 }
 
-/** @type {Promise<void>} */
-let posting = Promise.resolve()
+/**
+ * A script the server runs on a decision, and the words it prints.
+ * @typedef {{ action: 'post' | 'issue', file: string, done: string, ok: string, failed: string }} Script
+ */
 
-/** Posts finding `id`'s comment after the posts under way: one at a time. */
-function enqueuePost(id) {
-  posting = posting.then(() => runPost(id)).catch(() => undefined)
+/** @type {Script} */
+const POST_SCRIPT = {
+  action: 'post',
+  file: POST,
+  done: 'posted ',
+  ok: 'POSTED',
+  failed: 'POST_FAILED',
+}
+/** @type {Script} */
+const ISSUE_SCRIPT = {
+  action: 'issue',
+  file: ISSUE,
+  done: 'moved ',
+  ok: 'MOVED',
+  failed: 'ISSUE_FAILED',
+}
+
+/** @type {Promise<void>} */
+let running = Promise.resolve()
+
+/** Runs `script` on finding `id` after the posts and issues under way: one at a time. */
+function enqueue(/** @type {Script} */ script, /** @type {string} */ id) {
+  running = running.then(() => runScript(script, id)).catch(() => undefined)
 }
 
 /**
- * Runs post.mjs on finding `id`, and prints POSTED or POST_FAILED from its
- * last line.
+ * Runs `script` on finding `id`, and prints its success or its failure from
+ * its last line.
+ * @param {Script} script
  * @param {string} id
  * @returns {Promise<void>}
  */
-function runPost(id) {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [POST, id, '--review', dir], {
-      env: process.env,
-      stdio: /** @type {const} */ (['ignore', 'pipe', 'inherit']),
-    })
-    let output = ''
-    child.stdout.on('data', (chunk) => (output += chunk))
-    child.on('error', (error) => {
-      print(`POST_FAILED ${id} ${String(error)}`)
-      resolve()
-    })
-    child.on('close', (code) => {
-      const last = output.trim().split('\n').at(-1) ?? ''
-      if (code === 0 && last.startsWith('posted ')) print(`POSTED ${id}`)
-      else
-        print(
-          `POST_FAILED ${id} ${last.replace(/^failed ?/, '') || `post.mjs exited with ${code}`}`,
-        )
-      resolve()
-    })
+async function runScript(script, id) {
+  const child = spawn(process.execPath, [script.file, id, '--review', dir], {
+    env: process.env,
+    stdio: /** @type {const} */ (['ignore', 'pipe', 'inherit']),
   })
+  let output = ''
+  child.stdout.on('data', (chunk) => (output += chunk))
+  // The first of the two settles it: a spawn that fails may still close, and says nothing twice.
+  /** @type {{ code: number | null } | { error: string }} */
+  const exit = await new Promise((resolve) => {
+    child.once('error', (error) => resolve({ error: String(error) }))
+    child.once('close', (code) => resolve({ code }))
+  })
+  const last = output.trim().split('\n').at(-1) ?? ''
+  if ('code' in exit && exit.code === 0 && last.startsWith(script.done)) {
+    print(`${script.ok} ${id}`)
+    return
+  }
+  const reason =
+    'error' in exit
+      ? exit.error
+      : last.replace(/^failed ?/, '') ||
+        `${path.basename(script.file)} exited with ${exit.code}`
+  print(await fallBack(script, id, reason))
+}
+
+/**
+ * A script that crashed before it could say why leaves its finding queued:
+ * the server fails it with `reason`, unless it moved on meanwhile.
+ * @param {Script} script
+ * @param {string} id
+ * @param {string} reason
+ * @returns {Promise<string>} The failure line to print.
+ */
+async function fallBack(script, id, reason) {
+  try {
+    const entry = (await store.readDecisions()).findings[id]
+    if (entry?.state === 'queued' && entry.decision?.action === script.action)
+      await store.fail(id, reason.slice(0, 300))
+  } catch (error) {
+    if (!(error instanceof StoreRefusal))
+      console.error(`tranchant server: ${script.action} ${id}: ${oneLine(String(error))}`)
+  }
+  return `${script.failed} ${id} ${reason}`
 }
 
 /**
@@ -862,7 +1095,8 @@ const listeners = new Set()
 /**
  * Opens a stream of server-sent events: `changed`, with the ids of the
  * findings whose decisions or steps changed, each time a file under the
- * review folder changes; `page` when a dev build replaced the bundle.
+ * review folder changes; `page` when a dev build replaced the bundle;
+ * `settings` when the settings file changed.
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  */
@@ -888,6 +1122,8 @@ const fingerprints = new Map()
 let statusSeen
 /** The review agents' run files at the last read: their names, sizes and times. */
 let agentsSeen = ''
+/** The review's summary and strengths at the last read. @type {string | undefined} */
+let summarySeen
 
 /**
  * The ids of the findings that landed, or whose decisions or run files
@@ -906,6 +1142,15 @@ async function changes() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
     next.set(id, `${next.get(id) ?? ''}\n${JSON.stringify(entry)}`)
+  }
+  for (const name of await readdir(discussionsDir).catch(() => [])) {
+    const id = /^([\w-]{1,64})\.json$/.exec(name)?.[1]
+    if (!id) continue
+    const size = await stat(path.join(discussionsDir, name)).then(
+      (file) => `${file.size} ${file.mtimeMs}`,
+      () => '',
+    )
+    next.set(id, `${next.get(id) ?? ''}\ndiscussion ${size}`)
   }
   const files = await readdir(runsDir).catch(() => [])
   for (const name of files) {
@@ -935,9 +1180,14 @@ async function changes() {
     agents.push(`${name} ${file}`)
   }
   const agentsNow = agents.join('\n')
-  const reviewChanged = status !== statusSeen || agentsNow !== agentsSeen
+  const summary = latest
+    ? JSON.stringify([latest.summary, latest.strengths])
+    : summarySeen
+  const reviewChanged =
+    status !== statusSeen || agentsNow !== agentsSeen || summary !== summarySeen
   statusSeen = status
   agentsSeen = agentsNow
+  summarySeen = summary
   return { ids, reviewChanged, latest }
 }
 
@@ -1025,6 +1275,33 @@ function pageChanged(_event, file) {
   }, BATCH_MS)
 }
 
+/** The settings file's size and time at the last look, or '' while it is missing. */
+function settingsStamp() {
+  try {
+    const file = statSync(SETTINGS_FILE)
+    return `${file.size} ${file.mtimeMs}`
+  } catch {
+    return ''
+  }
+}
+let settingsSeen = settingsStamp()
+/** @type {NodeJS.Timeout | undefined} */
+let settingsBatch
+
+/**
+ * Tells the pages the settings changed under them (another page, another
+ * session, an editor), once the write is over.
+ */
+function settingsChanged() {
+  clearTimeout(settingsBatch)
+  settingsBatch = setTimeout(() => {
+    const now = settingsStamp()
+    if (now === settingsSeen) return
+    settingsSeen = now
+    for (const res of listeners) res.write('event: settings\ndata: {}\n\n')
+  }, BATCH_MS)
+}
+
 /**
  * By folder, its watch and the folder's inode. The folders, not the files:
  * the store writes a temp file and renames it over the decisions file, which
@@ -1053,7 +1330,10 @@ function watchFolders() {
     [runsDir, changeSeen],
     [findingsDir, changeSeen],
     [agentsDir, changeSeen],
+    [discussionsDir, changeSeen],
     [path.dirname(PAGE), pageChanged],
+    // Made by the first write: watched from then on, as findings/ is.
+    [SETTINGS_DIR, settingsChanged],
   ]
   for (const [folder, onChange] of folders) {
     const ino = inodeOf(folder)
@@ -1120,14 +1400,24 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 
 /**
  * What waited while no server ran: the hooks start an agent on each queued
- * fix again (they skip the ones they handed over already), and the server
- * posts each queued post.
+ * fix again (they skip the ones they handed over already) and on each
+ * question left unanswered, and the server posts each queued post and
+ * opens each queued issue.
  */
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
     if (entry.state !== 'queued') continue
-    decided(id, entry.decision?.action === 'post' ? 'post' : 'fix')
+    const action = entry.decision?.action
+    decided(id, action === 'post' || action === 'issue' ? action : 'fix')
+  }
+  const discussions = await readDiscussions(dir).catch((error) => {
+    // The questions left waiting stay so until the server starts again: said.
+    console.error(`tranchant server: discussions unreadable: ${oneLine(String(error))}`)
+    return {}
+  })
+  for (const [id, discussion] of Object.entries(discussions)) {
+    if (isWaiting(discussion)) print(`DISCUSS ${id}`)
   }
 }
 
@@ -1140,6 +1430,7 @@ server.listen(port, '127.0.0.1', async () => {
   await mkdir(runsDir, { recursive: true })
   await mkdir(findingsDir, { recursive: true })
   await mkdir(agentsDir, { recursive: true })
+  await mkdir(discussionsDir, { recursive: true })
   await refreshNext(true)
   console.log(
     `READY http://127.0.0.1:${listening} review=${review.id} project=${project}`,
@@ -1150,6 +1441,7 @@ server.listen(port, '127.0.0.1', async () => {
   await refreshNext()
   setInterval(() => {
     watchFolders()
+    settingsChanged()
     void refreshNext()
   }, pollMs)
 })

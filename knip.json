@@ -21,7 +21,8 @@
       // `typecheck` runs the TypeScript the workspace installs, hoisted to the root.
       "ignoreBinaries": ["tsc"],
       // claude-code and claude-code/testing: modules Claude Code provides to the hooks, not packages.
-      "ignoreDependencies": ["claude-code"]
+      // playwright: records the pull requests' screencasts, from a git-ignored folder.
+      "ignoreDependencies": ["claude-code", "playwright"]
     },
     "skills/tranchant/page": {
       // Its Vitest suites (vitest.config.ts), not every file under test/.

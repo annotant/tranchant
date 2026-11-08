@@ -2,9 +2,11 @@ import { expect, test } from 'vitest'
 import {
   type Action,
   allows,
+  anchorUrl,
   applicable,
   commentedIds,
   counts,
+  draftIssue,
   groupFindings,
   idsInBucket,
   openIds,
@@ -52,6 +54,7 @@ const STATES: State[] = [
   'asking',
   'fixed',
   'posted',
+  'moved',
   'dropped',
   'skipped',
   'failed',
@@ -64,6 +67,49 @@ const from = (action: Action, ownership: 'ours' | 'theirs') =>
 test('fix is allowed from open, dropped, skipped, failed and stopped; never again once fixed', () => {
   expect(from('fix', 'ours')).toEqual(['open', 'dropped', 'skipped', 'failed', 'stopped'])
   expect(from('fix', 'theirs')).toEqual(from('fix', 'ours'))
+})
+
+test('an issue opens from open, dropped, skipped or failed, ours or theirs; moved is final', () => {
+  expect(from('issue', 'ours')).toEqual(['open', 'dropped', 'skipped', 'failed'])
+  expect(from('issue', 'theirs')).toEqual(from('issue', 'ours'))
+  for (const action of ['fix', 'post', 'drop', 'skip'] as const)
+    expect(allows(action, 'moved', review('theirs'))).toBe(false)
+})
+
+test("an issue's anchor links the commit reviewed on the MR, else the branch, within the repository", () => {
+  const finding = { path: 'src/a b.ts', line: 7 }
+  const gitlab = {
+    kind: 'gitlab',
+    web: 'https://gitlab.com/g/p',
+    prefix: 'web/',
+  } as const
+  const onMr = review('ours', { mr: mergeRequest() })
+  expect(anchorUrl(finding, onMr, gitlab)).toBe(
+    `https://gitlab.com/g/p/-/blob/${onMr.headSha}/web/src/a%20b.ts#L7`,
+  )
+  const branch = review('ours', { branch: 'feature/x#1' })
+  expect(
+    anchorUrl(finding, branch, {
+      kind: 'github',
+      web: 'https://github.com/o/r',
+      prefix: '',
+    }),
+  ).toBe('https://github.com/o/r/blob/feature/x%231/src/a%20b.ts#L7')
+  expect(anchorUrl(finding, branch, { kind: null, reason: 'none' })).toBeUndefined()
+  expect(anchorUrl(finding, branch, undefined)).toBeUndefined()
+})
+
+test("an issue's draft holds the problem, why, fix, anchor and excerpt, fenced past its backticks", () => {
+  const finding = {
+    ...FINDINGS[0]!,
+    excerpt: { startLine: 1, lines: ['const a = ```x```'] },
+  }
+  const { title, body } = draftIssue(finding, review('ours'), undefined)
+  expect(title).toBe(finding.title)
+  expect(body).toContain(`\`${finding.path}:${finding.line}\``)
+  expect(body).toContain('````ts\nconst a = ```x```\n````')
+  expect(body.indexOf(finding.problem)).toBeLessThan(body.indexOf(finding.why))
+  expect(body.indexOf(finding.why)).toBeLessThan(body.indexOf(finding.fix))
 })
 
 test('post needs diff refs at the head reviewed, from open, dropped, skipped or failed', () => {
@@ -97,8 +143,8 @@ test('only ours with a postable MR marks the findings with a comment', () => {
   expect(commentedIds(review('ours', { mr: mergeRequest('f'.repeat(40)) })).size).toBe(0)
 })
 
-test('drop and skip are refused while working, once fixed or posted, and on a finding already there', () => {
-  const final = new Set(['working', 'fixed', 'posted'])
+test('drop and skip are refused while working, once fixed, posted or moved, and on a finding already there', () => {
+  const final = new Set(['working', 'fixed', 'posted', 'moved'])
   expect(from('drop', 'ours')).toEqual(
     STATES.filter((s) => !final.has(s) && s !== 'dropped'),
   )

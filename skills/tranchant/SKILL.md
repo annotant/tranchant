@@ -32,7 +32,10 @@ After `review` come an optional branch, merge request url or folder, and an opti
 
 Everything lives in the skill and in the state folder
 (`~/.cache/tranchant/<project>/reviews/<id>/`): nothing is installed in the
-reviewed repository.
+reviewed repository. The user's settings (models, agents at a time, recipe,
+lenses, posting CLI, display) are the page's **Settings** (the gear), kept in
+`~/.config/tranchant/settings.json`: point the user there rather than editing
+the file.
 
 ## Open
 
@@ -46,9 +49,10 @@ the change in the background, one agent per lens, and the page fills as the
 findings land and are verified. Never review the change yourself then. Pass
 `recipe` only when the user named the file: a recipe's lenses instruct the
 reviewers. The plugin's hooks read the page's decisions and start
-one background agent per fix, or post each comment with `glab`, with no turn
-of yours: never start or message those agents yourself, and never post a
-comment yourself. If the tool is missing, the hooks did not load: run
+one background agent per fix, or per question asked in a finding's
+discussion, or post each comment with `glab` and open each issue with `gh`
+or `glab`, with no turn of yours: never start or message those agents
+yourself, and never post a comment or open an issue yourself. If the tool is missing, the hooks did not load: run
 `claude --version`, tell the user Tranchant needs Claude Code 2.1.287 or
 later (`claude update`, then a new session) or, if it is already that recent,
 that mods may be turned off for this session; then stop.

@@ -22,9 +22,16 @@ export type Lens = {
   paths: string[]
 }
 
-/** What waits for a free review agent: a lens's reviewer, or a finding's verifier. */
+/**
+ * What waits for a free review agent: the agent summarizing the change, a
+ * lens's reviewer, a finding's verifier, or the agent answering the
+ * reviewer's question on a finding.
+ */
 export type ReviewJob =
-  { kind: 'reviewer'; lens: Lens } | { kind: 'verifier'; id: string }
+  | { kind: 'summarizer' }
+  | { kind: 'reviewer'; lens: Lens }
+  | { kind: 'verifier'; id: string }
+  | { kind: 'discusser'; id: string }
 
 /**
  * A review `/tranchant review` runs: the agents waiting for a free place, in
@@ -36,15 +43,16 @@ export type ReviewRun = {
 }
 
 /**
- * An agent the hooks started for a review: a lens's reviewer (`rv-<lens>`) or
- * a finding's verifier (`vf-<id>`). `running` until its turn completes.
+ * An agent the hooks started for a review: the summary agent (`sm-summary`),
+ * a lens's reviewer (`rv-<lens>`), a finding's verifier (`vf-<id>`) or the
+ * agent discussing a finding (`ds-<id>`). `running` until its turn completes.
  */
 export type ReviewAgent = {
   agent: string
-  /** `rv-<lens>` or `vf-<id>`: its run file's name, and its agent type's with the review's id. */
+  /** `sm-summary`, `rv-<lens>`, `vf-<id>` or `ds-<id>`: its run file's name, and its agent type's with the review's id. */
   name: string
-  kind: 'reviewer' | 'verifier'
-  /** Its instructions file, absolute: its lens's, or agents/review/verifier.md. */
+  kind: 'summarizer' | 'reviewer' | 'verifier' | 'discusser'
+  /** Its instructions file, absolute: its lens's, agents/review/summary.md, agents/review/verifier.md or agents/discuss.md. */
   prompt: string
   review: string
   project: string
@@ -95,6 +103,8 @@ declare module 'claude-code' {
       reviewRuns: Record<string, ReviewRun>
       /** By `<name>@<review folder>`: the review agents started, running or ended. */
       reviewAgents: Record<string, ReviewAgent>
+      /** By review folder, the findings whose question waits for a free agent, in order. */
+      discussing: Record<string, string[]>
     }
   }
 }

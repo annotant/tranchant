@@ -133,7 +133,7 @@ function checkOf(finding: ReviewFinding, verifier: ReviewAgent | undefined): Che
   return finding.verified === true ? 'verified' : 'unverified'
 }
 
-/** The review's progress from its agents (`rv-<lens>`, `vf-<finding id>`) and its findings. */
+/** The review's progress from its agents (`sm-summary`, `rv-<lens>`, `vf-<finding id>`) and its findings. */
 export function progressOf(
   agents: readonly ReviewAgent[],
   findings: readonly ReviewFinding[],
@@ -224,7 +224,9 @@ export function progressOf(
           ? agent.name.slice(3)
           : agent.name.startsWith('vf-')
             ? `verifying ${agent.name.slice(3)}`
-            : agent.name,
+            : agent.name.startsWith('sm-')
+              ? 'summarizing the change'
+              : agent.name,
         step: relative(doing(agent.steps), project),
       })),
     reports,

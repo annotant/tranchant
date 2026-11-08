@@ -1,7 +1,8 @@
 # Tranchant
 
 A Claude Code plugin: a page shows a code review's findings, the user settles
-each one (fix on the working tree, post on the MR, drop, skip), and one
+each one (fix on the working tree, post on the MR, move to an issue, drop,
+skip), and one
 background agent per fix makes the change. See the [README](README.md) and
 [docs/review-file.md](docs/review-file.md), the contract every part follows.
 
@@ -15,31 +16,41 @@ pattern, read how annotant does it.
 - `hooks/register.ts`: the plugin's hooks, a Claude Code mod (2.1.287 or
   later) declared in `hooks/hooks.json`. `/tranchant` (or the skill, through
   `mcp__tranchant__open`) runs the server and starts one agent per fix, with
-  no model turn, and runs `post.mjs` per post. Claude Code runs none of a
+  no model turn; the server runs `post.mjs` per post and `issue.mjs` per
+  issue. Claude Code runs none of a
   mod's hooks for an agent the plugin starts: each fix's agent is registered
   as a type of its own (`tranchant:tr-<id>`) whose settings hooks run
   `skills/tranchant/scripts/hook.mjs` (file locks, steps) around its tools.
-  `/tranchant review` starts the review agents the same way: one reviewer per
+  `/tranchant review` starts the review agents the same way: the summary
+  agent, queued first (`tranchant:sm-summary-<review>`), which writes the review's
+  summary and strengths with `summarize.mjs`, one reviewer per
   lens (`tranchant:rv-<lens>-<review>`), one verifier per finding
   (`tranchant:vf-<id>-<review>`), `<review>` the review id's first 8
-  characters.
+  characters. A question asked in a finding's discussion starts one
+  read-only agent among those (`tranchant:ds-<id>-<review>`), which answers
+  with `reply.mjs`.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
+  `agents/discuss.md`, the discussing agent's;
   `agents/review/`, the default recipe of `/tranchant review`, its lenses'
-  prompts (each a reviewer's whole instructions) and the verifier's. Hidden
+  prompts (each a reviewer's whole instructions), the summary agent's and
+  the verifier's. Hidden
   from the model.
 - `skills/tranchant/SKILL.md`: the skill itself, a prompt. Keep it short:
   every line is read in every user's session.
 - `skills/tranchant/scripts/`: Node.js ES modules with JSDoc types, no
   dependencies. `server.mjs` serves the page and prints the lines the hooks
-  read; `lib/store.mjs` owns `decisions.json`; `lib/format.mjs` is the
-  files' reference.
+  read; `lib/store.mjs` owns `decisions.json`, `lib/discussion.mjs` the
+  discussions; `lib/format.mjs` is the files' reference; `lib/settings.mjs`
+  owns the user's settings file (`~/.config/tranchant/settings.json`), which
+  the hooks read on their own by the same rules.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.
 - `docs/review-file.md`: the review, decisions and run files, their schemas
-  and the findings' states.
+  and the findings' states. `docs/settings.md`: the settings file, its
+  schema, its precedence and its routes.
 - `test/`: `node:test` suites for the scripts and the server;
   `hooks.test.ts` for `claude plugin test`.
 

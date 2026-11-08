@@ -1,5 +1,8 @@
 // The page's stylesheet, injected by main.tsx: no CSS file to serve.
 
+import figtree from './assets/fonts/figtree-latin.woff2'
+import figtreeItalic from './assets/fonts/figtree-latin-italic.woff2'
+
 declare module 'react' {
   interface CSSProperties {
     [variable: `--tr-${string}`]: string | number
@@ -45,10 +48,13 @@ const DARK_PALETTE = `
   --tr-code-attr: #f2cc60;
 `
 
+// A name of its own, so a local Figtree never takes over; rebalanced (95%/25% as shipped), or text sits high.
 export const PAGE_CSS = `
+@font-face { font-family: 'Tranchant Figtree'; font-style: normal; font-weight: 400 700; font-display: swap; ascent-override: 100%; descent-override: 20%; src: url(${figtree}) format('woff2'); }
+@font-face { font-family: 'Tranchant Figtree'; font-style: italic; font-weight: 400; font-display: swap; ascent-override: 100%; descent-override: 20%; src: url(${figtreeItalic}) format('woff2'); }
 :root {
   color-scheme: light dark;
-  --tr-font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --tr-font: 'Tranchant Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --tr-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   --tr-bg: #ffffff;
   --tr-bg-2: #f6f7f9;
@@ -145,6 +151,35 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 }
 .tr-theme-toggle:hover { color: var(--tr-text); border-color: var(--tr-border); background: var(--tr-bg-3); }
 .tr-theme-toggle:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: 1px; }
+.tr-header-tools { display: flex; gap: 6px; }
+a.tr-theme-toggle { text-decoration: none; }
+.tr-theme-toggle[aria-current="page"] { color: var(--tr-accent); border-color: var(--tr-accent); background: var(--tr-accent-weak); }
+
+.tr-settings { max-width: 900px; padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 28px; overflow: auto; }
+.tr-settings-head { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.tr-settings-head h2 { font-size: 20px; font-weight: 700; }
+.tr-settings-back { display: inline-flex; align-items: center; gap: 4px; }
+.tr-settings .tr-notice { border: 1px solid var(--tr-border); border-radius: var(--tr-radius); }
+.tr-settings .tr-section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tr-muted); }
+.tr-setting { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 8px 24px; padding: 14px 0; }
+.tr-setting + .tr-setting { border-top: 1px solid var(--tr-border); }
+.tr-setting-label { font-weight: 600; }
+.tr-setting-help { margin-top: 2px; font-size: 13px; color: var(--tr-muted); }
+.tr-setting-control { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.tr-setting-value { line-height: 32px; }
+.tr-setting-default { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--tr-muted); }
+.tr-setting-default .tr-btn--link { font-size: 12px; }
+.tr-setting-lock { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tr-muted); }
+.tr-segment { display: inline-flex; gap: 6px; }
+.tr-settings .tr-input { height: 32px; padding: 0 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
+.tr-settings .tr-input:focus { outline: none; border-color: var(--tr-accent); }
+.tr-settings .tr-text { width: 100%; max-width: 380px; min-width: 0; flex: none; }
+.tr-settings .tr-number { width: 88px; min-width: 0; flex: none; }
+.tr-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; width: 100%; }
+.tr-checks label { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.tr-checks .tr-check { margin: 0; accent-color: var(--tr-accent); }
+.tr-settings .tr-input:disabled, .tr-checks .tr-check:disabled, .tr-segment .tr-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.tr-settings-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding-top: 16px; border-top: 1px solid var(--tr-border); }
 
 .tr-chip {
   display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 10px;
@@ -224,12 +259,29 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-summary-body { max-height: 38vh; overflow: auto; padding: 4px 16px 12px; display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 24px; }
 .tr-summary-body h3 { font-size: 13px; margin-bottom: 4px; }
 .tr-summary-body ul { margin: 0; padding-left: 20px; }
+.tr-summary-line { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-weight: 600; color: var(--tr-muted); font-size: 13px; }
+.tr-summary > summary > span { margin-left: 8px; }
+.tr-summary-hint { font-weight: 400; }
+.tr-summary-ready { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 999px; background: var(--tr-accent-weak); color: var(--tr-accent); font-size: 11.5px; }
+.tr-shimmer { display: flex; gap: 6px; flex: 1; max-width: 360px; }
+.tr-shimmer i { height: 8px; flex: 1; border-radius: 4px; background: linear-gradient(90deg, var(--tr-bg-3) 25%, var(--tr-bg-2) 50%, var(--tr-bg-3) 75%); background-size: 200% 100%; animation: tr-shine 1.6s linear infinite; }
+@keyframes tr-shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.tr-summary--landed { animation: tr-land 2.4s ease-out; }
+@keyframes tr-land { from { background: var(--tr-accent-weak); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .tr-shimmer i, .tr-summary--landed { animation: none; } }
+.tr-summary-body .tr-praise { align-self: start; padding: 10px 12px; border-radius: var(--tr-radius); background: var(--tr-auto-bg); }
+.tr-praise h3 { display: flex; align-items: center; gap: 6px; color: var(--tr-auto); }
+.tr-summary-body .tr-praise ul { list-style: none; padding-left: 0; }
+.tr-praise li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 6px; }
+.tr-praise li > svg { margin-top: 3px; color: var(--tr-auto); }
 .tr-md > * { margin: 0 0 8px; }
 .tr-md > :last-child { margin-bottom: 0; }
 .tr-md ul, .tr-md ol { padding-left: 20px; }
 .tr-md h2, .tr-md h3, .tr-md h4 { font-size: 13px; margin-top: 8px; }
 .tr-md pre { padding: 8px 10px; background: var(--tr-bg-2); border: 1px solid var(--tr-border); border-radius: var(--tr-radius); overflow: auto; font-size: 12.5px; }
 .tr-md li { margin: 2px 0; }
+/* A chip cut by a line break keeps its padding and border on each line; a long name breaks rather than overflows. */
+.tr-md :not(pre) > code { padding: 0 0.3em; background: var(--tr-bg-3); border: 1px solid var(--tr-border); border-radius: 4px; overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 
 .tr-batch {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 8px 16px;
@@ -272,7 +324,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-confirm-post ul { margin: 4px 0 0; padding-left: 18px; }
 
 .tr-btn {
-  display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: var(--tr-radius);
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--tr-radius);
   border: 1px solid var(--tr-border); background: var(--tr-bg); cursor: pointer; font-weight: 500; white-space: nowrap;
 }
 .tr-btn:hover { background: var(--tr-bg-2); }
@@ -346,6 +398,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-marker-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; font: 13px/1.4 var(--tr-font); }
 .tr-marker-title { font-weight: 500; }
 .tr-comment-mark { display: inline-flex; flex: none; color: var(--tr-accent); }
+.tr-discussion-mark { display: inline-flex; flex: none; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--tr-accent); font-variant-numeric: tabular-nums; }
 .tr-marker-note { color: var(--tr-warn); font-size: 12px; }
 .tr-detail { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 32px; max-width: 1100px; }
 .tr-detail-head h2 { font-size: 17px; }
@@ -413,6 +466,7 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-diagram figcaption { margin-top: 4px; font-size: 12.5px; color: var(--tr-muted); }
 
 .tr-outcome { padding: 8px 10px; background: var(--tr-bg-2); border-radius: var(--tr-radius); }
+.tr-pending { display: flex; align-items: center; gap: 8px; }
 .tr-changed { margin: 4px 0 0; padding-left: 20px; }
 .tr-warn { color: var(--tr-warn); }
 .tr-fix-changes { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
@@ -421,9 +475,70 @@ button.tr-attention-item:not(:disabled) { cursor: pointer; }
 .tr-context { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .tr-inline-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .tr-inline-form--column { flex-direction: column; align-items: stretch; }
+/* In a column, flex: 1 would size the input's height from nothing: it keeps a button's. */
+.tr-inline-form--column .tr-input { flex: none; }
 .tr-input { flex: 1; min-width: 240px; height: 30px; padding: 0 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); }
 .tr-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); resize: vertical; }
 .tr-input:focus, .tr-textarea:focus { outline: none; border-color: var(--tr-accent); }
+/* A finding's discussion, after annotant's thread: yours right in the accent, the agent's left. */
+.tr-dsc { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--tr-border); border-radius: 12px; background: var(--tr-bg-2); }
+.tr-dsc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tr-dsc-head h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tr-muted); }
+.tr-dsc-note { font-size: 12px; color: var(--tr-muted); }
+.tr-dsc-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 8px 0; text-align: center; }
+.tr-dsc-empty p { margin: 0; max-width: 380px; }
+.tr-dsc-empty-icon { color: var(--tr-accent); }
+.tr-dsc-empty-title { font-size: 15px; font-weight: 700; }
+.tr-suggest { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding-top: 4px; }
+.tr-suggest button { height: 30px; padding: 0 12px; border: 1px solid var(--tr-border); border-radius: 999px; background: var(--tr-bg); color: var(--tr-text); font: inherit; font-size: 13px; cursor: pointer; }
+.tr-suggest button:hover { border-color: var(--tr-accent); }
+.tr-chat { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 16px; }
+.tr-msg { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tr-msg--you { align-items: flex-end; padding-left: 48px; }
+.tr-msg--agent { align-items: stretch; }
+.tr-msg-who { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tr-muted); }
+/* Long words, URLs and code break inside the bubble rather than spilling out of it. */
+.tr-bubble { max-width: 100%; padding: 8px 14px; border-radius: 14px; overflow-wrap: anywhere; }
+.tr-bubble--you { background: var(--tr-accent); color: var(--tr-on-accent); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.tr-bubble--agent { background: var(--tr-bg); border: 1px solid var(--tr-border); border-bottom-left-radius: 4px; }
+.tr-bubble--agent > :first-child { margin-top: 0; }
+.tr-bubble--agent > :last-child { margin-bottom: 0; }
+/* One line, the agent's latest step: a pulsing icon, then what it does. */
+.tr-step-now { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--tr-radius); background: var(--tr-accent-weak); color: var(--tr-accent); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.tr-step-now > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tr-step-icon { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--tr-accent); color: var(--tr-on-accent); animation: tr-pulse 1.6s ease-out infinite; }
+@keyframes tr-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--tr-accent) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
+@media (prefers-reduced-motion: reduce) { .tr-step-icon { animation: none; } }
+/* What the agent proposes: one card each, its action on its right. */
+.tr-proposals { display: flex; flex-direction: column; gap: 8px; }
+.tr-proposal { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--tr-warn) 30%, var(--tr-border)); border-radius: var(--tr-radius); background: var(--tr-bg); }
+.tr-proposal-icon { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 7px; background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-proposal-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.tr-proposal-body { color: var(--tr-muted); overflow-wrap: anywhere; }
+.tr-proposal-body p { margin: 0; }
+.tr-proposal > .tr-btn { flex-shrink: 0; }
+.tr-proposal--editing { flex-direction: column; align-items: stretch; border-color: var(--tr-accent); }
+.tr-proposal-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--tr-muted); }
+.tr-proposal-foot strong { font-size: 13px; color: var(--tr-text); }
+.tr-clamp { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.tr-taken { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); font-size: 13px; color: var(--tr-muted); }
+.tr-taken svg { flex-shrink: 0; color: var(--tr-auto); }
+.tr-unanswered { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--tr-radius); background: var(--tr-danger-bg); color: var(--tr-danger); font-size: 13px; }
+.tr-unanswered svg { flex-shrink: 0; margin-top: 1px; }
+.tr-unanswered-body { display: flex; flex-direction: column; gap: 6px; }
+/* The message box: grows with its text up to its max-height, then scrolls. */
+.tr-composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--tr-border); border-radius: 12px; background: var(--tr-bg); transition: border-color .15s; }
+.tr-composer:focus-within { border-color: var(--tr-accent); }
+.tr-composer textarea { flex: 1; min-width: 0; min-height: 36px; max-height: 160px; padding: 7px 0; border: 0; outline: none; resize: none; overflow-y: auto; background: transparent; font: inherit; font-size: 15px; line-height: 1.45; color: var(--tr-text); }
+.tr-composer textarea::placeholder { color: var(--tr-muted); }
+.tr-send { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: var(--tr-accent); color: var(--tr-on-accent); cursor: pointer; }
+.tr-send:disabled { background: var(--tr-accent-weak); color: var(--tr-muted); cursor: default; }
+.tr-composer-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; font-size: 12px; color: var(--tr-muted); }
+.tr-composer-foot kbd { font: inherit; font-weight: 600; color: var(--tr-text); }
+.tr-dsc-closed { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; border: 1px dashed var(--tr-border); border-radius: 12px; font-size: 13px; color: var(--tr-muted); }
+.tr-btn--on { background: var(--tr-accent-weak); border-color: var(--tr-accent); color: var(--tr-accent); }
+.tr-btn svg { flex-shrink: 0; }
+.tr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .tr-ask { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--tr-warn-bg); border-radius: var(--tr-radius); }
 .tr-ask-text { font-weight: 600; }
 .tr-options { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }

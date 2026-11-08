@@ -1,7 +1,21 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import App from '../src/App'
-import type { FindingRecord, Ownership, Review, State } from '../src/domain'
+import type {
+  Discussion,
+  FindingRecord,
+  Ownership,
+  Review,
+  State,
+  Tracker,
+} from '../src/domain'
 import { FindingDetail } from '../src/FindingDetail'
 import {
   fakeServer,
@@ -22,7 +36,14 @@ function renderDetail({
   disabled = false,
   finding = bug,
   reviewFields = {},
+  discussion,
+  sent = true,
+  tracker,
 }: {
+  tracker?: Tracker
+  discussion?: Discussion
+  /** What the server answers a message. */
+  sent?: boolean
   ownership?: Ownership
   state?: State
   fields?: Partial<FindingRecord>
@@ -33,6 +54,7 @@ function renderDetail({
   const onDecide = vi.fn()
   const onAnswer = vi.fn()
   const onStop = vi.fn()
+  const onDiscuss = vi.fn(async () => sent)
   render(
     <FindingDetail
       review={review(ownership, reviewFields)}
@@ -44,12 +66,15 @@ function renderDetail({
       }
       steps={[]}
       disabled={disabled}
+      tracker={tracker}
       onDecide={onDecide}
       onAnswer={onAnswer}
       onStop={onStop}
+      discussion={discussion}
+      onDiscuss={onDiscuss}
     />,
   )
-  return { onDecide, onAnswer, onStop }
+  return { onDecide, onAnswer, onStop, onDiscuss }
 }
 
 const button = (name: string | RegExp) => screen.queryByRole('button', { name })
@@ -206,6 +231,7 @@ test('posted shows the discussion link; failed and dropped their reason', () => 
       onDecide={vi.fn()}
       onAnswer={vi.fn()}
       onStop={vi.fn()}
+      onDiscuss={vi.fn()}
     />,
   )
   expect(
@@ -222,6 +248,66 @@ test('posted shows the discussion link; failed and dropped their reason', () => 
   renderDetail({ state: 'dropped', fields: { reason: 'intended' } })
   expect(screen.getByText('Dropped: intended')).toBeDefined()
   expect(button('Drop')).toBeNull()
+})
+
+const github: Tracker = { kind: 'github', web: 'https://github.com/acme/app', prefix: '' }
+
+test('Open an issue prefills the title and body from the finding, and sends the edit', () => {
+  const { onDecide } = renderDetail({ tracker: github })
+  fireEvent.click(button('Open an issue')!)
+  expect(onDecide).not.toHaveBeenCalled()
+  const title = screen.getByLabelText<HTMLInputElement>('Issue title')
+  const body = screen.getByLabelText<HTMLTextAreaElement>('Issue body')
+  expect(title.value).toBe(bug.title)
+  for (const part of [bug.problem, bug.why, bug.fix, ...bug.excerpt.lines])
+    expect(body.value).toContain(part)
+  const anchor = `${bug.path}:${bug.line}`
+  expect(body.value).toContain(
+    `[\`${anchor}\`](https://github.com/acme/app/blob/${review('ours').branch}/${bug.path}#L${bug.line})`,
+  )
+  fireEvent.change(title, { target: { value: '  Later: the crash  ' } })
+  fireEvent.click(button('Open the issue')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'issue', title: 'Later: the crash', body: body.value.trim() },
+  ])
+})
+
+test('an issue with an empty title cannot be opened; Cancel leaves the finding as it was', () => {
+  const { onDecide } = renderDetail({ ownership: 'theirs' })
+  fireEvent.click(button('Open an issue')!)
+  fireEvent.change(screen.getByLabelText('Issue title'), { target: { value: ' ' } })
+  expect(screen.getByPlaceholderText("The issue's title, one line")).toBeTruthy()
+  expect(button('Open the issue')).toHaveProperty('disabled', true)
+  fireEvent.click(button('Cancel')!)
+  expect(screen.queryByLabelText('Issue title')).toBeNull()
+  expect(onDecide).not.toHaveBeenCalled()
+})
+
+test('with no tracker, Open an issue is off and says why', () => {
+  renderDetail({ tracker: { kind: null, reason: 'the project has no origin remote' } })
+  const open = button('Open an issue')!
+  expect(open).toHaveProperty('disabled', true)
+  expect(open.getAttribute('title')).toContain('the project has no origin remote')
+})
+
+test('a finding moved to an issue shows its link, and is settled', () => {
+  renderDetail({
+    state: 'moved',
+    fields: {
+      issue: {
+        title: 't',
+        body: 'b',
+        url: 'https://github.com/acme/app/issues/12',
+        ref: '#12',
+        at: 'now',
+      },
+    },
+  })
+  const link = screen.getByRole('link', { name: /issues\/12/ })
+  expect(link.getAttribute('href')).toBe('https://github.com/acme/app/issues/12')
+  expect(link.textContent).toContain('#12')
+  for (const name of ['Fix now', 'Drop', 'Skip', 'Open an issue'])
+    expect(button(name)).toBeNull()
 })
 
 test('Fix now sends the context when some was added', () => {
@@ -368,7 +454,7 @@ test('the chip names the group and its title the state; runs end in human words'
   })
   const chip = document.querySelector('.tr-chip--needs-you:not(.tr-runs *)')
   expect(chip?.textContent).toBe('Needs you')
-  expect(chip?.getAttribute('title')).toBe('The fix did not land')
+  expect(chip?.getAttribute('title')).toBe('The fix, the post or the issue did not land')
   expect(
     [...document.querySelectorAll('.tr-runs .tr-chip')].map((one) => [
       one.textContent,
@@ -392,6 +478,7 @@ const FAMILIES: Record<State, [string, string]> = {
   failed: ['needs-you', 'Needs you'],
   fixed: ['done', 'Done'],
   posted: ['done', 'Done'],
+  moved: ['done', 'Done'],
   dropped: ['set-aside', 'Set aside'],
   skipped: ['set-aside', 'Set aside'],
   stopped: ['set-aside', 'Set aside'],
@@ -409,3 +496,183 @@ test.each(Object.keys(FAMILIES).filter(isState))(
     expect(chip?.textContent).toBe(label)
   },
 )
+
+const asked = (text: string, at = '2026-11-06T10:00:00Z') =>
+  ({ by: 'reviewer', text, at }) as const
+const answered = (
+  text: string,
+  proposal?: Discussion['messages'][number]['proposal'],
+): Discussion['messages'][number] => ({
+  by: 'agent',
+  text,
+  at: '2026-11-06T10:01:00Z',
+  ...(proposal && { proposal }),
+})
+const box = () => screen.getByRole('textbox', { name: 'Your message to the agent' })
+const thread = () => screen.queryByRole('region', { name: 'Discussion' })
+
+test('Discuss opens the thread: a suggestion fills the box, Enter sends it', async () => {
+  const { onDiscuss, onDecide } = renderDetail()
+  expect(thread()).toBeNull()
+  const discuss = button('Discuss')!
+  expect(discuss.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(discuss)
+  expect(discuss.getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByText('Not sure about this finding?')).toBeDefined()
+  expect(button('Send')).toHaveProperty('disabled', true)
+  fireEvent.click(button('Is this really reachable?')!)
+  expect(box()).toHaveProperty('value', 'Is this really reachable?')
+  // Shift+Enter breaks the line; Enter sends.
+  fireEvent.keyDown(box(), { key: 'Enter', shiftKey: true })
+  expect(onDiscuss).not.toHaveBeenCalled()
+  fireEvent.keyDown(box(), { key: 'Enter' })
+  expect(onDiscuss).toHaveBeenCalledWith('f-01', 'Is this really reachable?')
+  expect(onDecide).not.toHaveBeenCalled()
+  await waitFor(() => expect(box()).toHaveProperty('value', ''))
+  // Discuss again folds the thread.
+  fireEvent.click(discuss)
+  expect(thread()).toBeNull()
+})
+
+test('a message the server refused stays in the box', async () => {
+  renderDetail({ sent: false })
+  fireEvent.click(button('Discuss')!)
+  fireEvent.change(box(), { target: { value: 'Is it reachable?' } })
+  fireEvent.click(button('Send')!)
+  await waitFor(() => expect(button('Send')).toHaveProperty('disabled', false))
+  expect(box()).toHaveProperty('value', 'Is it reachable?')
+})
+
+test('the thread shows by itself; while the agent answers, its step shows and the box waits', () => {
+  renderDetail({
+    discussion: {
+      messages: [asked('Is it reachable?')],
+      step: { at: 1, kind: 'read', label: 'src/people/usePeople.ts', state: 'running' },
+    },
+  })
+  expect(thread()).not.toBeNull()
+  expect(screen.getByText('Is it reachable?').className).toContain('tr-bubble--you')
+  expect(screen.getByRole('status').textContent).toBe('Reading src/people/usePeople.ts')
+  expect(box()).toHaveProperty('disabled', true)
+  expect(box().getAttribute('placeholder')).toBe('The agent is answering…')
+})
+
+test("the agent's proposals carry over to a decision; the comment is edited in place", () => {
+  const discussion: Discussion = {
+    messages: [
+      asked('Is it reachable?'),
+      answered('Yes: **on mount**.', {
+        fix: 'Guard in the hook.',
+        comment: 'This crashes on mount.',
+        drop: 'Not reachable.',
+      }),
+    ],
+  }
+  const { onDecide } = renderDetail({ discussion, ownership: 'theirs' })
+  expect(screen.getByText('on mount').tagName).toBe('STRONG')
+  fireEvent.click(button('Fix with this')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'fix', context: 'Guard in the hook.' },
+  ])
+  fireEvent.click(button('Drop with this reason')!)
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'drop', reason: 'Not reachable.' },
+  ])
+  fireEvent.click(button('Post this')!)
+  const editor = within(thread()!).getByRole('textbox', { name: 'Comment to post' })
+  expect(editor).toHaveProperty('value', 'This crashes on mount.')
+  fireEvent.change(editor, { target: { value: 'This crashes on first mount.' } })
+  fireEvent.click(within(thread()!).getByRole('button', { name: 'Post' }))
+  expect(onDecide).toHaveBeenLastCalledWith([
+    { id: 'f-01', action: 'post', comment: 'This crashes on first mount.' },
+  ])
+  fireEvent.click(within(thread()!).getByRole('button', { name: 'Cancel' }))
+  expect(button('Post this')).not.toBeNull()
+})
+
+test('a settled finding shows its thread read-only, and what was taken from it', () => {
+  renderDetail({
+    state: 'dropped',
+    fields: { reason: 'Not reachable.' },
+    discussion: {
+      messages: [
+        asked('Is it reachable?'),
+        answered('No.', { fix: 'Guard.', drop: 'Not reachable.' }),
+      ],
+    },
+  })
+  expect(thread()).not.toBeNull()
+  expect(button('Fix with this')).toBeNull()
+  expect(screen.queryByRole('textbox', { name: 'Your message to the agent' })).toBeNull()
+  expect(screen.getByText("You dropped it with the agent's reason")).toBeDefined()
+  expect(
+    screen.getByText('The finding is settled: the thread reads as it stands.'),
+  ).toBeDefined()
+})
+
+test('a finding an agent works on keeps its thread read-only, for that reason', () => {
+  renderDetail({
+    state: 'queued',
+    fields: { decision: { action: 'fix', context: 'Guard.', at: 'now' } },
+    discussion: {
+      messages: [asked('Is it reachable?'), answered('Yes.', { fix: 'Guard.' })],
+    },
+  })
+  expect(
+    screen.getByText('An agent is on the finding: the thread reads as it stands.'),
+  ).toBeDefined()
+  expect(screen.getByText("You sent it to fix with the agent's proposal")).toBeDefined()
+})
+
+test('an agent that ended without answering says so; Ask again sends the question again', () => {
+  const { onDiscuss } = renderDetail({
+    discussion: {
+      messages: [
+        asked('Why?'),
+        {
+          by: 'agent',
+          text: 'The agent ended without answering: ask again.',
+          at: '2026-11-06T10:01:00Z',
+          failed: true,
+        },
+      ],
+    },
+  })
+  expect(
+    screen.getByText(/ended without answering/).closest('.tr-unanswered'),
+  ).not.toBeNull()
+  fireEvent.click(button('Ask again')!)
+  expect(onDiscuss).toHaveBeenCalledWith('f-01', 'Why?')
+  expect(box()).toBeDefined()
+})
+
+test('an issue that failed opens again as the reviewer wrote it', () => {
+  renderDetail({
+    state: 'failed',
+    fields: {
+      decision: { action: 'issue', at: 'now' },
+      issue: { title: 'My words', body: 'My body' },
+      reason: 'gh: HTTP 410',
+    },
+  })
+  fireEvent.click(button('Open an issue')!)
+  expect(screen.getByLabelText<HTMLInputElement>('Issue title').value).toBe('My words')
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Issue body').value).toBe('My body')
+})
+
+test('while its issue opens, the finding shows a spinner and offers nothing else', () => {
+  renderDetail({
+    state: 'queued',
+    fields: {
+      decision: { action: 'issue', at: 'now' },
+      issue: { title: 'T', body: 'B' },
+    },
+    tracker: github,
+  })
+  expect(screen.getByRole('status').textContent).toBe(
+    'Opening the issue on https://github.com/acme/app…',
+  )
+  expect(document.querySelector('.tr-pending .tr-spinner')).not.toBeNull()
+  for (const name of ['Stop', 'Drop', 'Skip', 'Fix now', 'Open an issue'])
+    expect(button(name)).toBeNull()
+})

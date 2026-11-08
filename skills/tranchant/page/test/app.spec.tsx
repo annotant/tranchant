@@ -19,6 +19,7 @@ import {
   ORDER,
   payload,
   record,
+  settingsPayload,
   STACKED,
 } from './fixture'
 
@@ -229,6 +230,17 @@ test('a decision on the finding shown opens the next open one in list order', as
   expect(screen.queryByText('All findings settled')).toBeNull()
 })
 
+test('opening an issue stays on the finding, to watch it open', async () => {
+  const server = await renderApp()
+  expect(selectedOption()).toBe('f-02')
+  fireEvent.click(screen.getByRole('button', { name: 'Open an issue' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open the issue' }))
+  await waitFor(() => expect(decisionsOf(server.posts.at(-1))[0]?.action).toBe('issue'))
+  // Long enough for a jump to the next finding to have happened.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(selectedOption()).toBe('f-02')
+})
+
 test('the next open finding wraps to the start of the list', async () => {
   await renderApp()
   fireEvent.click(screen.getByText('Use the design tokens'))
@@ -395,7 +407,7 @@ test('clicking a row opens it; the detail shows the excerpt, related and the dia
   expect(screen.getByText('The admin branch bypasses the tenant check.')).toBeDefined()
 })
 
-test('the summary renders the Markdown and the strengths, and remembers being closed', async () => {
+test('the summary renders the Markdown and the strengths, and opens as the settings say', async () => {
   await renderApp()
   const summary = screen.getByText('Summary').closest('details')
   expect(summary?.open).toBe(true)
@@ -404,10 +416,86 @@ test('the summary renders the Markdown and the strengths, and remembers being cl
   expect(screen.getByRole('heading', { name: 'What looks good' })).toBeDefined()
   expect(screen.getByText('Tests cover the empty state.')).toBeDefined()
   cleanup()
-  localStorage.setItem('tranchant:summary', 'closed')
+  await renderApp(
+    payload({ review: { strengths: ['`parseRange` rejects a **reversed** range.'] } }),
+  )
+  const strength = screen
+    .getByRole('region', { name: 'What looks good' })
+    .querySelector('li')
+  expect(strength?.querySelector('code')?.textContent).toBe('parseRange')
+  expect(strength?.querySelector('strong')?.textContent).toBe('reversed')
+  expect(strength?.textContent).not.toContain('`')
+  cleanup()
+  const server = fakeServer(payload())
+  server.answerSettings(settingsPayload({ summary: 'closed' }))
   render(<App />)
   const closed = (await screen.findByText('Summary')).closest('details')
   expect(closed?.open).toBe(false)
+  // Opening it is for this visit: nothing is written to the settings.
+  fireEvent(closed!, new Event('toggle'))
+  expect(server.settingsPut()).toBeUndefined()
+})
+
+test('an empty summary without strengths shows no Summary section', async () => {
+  await renderApp(payload({ review: { summary: '  ', strengths: [] } }))
+  expect(screen.queryByText('Summary')).toBeNull()
+})
+
+test('a summary alone, or a strength alone, shows the Summary section', async () => {
+  await renderApp(payload({ review: { strengths: [] } }))
+  expect(screen.getByRole('heading', { name: 'Change Map' })).toBeDefined()
+  expect(screen.queryByRole('heading', { name: 'What looks good' })).toBeNull()
+  cleanup()
+  await renderApp(payload({ review: { summary: '', strengths: ['Names are clear.'] } }))
+  expect(screen.getByText('Summary')).toBeDefined()
+  expect(screen.getByText('Names are clear.')).toBeDefined()
+})
+
+test('while the review runs, the summary is written on one line, then lands closed with a ready chip', async () => {
+  const events = fakeEvents()
+  const writing = {
+    ...payload({
+      review: { status: 'reviewing', summary: '', strengths: [], findings: [] },
+    }),
+    reviewers: [{ name: 'sm-summary', running: true, steps: [] }],
+  }
+  const server = await renderApp(writing)
+  expect(screen.getByText('the summary agent reads the change')).toBeDefined()
+  expect(document.querySelector('details.tr-summary')).toBeNull()
+  server.set({
+    ...payload({ review: { status: 'reviewing', findings: [] } }),
+    reviewers: [{ name: 'sm-summary', running: false, outcome: 'done', steps: [] }],
+  })
+  events.send('changed')
+  await screen.findByText('Summary ready')
+  const summary = document.querySelector<HTMLDetailsElement>('details.tr-summary')!
+  expect(summary.open).toBe(false)
+  expect(summary.className).toContain('tr-summary--landed')
+  expect(summary.querySelector('.tr-summary-ready')?.textContent).toBe('ready')
+  expect(screen.queryByText('the summary agent reads the change')).toBeNull()
+  summary.open = true
+  fireEvent(summary, new Event('toggle'))
+  await waitFor(() => expect(summary.querySelector('.tr-summary-ready')).toBeNull())
+  expect(screen.getByRole('heading', { name: 'What looks good' })).toBeDefined()
+})
+
+test('a review in progress keeps its summary closed whatever was remembered, until it ends', async () => {
+  await renderApp(payload({ review: { status: 'reviewing', findings: [] } }))
+  const summary = document.querySelector<HTMLDetailsElement>('details.tr-summary')!
+  expect(summary.open).toBe(false)
+  expect(summary.querySelector('.tr-summary-ready')).toBeNull()
+  expect(summary.textContent).toContain('what the change does and where it moves')
+})
+
+test('a summary agent that ended without a summary leaves no Summary line', async () => {
+  await renderApp({
+    ...payload({
+      review: { status: 'reviewing', summary: '', strengths: [], findings: [] },
+    }),
+    reviewers: [{ name: 'sm-summary', running: false, outcome: 'failed', steps: [] }],
+  })
+  expect(document.querySelector('.tr-summary')).toBeNull()
+  expect(screen.queryByText('the summary agent reads the change')).toBeNull()
 })
 
 test('a changed event reloads the review; a run shows its steps', async () => {
@@ -630,8 +718,8 @@ test('j/k walk the findings in the diff’s order, across files; a marker click 
   ).toHaveProperty('checked', true)
 })
 
-test('the list view is a toggle, remembered across loads', async () => {
-  await renderDiffApp()
+test('the list view is a toggle for the visit; the settings say which view opens', async () => {
+  const server = await renderDiffApp()
   fireEvent.click(screen.getByRole('button', { name: 'List' }))
   expect(
     screen.getAllByRole('option').map((o) => o.id.replace('tr-option-', '')),
@@ -641,10 +729,12 @@ test('the list view is a toggle, remembered across loads', async () => {
     'Null tenantId crashes the loop',
   )
   expect(screen.queryByRole('region', { name: 'Diff' })).toBeNull()
-  expect(localStorage.getItem('tranchant:view')).toBe('list')
+  expect(server.settingsPut()).toBeUndefined()
   cleanup()
+  server.answerSettings(settingsPayload({ view: 'list' }))
   render(<App />)
   await screen.findByRole('heading', { name: TITLE })
+  await screen.findByRole('navigation', { name: 'Findings' })
   expect(screen.getAllByRole('option')).toHaveLength(5)
   fireEvent.click(screen.getByRole('button', { name: 'Diff' }))
   await screen.findByRole('region', { name: 'Diff' })
@@ -916,11 +1006,73 @@ test('a review done names its stopped lenses together, and no verified count unl
   expect(agents.textContent).not.toContain('verified')
 })
 
-test('the header has the button that switches the theme', async () => {
-  await renderApp()
+test('the header switches the theme through the settings, for every page', async () => {
+  const server = await renderApp()
   const header = document.querySelector<HTMLElement>('.tr-header')
   expect(header).not.toBeNull()
+  const toggle = within(header!).getByRole('button', {
+    name: /^Switch to (dark|light) theme$/,
+  })
+  const other = /dark/.test(toggle.getAttribute('aria-label') ?? '') ? 'dark' : 'light'
+  fireEvent.click(toggle)
+  await waitFor(() => expect(server.settingsPut()).toEqual({ theme: other }))
+  await waitFor(() =>
+    expect(document.documentElement.getAttribute('data-theme')).toBe(other),
+  )
+})
+
+test('the gear opens the Settings, and leads back to the review', async () => {
+  await renderApp()
+  const header = document.querySelector<HTMLElement>('.tr-header')
+  fireEvent.click(within(header!).getByRole('link', { name: 'Settings' }))
+  expect(await screen.findByRole('heading', { name: 'Settings' })).toBeDefined()
+  expect(screen.queryByRole('navigation', { name: 'Findings' })).toBeNull()
+  // The shortcuts are the review's: none fires here.
+  fireEvent.keyDown(document, { key: 'd' })
+  fireEvent.click(screen.getByRole('link', { name: 'Back to the review' }))
+  expect(await screen.findByRole('navigation', { name: 'Findings' })).toBeDefined()
+  expect(screen.queryByRole('heading', { name: 'Settings' })).toBeNull()
+})
+
+test('a message in a discussion goes to /api/discuss; a refusal shows and keeps it', async () => {
+  const server = await renderApp(payload({}))
+  expect(selectedOption()).toBe('f-02')
+  fireEvent.click(screen.getByRole('button', { name: 'Discuss' }))
+  const box = screen.getByRole('textbox', { name: 'Your message to the agent' })
+  // Refused: the server's words show, and the message stays to send again.
+  server.refuseDiscuss('finding f-02 is queued: no discussion now')
+  fireEvent.change(box, { target: { value: 'Is it reachable?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() =>
+    expect(screen.getByRole('status').textContent).toContain(
+      'finding f-02 is queued: no discussion now',
+    ),
+  )
+  expect(box).toHaveProperty('value', 'Is it reachable?')
+  server.refuseDiscuss(undefined)
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() => expect(box).toHaveProperty('value', ''))
+  expect(server.posts.map((one) => one.body)).toEqual([
+    { id: 'f-02', text: 'Is it reachable?' },
+    { id: 'f-02', text: 'Is it reachable?' },
+  ])
+})
+
+test('a finding with a discussion is marked with its count, in the list and in the diff', async () => {
+  const discussions = {
+    'f-02': {
+      messages: [
+        { by: 'reviewer' as const, text: 'Why?', at: '2026-11-06T10:00:00Z' },
+        { by: 'agent' as const, text: 'Because.', at: '2026-11-06T10:01:00Z' },
+      ],
+    },
+  }
+  await renderApp({ ...payload(), discussions })
+  const listed = screen.getByRole('img', { name: '2 messages in its discussion' })
+  expect(listed.textContent).toBe('2')
+  cleanup()
+  await renderDiffApp({ ...payload(), discussions })
   expect(
-    within(header!).getByRole('button', { name: /^Switch to (dark|light) theme$/ }),
-  ).toBeTruthy()
+    screen.getAllByRole('img', { name: '2 messages in its discussion' }),
+  ).not.toHaveLength(0)
 })

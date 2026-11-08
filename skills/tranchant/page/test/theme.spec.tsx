@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { PAGE_CSS } from '../src/styles'
-import { applyStoredTheme, THEME_KEY } from '../src/theme'
+import { applyTheme } from '../src/theme'
 import { ThemeToggle } from '../src/ThemeToggle'
 
 const html = document.documentElement
@@ -24,7 +24,7 @@ afterEach(() => {
 
 test('by default, the button follows the system and offers the other theme', () => {
   const change = systemScheme(false)
-  render(<ThemeToggle />)
+  render(<ThemeToggle onPick={applyTheme} />)
   expect(screen.getByRole('button', { name: 'Switch to dark theme' })).toHaveProperty(
     'title',
     'Switch to dark theme',
@@ -34,50 +34,35 @@ test('by default, the button follows the system and offers the other theme', () 
   expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeTruthy()
 })
 
-test('a click picks the other theme, puts it on <html> and remembers it', () => {
+test('a click hands the other theme to its owner, who puts it on <html>', () => {
   systemScheme(true)
-  render(<ThemeToggle />)
+  const onPick = vi.fn(applyTheme)
+  render(<ThemeToggle onPick={onPick} />)
   fireEvent.click(screen.getByRole('button', { name: 'Switch to light theme' }))
+  expect(onPick).toHaveBeenLastCalledWith('light')
   expect(html.getAttribute('data-theme')).toBe('light')
-  expect(localStorage.getItem(THEME_KEY)).toBe('light')
   fireEvent.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
+  expect(onPick).toHaveBeenLastCalledWith('dark')
   expect(html.getAttribute('data-theme')).toBe('dark')
-  expect(localStorage.getItem(THEME_KEY)).toBe('dark')
 })
 
 test('a pick holds when the system changes its scheme', () => {
   const change = systemScheme(false)
-  render(<ThemeToggle />)
+  render(<ThemeToggle onPick={applyTheme} />)
   fireEvent.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
   act(() => change(false))
   expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeTruthy()
 })
 
-test('the remembered pick is on <html> before the page renders', () => {
-  localStorage.setItem(THEME_KEY, 'dark')
-  applyStoredTheme()
-  expect(html.getAttribute('data-theme')).toBe('dark')
-})
-
-test('a stored value that is not a theme, or a blocked store, leaves the system in charge', () => {
-  localStorage.setItem(THEME_KEY, 'sepia')
-  applyStoredTheme()
-  expect(html.hasAttribute('data-theme')).toBe(false)
-  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-    throw new Error('blocked')
-  })
-  applyStoredTheme()
-  expect(html.hasAttribute('data-theme')).toBe(false)
-})
-
-test('a blocked store still switches the page, for this visit', () => {
+test('the system theme takes the pick off <html>, and the button follows the system again', () => {
   systemScheme(false)
-  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-    throw new Error('blocked')
-  })
-  render(<ThemeToggle />)
-  fireEvent.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
+  render(<ThemeToggle onPick={applyTheme} />)
+  act(() => applyTheme('dark'))
   expect(html.getAttribute('data-theme')).toBe('dark')
+  expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeTruthy()
+  act(() => applyTheme('system'))
+  expect(html.hasAttribute('data-theme')).toBe(false)
+  expect(screen.getByRole('button', { name: 'Switch to dark theme' })).toBeTruthy()
 })
 
 /** The declarations of the first rule whose selector ends with `selector`. */

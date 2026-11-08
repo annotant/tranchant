@@ -1,7 +1,7 @@
 // scripts/hook.mjs, run as Claude Code runs a finding's agent's hooks: the
 // event as JSON on stdin, a deny as JSON on stdout.
 import assert from 'node:assert/strict'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import {
@@ -69,7 +69,12 @@ async function world(t, count = 1, { lockRoot } = {}) {
           typeof event === 'string'
             ? event
             : JSON.stringify({ agent_id: `a${index + 1}`, ...event }),
-        env: { TRANCHANT_STATE_DIR: stateDir, TRANCHANT_LOCK_WAIT_MS: '300' },
+        env: {
+          TRANCHANT_STATE_DIR: stateDir,
+          TRANCHANT_LOCK_WAIT_MS: '300',
+          // The machine's settings would name a model for the Started step.
+          XDG_CONFIG_HOME: stateDir,
+        },
       },
     )
     assert.equal(ran.code, 0, ran.stderr)
@@ -265,6 +270,43 @@ test('tells an agent whose finding the reviewer stopped or dropped to stop', asy
       (await w.tool(0, 'Edit', edit(path.join(w.root, 'src/App.tsx')))) ?? '',
       /reply "CANCELLED"/,
       state,
+    )
+  }
+})
+
+test("the Started step takes the settings' model when claim.mjs recorded none", async (t) => {
+  const w = await world(t)
+  const file = path.join(stateDir, 'tranchant', 'settings.json')
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, JSON.stringify({ version: 1, fixModel: 'claude-haiku-5-5' }))
+  try {
+    await w.tool(
+      0,
+      'Bash',
+      { command: `node ${SCRIPTS}claim.mjs ${w.id(0)} --review ${w.dir}` },
+      { between: () => w.store.claim(w.id(0), { agent: 'a1' }) },
+    )
+    assert.equal((await w.progress(0))[0].model, 'claude-haiku-5-5')
+  } finally {
+    await rm(file, { force: true })
+  }
+})
+
+test("refuses to write the person's settings file, by any tool", async (t) => {
+  const w = await world(t)
+  await w.claim(0)
+  const file = path.join(stateDir, 'tranchant', 'settings.json')
+  /** @type {[string, Record<string, unknown>][]} */
+  const attempts = [
+    ['Write', { file_path: file, content: '{}' }],
+    ['Edit', edit(file)],
+    ['Bash', { command: `cat > ${file} <<'EOF'\n{}\nEOF` }],
+  ]
+  for (const [tool, input] of attempts) {
+    assert.match(
+      (await w.tool(0, tool, input)) ?? '',
+      /settings file|Edit or Write tool/,
+      tool,
     )
   }
 })

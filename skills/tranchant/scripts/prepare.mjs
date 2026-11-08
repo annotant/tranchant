@@ -4,7 +4,9 @@
 // change (the current branch, or <branch>, against the repository's default
 // branch, `ours`, with the branch's open merge request when glab finds one;
 // a merge request read with `glab mr view`, `theirs`), reads
-// the recipe (the plugin's agents/review/recipe.json unless --recipe), writes
+// the recipe (--recipe, else the settings' `recipe`, else the plugin's
+// agents/review/recipe.json; without --recipe, the settings' `disabledLenses`
+// are left out), writes
 // the review's envelope, `reviewing` with no finding yet, to
 // <state>/inbox/<id>.json and prints `INBOX <file>`, then one `LENS <json>`
 // per lens whose paths the change touches: `{ name, prompt, paths }`, `prompt`
@@ -15,15 +17,15 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs, promisify } from 'node:util'
 import { REVIEW_VERSION, oneLine } from './lib/format.mjs'
-import { SKILL_DIR, STATE_ROOT } from './lib/project.mjs'
+import { STATE_ROOT } from './lib/project.mjs'
+import { loadSettings, readRecipeFile, recipeInForce } from './lib/settings.mjs'
 
 /** @typedef {{ name: string, prompt: string, paths: string[], otherwise?: boolean }} Lens */
 
-const DEFAULT_RECIPE = path.join(SKILL_DIR, '..', '..', 'agents', 'review', 'recipe.json')
 const LENS_NAME = /^[\w-]{1,40}$/
 // The branch's MR is optional: an unreachable GitLab must not hold the review.
 const GLAB_TIMEOUT_MS = 20_000
@@ -79,7 +81,7 @@ const commitOf = (cwd, revision) =>
 async function readRecipe(file) {
   let recipe
   try {
-    recipe = JSON.parse(await readFile(file, 'utf8'))
+    recipe = await readRecipeFile(file)
   } catch (error) {
     return refuse(`recipe ${file}: ${message(error)}`)
   }
@@ -302,9 +304,14 @@ const cwd = process.cwd()
 const top = await gitOr(cwd, ['rev-parse', '--show-toplevel'])
 if (!top) refuse(`${cwd} is not in a git repository`)
 const project = path.resolve(top)
+const { values: settings, problem } = await loadSettings()
+// Read as none, as the server does: the review still runs, on the defaults.
+if (problem) console.error(`settings: ${oneLine(problem)}`)
 const lenses = await readRecipe(
-  values.recipe ? path.resolve(cwd, values.recipe) : DEFAULT_RECIPE,
+  values.recipe ? path.resolve(cwd, values.recipe) : recipeInForce(settings),
 )
+// The lenses turned off are the recipe in force's: a run's own recipe runs whole.
+const disabled = new Set(values.recipe ? [] : settings.disabledLenses)
 const theirs = target !== undefined && /^https?:\/\//.test(target)
 const change = theirs
   ? await mergeRequest(project, target)
@@ -345,6 +352,8 @@ for (const lens of lenses) {
 const uncovered = changed.filter((file) => !covered.has(file))
 /** @type {Lens[]} */
 const applied = lenses.flatMap((lens) => {
+  // Turned off in the settings: not run, and its files reviewed by no other lens.
+  if (disabled.has(lens.name)) return []
   if (lens.otherwise)
     return uncovered.length
       ? [{ name: lens.name, prompt: lens.prompt, paths: uncovered }]
@@ -352,7 +361,12 @@ const applied = lenses.flatMap((lens) => {
   const paths = matched.get(lens)
   return paths ? [{ name: lens.name, prompt: lens.prompt, paths }] : []
 })
-if (!applied.length) refuse("no lens of the recipe applies to the change's files")
+if (!applied.length)
+  refuse(
+    lenses.every((lens) => disabled.has(lens.name))
+      ? 'every lens of the recipe is turned off in the settings'
+      : "no lens of the recipe applies to the change's files",
+  )
 
 const id = randomUUID()
 const envelope = {
@@ -368,7 +382,8 @@ const envelope = {
   verify: true,
   title: change.title,
   ...('mr' in change && { mr: change.mr }),
-  summary: `Reviewed by Tranchant, lens by lens: ${applied.map((lens) => lens.name).join(', ')}.`,
+  // Blank until the summary agent writes them (summarize.mjs); the page hides the section meanwhile.
+  summary: '',
   strengths: [],
   findings: [],
 }
