@@ -13,7 +13,9 @@ released to the `stable` branch.
   beside the lenses: it writes what the change does, its Change Map (API
   surface, data and migrations, flags and configuration, shared state) and
   what it does well. The page shows them under **Summary** and **What looks
-  good** as soon as they are written, while the lenses still run.
+  good** as soon as they are written, while the lenses still run: one line,
+  closed, with a spinner while the agent writes and a "ready" chip when it
+  lands, so the findings below never move.
 - **Open an issue.** A finding that is real but not for this change (too
   big, out of scope, someone else's code) moves to the project's own
   tracker: GitHub with `gh`, GitLab with `glab`, whichever the checkout's
