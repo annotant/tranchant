@@ -5,7 +5,7 @@
 // Precedence: a run's flag (--recipe), then an environment variable, then
 // this file, then the default.
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
@@ -265,9 +265,10 @@ const MAX_RECIPE_BYTES = 1024 * 1024
  * @returns {Promise<unknown>}
  */
 export async function readRecipeFile(file) {
-  let info
+  // One handle for the size and the text: what is measured is what is read.
+  let handle
   try {
-    info = await stat(file)
+    handle = await open(file, 'r')
   } catch (error) {
     const code = errorCode(error)
     throw new Error(
@@ -277,13 +278,19 @@ export async function readRecipeFile(file) {
       { cause: error },
     )
   }
-  if (!info.isFile()) throw new Error('not a regular file')
-  if (info.size > MAX_RECIPE_BYTES)
-    throw new Error(`larger than ${MAX_RECIPE_BYTES / 1024 / 1024} MiB`)
   try {
-    return JSON.parse(await readFile(file, 'utf8'))
-  } catch (error) {
-    throw new Error('not JSON', { cause: error })
+    const info = await handle.stat()
+    if (!info.isFile()) throw new Error('not a regular file')
+    if (info.size > MAX_RECIPE_BYTES)
+      throw new Error(`larger than ${MAX_RECIPE_BYTES / 1024 / 1024} MiB`)
+    const text = await handle.readFile('utf8')
+    try {
+      return JSON.parse(text)
+    } catch (error) {
+      throw new Error('not JSON', { cause: error })
+    }
+  } finally {
+    await handle.close()
   }
 }
 
