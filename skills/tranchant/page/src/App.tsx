@@ -32,12 +32,11 @@ import {
 } from './domain'
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
-import { Markdown } from './markdown'
 import { ReviewAgents } from './ReviewAgents'
+import { Summary } from './Summary'
 import { readStored, writeStored } from './storage'
 import { ThemeToggle } from './ThemeToggle'
 
-const SUMMARY_KEY = 'tranchant:summary'
 const VIEW_KEY = 'tranchant:view'
 const NO_SECTIONS: readonly Section[] = []
 
@@ -45,7 +44,6 @@ const NO_SECTIONS: readonly Section[] = []
 type View = 'diff' | 'list'
 
 const readView = (): View => (readStored(VIEW_KEY) === 'list' ? 'list' : 'diff')
-const readSummaryOpen = () => readStored(SUMMARY_KEY) !== 'closed'
 
 const isEditing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
@@ -218,7 +216,6 @@ export default function App() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [cursorState, setCursor] = useState<string>()
   const [openState, setOpenId] = useState<string>()
-  const [summaryOpen, setSummaryOpen] = useState(readSummaryOpen)
   const [view, setView] = useState<View>(readView)
   const [notice, setNotice] = useState<string>()
   // A decision left no open finding to move to: the detail says so until the reviewer opens one.
@@ -471,9 +468,6 @@ export default function App() {
     />
   )
   const reviewing = isReviewing(review)
-  const strengths = review.strengths ?? []
-  // A section with nothing in it would only repeat the band above it.
-  const hasSummary = review.summary.trim() !== '' || strengths.length > 0
   const detail = current ? (
     <FindingDetail
       key={current.id}
@@ -531,32 +525,7 @@ export default function App() {
         project={review?.project ?? ''}
         onOpen={open}
       />
-      {hasSummary && (
-        <details
-          className="tr-summary"
-          open={summaryOpen}
-          onToggle={(event) => {
-            const next = event.currentTarget.open
-            setSummaryOpen(next)
-            writeStored(SUMMARY_KEY, next ? 'open' : 'closed')
-          }}
-        >
-          <summary>Summary</summary>
-          <div className="tr-summary-body">
-            {review.summary.trim() && <Markdown source={review.summary} />}
-            {strengths.length > 0 && (
-              <section aria-label="What looks good">
-                <h3>What looks good</h3>
-                <ul>
-                  {strengths.map((strength) => (
-                    <li key={strength}>{strength}</li>
-                  ))}
-                </ul>
-              </section>
-            )}
-          </div>
-        </details>
-      )}
+      <Summary review={review} agents={payload?.reviewers ?? []} reviewing={reviewing} />
       <BatchBar
         review={review}
         records={records}

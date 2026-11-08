@@ -207,7 +207,7 @@ export interface Step {
   model?: string
 }
 
-/** An agent of `/tranchant review`: a lens's reviewer (`rv-…`) or a finding's verifier (`vf-…`). */
+/** An agent of `/tranchant review`: the summary agent (`sm-summary`), a lens's reviewer (`rv-…`) or a finding's verifier (`vf-…`). */
 export interface ReviewAgent {
   name: string
   running: boolean

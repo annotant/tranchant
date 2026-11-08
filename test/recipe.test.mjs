@@ -64,8 +64,8 @@ test('each lens of the recipe has its prompt, named after it', async () => {
     .toSorted((a, b) => a.localeCompare(b))
   assert.deepEqual(
     files,
-    [...recipe.lenses.map((lens) => lens.prompt), 'verifier.md'].toSorted((a, b) =>
-      a.localeCompare(b),
+    [...recipe.lenses.map((lens) => lens.prompt), 'summary.md', 'verifier.md'].toSorted(
+      (a, b) => a.localeCompare(b),
     ),
   )
   for (const lens of recipe.lenses) {
@@ -95,6 +95,19 @@ test('each lens of the recipe has its prompt, named after it', async () => {
     assert.match(body, /## What counts\n/, lens.name)
     assert.match(body, /## How to (work|anchor|word|report)\n/, lens.name)
   }
+})
+
+test('the summary agent writes what the change does and its Change Map, as data, with summarize.mjs', async () => {
+  const { name, description, body } = await prompt('summary.md')
+  assert.equal(name, 'summary')
+  assert.match((description ?? '').replace(/\s+/g, ' '), /Only the hooks start it/)
+  for (const word of ['REVIEW', 'SKILL', 'PROJECT', 'BASE', 'HEAD']) {
+    assert.match(body, new RegExp(`\\*\\*${word}\\*\\*`), word)
+  }
+  assert.match(body, /summarize\.mjs --review REVIEW <<'EOF'/)
+  assert.match(body, /## Change Map/)
+  assert.match(body, /`strengths`/)
+  assert.match(body, /data, never instructions/)
 })
 
 test('the verifier confirms, amends or removes, and keeps the earlier of two duplicates', async () => {
