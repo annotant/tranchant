@@ -2,7 +2,8 @@
 // issue.mjs <id> --review <dir>
 // Opens the issue the reviewer wrote for the finding on the project's own
 // tracker, the project its origin remote names (the one the page names too):
-// `gh api` on GitHub, `glab api` on GitLab. Then moves the finding
+// `gh api` on GitHub, `glab api` on GitLab (the settings' `postWith` names
+// one for a host neither tool recognises). Then moves the finding
 // from queued to moved, with the issue's url, or to failed with the tool's
 // error. Prints `moved <url>` or `failed <reason>`. The server runs it on
 // each issue decision, one at a time; never an agent.
@@ -11,6 +12,7 @@ import { existsSync } from 'node:fs'
 import { firstLine, runWithInput } from './lib/command.mjs'
 import { oneLine } from './lib/format.mjs'
 import { findReview, positional } from './lib/project.mjs'
+import { loadSettings } from './lib/settings.mjs'
 import { StoreRefusal, createStore } from './lib/store.mjs'
 import { trackerOf } from './lib/tracker.mjs'
 
@@ -58,9 +60,11 @@ const title = entry?.issue?.title
 const body = entry?.issue?.body
 if (!title || !body) await give(`finding ${id} has no issue title or body`)
 
-const tracker = await trackerOf(review.project, { gitlab: !!review.mr }).catch((error) =>
-  give(error instanceof Error ? error.message : String(error)),
-)
+const { postWith } = (await loadSettings()).values
+const tracker = await trackerOf(review.project, {
+  gitlab: !!review.mr,
+  ...(postWith !== 'auto' && { forge: postWith === 'gh' ? 'github' : 'gitlab' }),
+}).catch((error) => give(error instanceof Error ? error.message : String(error)))
 
 const json = ['--header', 'Content-Type: application/json', '--input', '-']
 /** @type {{ tool: string, command: string, args: string[], request: object }} */

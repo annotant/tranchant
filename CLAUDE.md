@@ -42,12 +42,15 @@ pattern, read how annotant does it.
 - `skills/tranchant/scripts/`: Node.js ES modules with JSDoc types, no
   dependencies. `server.mjs` serves the page and prints the lines the hooks
   read; `lib/store.mjs` owns `decisions.json`, `lib/discussion.mjs` the
-  discussions; `lib/format.mjs` is the files' reference.
+  discussions; `lib/format.mjs` is the files' reference; `lib/settings.mjs`
+  owns the user's settings file (`~/.config/tranchant/settings.json`), which
+  the hooks read on their own by the same rules.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.
 - `docs/review-file.md`: the review, decisions and run files, their schemas
-  and the findings' states.
+  and the findings' states. `docs/settings.md`: the settings file, its
+  schema, its precedence and its routes.
 - `test/`: `node:test` suites for the scripts and the server;
   `hooks.test.ts` for `claude plugin test`.
 

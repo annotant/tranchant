@@ -6,6 +6,7 @@ import type {
   Step,
   Tracker,
 } from './domain'
+import type { SettingsPayload, StoredSettings } from './settings'
 
 const REVIEW = '/api/review'
 const EVENTS = '/api/events'
@@ -18,6 +19,7 @@ const DIFF = '/api/diff'
 const CHANGES = '/api/changes/'
 const ACCOUNT = '/api/account'
 const TRACKER = '/api/tracker'
+const SETTINGS = '/api/settings'
 
 /** How often the page asks again once the server stopped answering. */
 export const RETRY_MS = 5000
@@ -133,21 +135,28 @@ export interface ChangesPayload {
 export const fetchChanges = (id: string) =>
   request<ChangesPayload>(`${CHANGES}${encodeURIComponent(id)}`)
 
-/** What `GET /api/account` answers: null when glab cannot say. */
+/** What `GET /api/account` answers: the username null when the tool cannot say; `tool` absent from older servers. */
 export interface AccountPayload {
   username: string | null
+  tool?: 'glab' | 'gh'
 }
 
-/** The username glab posts as, asked once while `wanted`; undefined until known or when glab cannot say. */
-export function useAccount(wanted: boolean) {
-  const [username, setUsername] = useState<string>()
+/**
+ * The account the server posts as, asked once while `wanted`: `tool`'s
+ * (`glab`, the batch bar's: MR comments go through glab), else the issue
+ * tool's. Undefined until known, or when the server cannot say.
+ */
+export function useAccount(wanted: boolean, tool?: 'glab' | 'gh') {
+  const [account, setAccount] = useState<AccountPayload>()
   useEffect(() => {
     if (!wanted) return undefined
     let disposed = false
     async function load() {
       try {
-        const answer = await request<AccountPayload>(ACCOUNT)
-        if (!disposed && answer.username) setUsername(answer.username)
+        const answer = await request<AccountPayload>(
+          tool ? `${ACCOUNT}?tool=${tool}` : ACCOUNT,
+        )
+        if (!disposed) setAccount(answer)
       } catch {
         // A server older than /api/account: the confirmation says "your glab account".
       }
@@ -156,29 +165,95 @@ export function useAccount(wanted: boolean) {
     return () => {
       disposed = true
     }
-  }, [wanted])
-  return username
+  }, [wanted, tool])
+  return account
 }
 
-/** Where the project's issues go, asked once; undefined until known, or when the request fails. */
-export function useTracker() {
-  const [tracker, setTracker] = useState<Tracker>()
-  useEffect(() => {
-    let disposed = false
-    async function load() {
-      try {
-        const answer = await request<Tracker>(TRACKER)
-        if (!disposed) setTracker(answer)
-      } catch {
-        // The issue still opens, its anchor in plain text; issue.mjs reads the tracker itself.
-      }
-    }
-    void load()
-    return () => {
-      disposed = true
+const fetchSettings = () => request<SettingsPayload>(SETTINGS)
+
+const putSettings = (settings: StoredSettings) =>
+  request<SettingsPayload>(SETTINGS, { method: 'PUT', body: JSON.stringify(settings) })
+
+/** A change to the settings: the file as it will be, from the file as it stands. */
+export type SettingsChange = (stored: StoredSettings) => StoredSettings
+
+/**
+ * The settings at `/api/settings`, read at start and on each `reload` (the
+ * review's stream calls it on the server's `settings` event, and when it
+ * opens again). `save` applies a change to the file as last read, one save
+ * after the other, writes it whole and keeps the server's refusal in `error`.
+ * `unavailable`: the server did not answer them (older, or down).
+ */
+export function useSettings() {
+  const [payload, setPayload] = useState<SettingsPayload>()
+  const [loaded, setLoaded] = useState(false)
+  const [unavailable, setUnavailable] = useState(false)
+  const [error, setError] = useState<string>()
+  // What the next save builds on: the last answer, not the render that asked.
+  const latest = useRef<SettingsPayload>(undefined)
+  const saving = useRef<Promise<void>>(Promise.resolve())
+  const reload = useCallback(async () => {
+    try {
+      const next = await fetchSettings()
+      latest.current = next
+      setPayload(next)
+      setUnavailable(false)
+    } catch {
+      // A server older than /api/settings, or down: the defaults show, read-only.
+      setUnavailable(true)
+    } finally {
+      setLoaded(true)
     }
   }, [])
-  return tracker
+  useEffect(() => {
+    // Not awaited: the state is set once the server answers, never during the effect.
+    void Promise.resolve().then(reload)
+  }, [reload])
+  const save = useCallback((change: SettingsChange) => {
+    const before = saving.current
+    async function turn() {
+      await before
+      const stored = latest.current?.settings
+      if (!stored) {
+        setError('The settings could not be read from the server: nothing was changed.')
+        return
+      }
+      try {
+        const next = await putSettings(change(stored))
+        latest.current = next
+        setPayload(next)
+        setError(undefined)
+      } catch (refusal) {
+        setError(
+          refusal instanceof Error ? refusal.message : 'The settings were not saved.',
+        )
+      }
+    }
+    saving.current = turn()
+    return saving.current
+  }, [])
+  const dismiss = useCallback(() => setError(undefined), [])
+  return { payload, loaded, unavailable, error, save, dismiss, reload }
+}
+
+/**
+ * Where the project's issues go, asked at start and on each `reload` (the
+ * settings' `postWith` changes it); undefined until known, or when the
+ * request fails.
+ */
+export function useTracker() {
+  const [tracker, setTracker] = useState<Tracker>()
+  const reload = useCallback(async () => {
+    try {
+      setTracker(await request<Tracker>(TRACKER))
+    } catch {
+      // The issue still opens, its anchor in plain text; issue.mjs reads the tracker itself.
+    }
+  }, [])
+  useEffect(() => {
+    void Promise.resolve().then(reload)
+  }, [reload])
+  return { tracker, reload }
 }
 
 export const fetchRuns = async (id: string) =>
@@ -188,8 +263,10 @@ export const fetchRuns = async (id: string) =>
  * The review at `/api/review`, reloaded on each `changed` event of the
  * server's stream. `reachable` turns false when a request fails or the stream
  * closes; the page then asks again every RETRY_MS until the server answers.
+ * `onSettings` runs on the stream's `settings` event, and each time it opens:
+ * the settings may have changed while no stream listened.
  */
-export function useReview() {
+export function useReview(onSettings: () => Promise<void> | void = () => undefined) {
   const [payload, setPayload] = useState<ReviewPayload>()
   const [reachable, setReachable] = useState(true)
   const [loaded, setLoaded] = useState(false)
@@ -223,7 +300,11 @@ export function useReview() {
       const stream = new EventSource(EVENTS)
       source = stream
       stream.addEventListener('changed', reload)
-      stream.addEventListener('open', reload)
+      stream.addEventListener('settings', () => void onSettings())
+      stream.addEventListener('open', () => {
+        reload()
+        void onSettings()
+      })
       stream.addEventListener('error', () => {
         reload()
         // The browser retries a dropped stream itself; a closed one is ours to reopen.
@@ -250,7 +331,7 @@ export function useReview() {
       clearTimeout(retry)
       source?.close()
     }
-  }, [load])
+  }, [load, onSettings])
 
   return { payload, reachable, loaded, reload: load }
 }

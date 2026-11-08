@@ -32,7 +32,10 @@ After `review` come an optional branch, merge request url or folder, and an opti
 
 Everything lives in the skill and in the state folder
 (`~/.cache/tranchant/<project>/reviews/<id>/`): nothing is installed in the
-reviewed repository.
+reviewed repository. The user's settings (models, agents at a time, recipe,
+lenses, posting CLI, display) are the page's **Settings** (the gear), kept in
+`~/.config/tranchant/settings.json`: point the user there rather than editing
+the file.
 
 ## Open
 

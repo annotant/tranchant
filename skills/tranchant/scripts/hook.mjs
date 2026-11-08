@@ -33,6 +33,7 @@ import path from 'node:path'
 import { withFileLock } from './lib/filelock.mjs'
 import { currentRun, parseDecisions } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
+import { SETTINGS_FILE, loadSettings } from './lib/settings.mjs'
 import { createStore, historyPath, progressPath, reviewAgentPath } from './lib/store.mjs'
 
 /** @typedef {import('./lib/format.mjs').Entry} Entry */
@@ -573,7 +574,9 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     return targets.some((target) => {
       const file = unquote(target)
       return (
-        !path.isAbsolute(file) || within(lockRoot, path.normalize(file)) !== undefined
+        !path.isAbsolute(file) ||
+        within(lockRoot, path.normalize(file)) !== undefined ||
+        path.normalize(file) === SETTINGS_FILE
       )
     })
   }
@@ -584,6 +587,11 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     if (entry !== undefined && !mayWorkOn(entry ?? undefined)) {
       await log(`refused ${target}: the reviewer stopped, dropped or settled the finding`)
       return `Finding ${finding} was stopped, dropped or settled by the reviewer. Stop now: make no further changes and reply "CANCELLED".`
+    }
+    // The settings choose the agents' models and recipe, for every review: never an agent's to write.
+    if (target !== '@build' && path.resolve(root, target) === SETTINGS_FILE) {
+      await log(`refused ${target}: the settings file`)
+      return "Tranchant's settings file is the person's own: an agent never writes it."
     }
     const key =
       target === '@build' ? target : within(lockRoot, path.resolve(root, target))
@@ -701,8 +709,9 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
       const entry = await readEntry()
       if (CLAIM.test(command) && entry) {
         // The Started step says which model the agent runs on: claim.mjs
-        // recorded it on the run.
-        const model = currentRun(entry)?.model
+        // recorded it on the run, else the settings chose it.
+        const model =
+          currentRun(entry)?.model ?? (await loadSettings()).values.fixModel ?? undefined
         if (model) step.model = model
       }
       const ended = ENDS.exec(command)?.[1]

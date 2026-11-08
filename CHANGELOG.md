@@ -16,6 +16,22 @@ released to the `stable` branch.
   good** as soon as they are written, while the lenses still run: one line,
   closed, with a spinner while the agent writes and a "ready" chip when it
   lands, so the findings below never move.
+
+- **Settings.** The gear next to the theme toggle opens a page with every
+  option of Tranchant, in four groups: Display (the theme, the view and the
+  summary a review opens with), Agents (the model of the fix agents, the
+  reviewers and the verifiers; how many fix agents and review agents run at
+  a time), Review (the default recipe of `/tranchant review`, the lenses
+  turned on) and Posting (the CLI that opens issues, and the account it
+  posts as). Each option shows its value, its default, one line on what it
+  does and a **Reset**; **Reset everything to defaults** clears the page. A
+  change applies to the next agent, review or post. The settings live in
+  `~/.config/tranchant/settings.json` (`$XDG_CONFIG_HOME` when set), one
+  file for every review and every browser, which the display options now use
+  instead of the browser's storage; an option an environment variable sets
+  (`TRANCHANT_MODEL`) shows read-only, the variable named. Offline, the page
+  shows the values read-only and says why. See
+  [the settings file](docs/settings.md).
 - **Open an issue.** A finding that is real but not for this change (too
   big, out of scope, someone else's code) moves to the project's own
   tracker: GitHub with `gh`, GitLab with `glab`, whichever the checkout's

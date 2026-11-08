@@ -2,9 +2,6 @@ import { useState } from 'react'
 
 import type { Review, ReviewAgent } from './domain'
 import { Inline, Markdown } from './markdown'
-import { readStored, writeStored } from './storage'
-
-const SUMMARY_KEY = 'tranchant:summary'
 
 function Sparkle() {
   return (
@@ -40,10 +37,13 @@ export function Summary({
   review,
   agents,
   reviewing,
+  openAtStart,
 }: {
   review: Pick<Review, 'summary' | 'strengths'>
   agents: readonly ReviewAgent[]
   reviewing: boolean
+  /** The settings' pick for a review that opens; a toggle here holds for the visit. */
+  openAtStart: boolean
 }) {
   const strengths = review.strengths ?? []
   // A section with nothing in it would only repeat the band above it.
@@ -52,10 +52,8 @@ export function Summary({
     reviewing &&
     !hasSummary &&
     agents.some((agent) => agent.name === 'sm-summary' && agent.running)
-  // The remembered choice waits for the review's end: opening mid-review would push the findings down.
-  const [open, setOpen] = useState(
-    () => !reviewing && readStored(SUMMARY_KEY) !== 'closed',
-  )
+  // The settings' choice waits for the review's end: opening mid-review would push the findings down.
+  const [open, setOpen] = useState(() => !reviewing && openAtStart)
   const [waited, setWaited] = useState(false)
   const [landed, setLanded] = useState(false)
   if (reviewing && !hasSummary && !waited) setWaited(true)
@@ -96,7 +94,6 @@ export function Summary({
           if (next === open) return
           setOpen(next)
           if (next) setLanded(false)
-          writeStored(SUMMARY_KEY, next ? 'open' : 'closed')
         }}
       >
         <summary>

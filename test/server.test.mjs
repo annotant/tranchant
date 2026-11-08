@@ -27,6 +27,8 @@ const FIRST_LINE = /^(READY|PORT_BUSY|REVIEW_REFUSED|HOOKS_MISSING|PAGE_MISSING)
 
 /** @type {string} */
 let stateDir
+/** The settings folder the servers read: the machine's own is never read or written. */
+let configDir = ''
 /** A stand-in for the built bundle. */
 let page = ''
 /**
@@ -39,6 +41,7 @@ let glabDir = ''
 
 before(async (t) => {
   stateDir = await tempDir(t)
+  configDir = await tempDir(t, 'tranchant-config-')
   page = path.join(await tempDir(t), 'page.js')
   await writeFile(page, "/* tranchant page (test) */ console.log('page')\n")
   await mkdir(path.join(path.dirname(page), 'chunks'))
@@ -79,6 +82,7 @@ async function startServer(t, { name = 'theirs', dir: given, env = {}, overrides
       TRANCHANT_HOOKS: '1',
       TRANCHANT_PAGE: page,
       TRANCHANT_GLAB: glab,
+      XDG_CONFIG_HOME: configDir,
       // Never during a test: the server sees every change through its watches.
       TRANCHANT_POLL_MS: '600000',
       ...env,
@@ -184,23 +188,30 @@ async function listen(base = main.base) {
      * The next `changed` event naming finding `id` (any one, without), within 3 s.
      * @param {string} [id]
      */
-    async changed(id) {
+    changed(id) {
+      return this.next('changed', (data) => id === undefined || data.ids.includes(id))
+    },
+    /**
+     * The next event of `type` whose data `accepts`, within 3 s.
+     * @param {string} type
+     * @param {(data: any) => boolean} [accepts]
+     */
+    async next(type, accepts = () => true) {
       const deadline = setTimeout(() => controller.abort(), 3000)
       try {
         for (;;) {
           const events = received.split('\n\n')
           received = events.pop() ?? ''
           for (const event of events) {
-            const data = /^event: changed\ndata: (.*)$/m.exec(event)?.[1]
-            if (data && (id === undefined || JSON.parse(data).ids.includes(id)))
-              return event
+            const data = new RegExp(`^event: ${type}\\ndata: (.*)$`, 'm').exec(event)?.[1]
+            if (data && accepts(JSON.parse(data))) return event
           }
           const { value, done } = await reader.read()
-          if (done) throw new Error(`no changed event for ${id}`)
+          if (done) throw new Error(`no ${type} event`)
           received += value
         }
       } catch (error) {
-        throw controller.signal.aborted ? new Error(`no changed event for ${id}`) : error
+        throw controller.signal.aborted ? new Error(`no ${type} event`) : error
       } finally {
         clearTimeout(deadline)
       }
@@ -923,7 +934,7 @@ test('names the account glab posts as, read once', async () => {
   for (let ask = 0; ask < 2; ask++) {
     const response = await fetch(`${main.base}/api/account`)
     assert.equal(response.status, 200)
-    assert.deepEqual(await json(response), { username: 'reviewer-bot' })
+    assert.deepEqual(await json(response), { username: 'reviewer-bot', tool: 'glab' })
   }
   // One call, from the project: glab takes the host it posts to from there.
   const calls = (await readFile(path.join(glabDir, 'user.txt'), 'utf8'))
@@ -938,7 +949,7 @@ test('an account glab cannot read answers null, without failing', async (t) => {
   })
   const response = await fetch(`${server.base}/api/account`)
   assert.equal(response.status, 200)
-  assert.deepEqual(await json(response), { username: null })
+  assert.deepEqual(await json(response), { username: null, tool: 'glab' })
 })
 
 test('a glab answering no username answers null', async (t) => {
@@ -947,7 +958,7 @@ test('a glab answering no username answers null', async (t) => {
   await chmod(odd, 0o755)
   const server = await startServer(t, { env: { TRANCHANT_GLAB: odd } })
   const response = await fetch(`${server.base}/api/account`)
-  assert.deepEqual(await json(response), { username: null })
+  assert.deepEqual(await json(response), { username: null, tool: 'glab' })
 })
 
 test('a post glab refuses fails the finding with glab’s first line', async () => {
@@ -1274,15 +1285,17 @@ test('says who holds a busy port', async (t) => {
  * as its origin, and a fake `name` (gh or glab) that records its call and
  * answers `answer`, or fails with `error`.
  * @param {any} t
- * @param {{ remote: string, tool: 'gh' | 'glab', answer?: string, error?: string, overrides?: Record<string, unknown> }} options
+ * @param {{ remote: string, tool: 'gh' | 'glab', answer?: string, error?: string, overrides?: Record<string, unknown>, env?: Record<string, string> }} options
  */
-async function issueServer(t, { remote, tool, answer = '', error, overrides }) {
+async function issueServer(t, { remote, tool, answer = '', error, overrides, env = {} }) {
   const bin = await tempDir(t)
   const fake = path.join(bin, tool)
   await writeFile(
     fake,
     [
       '#!/bin/sh',
+      // Its account, for /api/account: gh answers `login`, glab `username`.
+      `if [ "$1 $2" = "api user" ]; then printf '%s' '{"login":"me","username":"me"}'; exit 0; fi`,
       `printf '%s\\n' "$@" > "${bin}/args.txt"`,
       `pwd -P > "${bin}/cwd.txt"`,
       `cat > "${bin}/stdin.txt"`,
@@ -1294,7 +1307,10 @@ async function issueServer(t, { remote, tool, answer = '', error, overrides }) {
   const server = await startServer(t, {
     name: 'ours',
     overrides,
-    env: tool === 'gh' ? { TRANCHANT_GH: fake } : { TRANCHANT_GLAB: fake },
+    env: {
+      ...(tool === 'gh' ? { TRANCHANT_GH: fake } : { TRANCHANT_GLAB: fake }),
+      ...env,
+    },
   })
   await run('git', ['-C', server.project, 'init', '-q'])
   await run('git', ['-C', server.project, 'remote', 'add', 'origin', remote])
@@ -1463,4 +1479,266 @@ test('a project with no origin has no tracker, and its issues fail saying so', a
     }),
   })
   assert.match(await server.nextLine('ISSUE_FAILED f-01', printed), /no origin remote/)
+})
+
+// ---------------------------------------------------------------------------
+// The settings: /api/settings, the theme on the shell, and what they change.
+
+const DEFAULT_SETTINGS = {
+  theme: 'system',
+  view: 'diff',
+  summary: 'open',
+  fixModel: null,
+  reviewModel: null,
+  verifyModel: null,
+  maxFixAgents: 3,
+  maxReviewAgents: 3,
+  recipe: null,
+  disabledLenses: [],
+  postWith: 'auto',
+}
+
+/** A server with a settings folder of its own, and ways to read and write its file. */
+async function settingsServer(t, env = {}) {
+  const config = await tempDir(t, 'tranchant-config-')
+  const file = path.join(config, 'tranchant', 'settings.json')
+  const server = await startServer(t, { env: { XDG_CONFIG_HOME: config, ...env } })
+  const put = (/** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const get = async () => json(await fetch(`${server.base}/api/settings`))
+  const stored = async () => JSON.parse(await readFile(file, 'utf8'))
+  return { server, file, put, get, stored }
+}
+
+test('GET /api/settings answers the defaults, the file, the recipe and its lenses when nothing is set', async (t) => {
+  const { server, file, get } = await settingsServer(t)
+  const answer = await get()
+  assert.equal(answer.path, file)
+  assert.deepEqual(answer.settings, {})
+  assert.deepEqual(answer.values, DEFAULT_SETTINGS)
+  assert.deepEqual(answer.defaults, DEFAULT_SETTINGS)
+  assert.deepEqual(answer.locked, {})
+  assert.match(answer.recipe, /\/agents\/review\/recipe\.json$/)
+  assert.deepEqual(answer.lenses, [
+    'correctness',
+    'types',
+    'accessibility',
+    'performance',
+    'security',
+    'tests',
+    'conventions',
+    'bugs',
+  ])
+  assert.equal(answer.problem, undefined)
+  assert.equal(answer.recipeProblem, undefined)
+  // Nothing written by a read.
+  await assert.rejects(readFile(file))
+  assert.equal(
+    (await (await fetch(`${server.base}/`)).text()).includes('data-theme'),
+    false,
+  )
+})
+
+test('PUT /api/settings writes the file whole, answers it, tells the pages and themes the shell', async (t) => {
+  const { server, file, put, get, stored } = await settingsServer(t)
+  const stream = await listen(server.base)
+  const response = await put({
+    theme: 'dark',
+    maxFixAgents: 5,
+    disabledLenses: ['tests'],
+  })
+  assert.equal(response.status, 200)
+  const answer = await json(response)
+  assert.deepEqual(answer.settings, {
+    theme: 'dark',
+    maxFixAgents: 5,
+    disabledLenses: ['tests'],
+  })
+  assert.equal(answer.values.theme, 'dark')
+  assert.equal(answer.values.maxFixAgents, 5)
+  assert.deepEqual(answer.values.disabledLenses, ['tests'])
+  assert.equal(answer.values.view, 'diff')
+  assert.deepEqual(await stored(), {
+    version: 1,
+    theme: 'dark',
+    maxFixAgents: 5,
+    disabledLenses: ['tests'],
+  })
+  await stream.next('settings')
+  // An editor's change, another server's: the folder is watched from the first write on.
+  await writeFile(file, JSON.stringify({ version: 1, theme: 'light', maxFixAgents: 2 }))
+  await stream.next('settings')
+  stream.close()
+  assert.equal((await get()).values.maxFixAgents, 2)
+  await put({ theme: 'dark', maxFixAgents: 5, disabledLenses: ['tests'] })
+  // The shell carries the theme, so the page never flashes the other one.
+  assert.match(
+    await (await fetch(`${server.base}/`)).text(),
+    /<html lang="en" data-theme="dark">/,
+  )
+  // A key left out leaves the file: the whole file is what a PUT sends.
+  await put({ theme: 'light' })
+  assert.deepEqual(await stored(), { version: 1, theme: 'light' })
+  assert.deepEqual((await get()).settings, { theme: 'light' })
+  // Empty: back to the defaults.
+  await put({})
+  assert.deepEqual(await stored(), { version: 1 })
+  assert.deepEqual((await get()).values, DEFAULT_SETTINGS)
+})
+
+test('a settings change the file cannot hold is refused with its key, the file kept', async (t) => {
+  const { put, stored } = await settingsServer(t)
+  await put({ theme: 'dark' })
+  /** @type {[unknown, string | RegExp][]} */
+  const refusals = [
+    [{ theme: 'sepia' }, 'theme: one of light, dark, system'],
+    [{ view: 1 }, 'view: one of diff, list'],
+    [{ maxFixAgents: 0 }, 'maxFixAgents: a whole number from 1 to 8'],
+    [{ maxReviewAgents: 2.5 }, 'maxReviewAgents: a whole number from 1 to 8'],
+    [{ fixModel: 'not a model!' }, 'fixModel: a model id, letters, digits, . : - and _'],
+    [{ recipe: 'relative.json' }, 'recipe: an absolute path to a recipe file, or ~/…'],
+    [{ disabledLenses: ['ok', 'not ok'] }, /^disabledLenses: up to 12 lens names/],
+    [{ postWith: 'curl' }, 'postWith: one of auto, glab, gh'],
+    [{ colour: 'red' }, 'colour: not a setting'],
+    [{ version: 2 }, 'version: 1 is the only one read'],
+    [[], 'the settings are not an object'],
+  ]
+  for (const [body, reason] of refusals) {
+    const response = await put(body)
+    assert.equal(response.status, 400, JSON.stringify(body))
+    const { error } = await json(response)
+    if (typeof reason === 'string') assert.equal(error, reason)
+    else assert.match(error, reason)
+  }
+  assert.deepEqual(await stored(), { version: 1, theme: 'dark' })
+})
+
+test('TRANCHANT_MODEL locks the models: the page sees its value, the file keeps its own', async (t) => {
+  const { put, get } = await settingsServer(t, { TRANCHANT_MODEL: 'claude-haiku-5-5' })
+  await put({ fixModel: 'claude-opus-5-5' })
+  const answer = await get()
+  assert.deepEqual(answer.locked, {
+    fixModel: 'TRANCHANT_MODEL',
+    reviewModel: 'TRANCHANT_MODEL',
+    verifyModel: 'TRANCHANT_MODEL',
+  })
+  assert.equal(answer.values.fixModel, 'claude-haiku-5-5')
+  assert.equal(answer.values.verifyModel, 'claude-haiku-5-5')
+  assert.deepEqual(answer.settings, { fixModel: 'claude-opus-5-5' })
+})
+
+test('a settings file this Tranchant cannot read is said, applies as none, and is never written over', async (t) => {
+  const { file, put, get } = await settingsServer(t)
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, JSON.stringify({ version: 1, theme: 'sepia' }))
+  const answer = await get()
+  assert.equal(answer.problem, `${file}: theme: one of light, dark, system`)
+  assert.deepEqual(answer.values, DEFAULT_SETTINGS)
+  const refused = await put({ theme: 'dark' })
+  assert.equal(refused.status, 409)
+  assert.equal((await json(refused)).error, answer.problem)
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), {
+    version: 1,
+    theme: 'sepia',
+  })
+  await writeFile(file, '{ not json')
+  assert.match((await get()).problem, /settings\.json is not JSON/)
+  // Mended by hand: read again at once.
+  await writeFile(file, JSON.stringify({ version: 1, view: 'list' }))
+  assert.equal((await get()).problem, undefined)
+  assert.equal((await get()).values.view, 'list')
+})
+
+test('a recipe the settings name that cannot be read is said, the lenses empty', async (t) => {
+  const { put, get } = await settingsServer(t)
+  await put({ recipe: '/no/such/recipe.json' })
+  const answer = await get()
+  assert.equal(answer.recipe, '/no/such/recipe.json')
+  assert.deepEqual(answer.lenses, [])
+  assert.equal(answer.recipeProblem, '/no/such/recipe.json: no such file')
+  // Another recipe, this one readable: its lenses, `~` being the home.
+  const home = await tempDir(t, 'tranchant-home-')
+  const recipe = path.join(home, 'mine.json')
+  await writeFile(
+    recipe,
+    JSON.stringify({ version: 1, lenses: [{ name: 'js', prompt: 'js.md' }] }),
+  )
+  await put({ recipe })
+  assert.deepEqual((await get()).lenses, ['js'])
+})
+
+test('postWith names the forge for the tracker and the account when the remote does not say', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const { server, send, read } = await issueServer(t, {
+    remote: 'git@git.corp.example:acme/app.git',
+    tool: 'gh',
+    answer: '{"number":3,"html_url":"https://git.corp.example/acme/app/issues/3"}',
+    env: { XDG_CONFIG_HOME: config },
+  })
+  // Neither GitHub nor GitLab by its host: no tracker, and glab (the suite's fake) for the account.
+  assert.equal((await json(await fetch(`${server.base}/api/tracker`))).kind, null)
+  assert.deepEqual(await json(await fetch(`${server.base}/api/account`)), {
+    username: 'reviewer-bot',
+    tool: 'glab',
+  })
+  await fetch(`${server.base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ postWith: 'gh' }),
+  })
+  assert.deepEqual(await json(await fetch(`${server.base}/api/tracker`)), {
+    kind: 'github',
+    web: 'https://git.corp.example/acme/app',
+    prefix: '',
+  })
+  assert.deepEqual(await json(await fetch(`${server.base}/api/account`)), {
+    username: 'me',
+    tool: 'gh',
+  })
+  // The batch bar asks for glab's account by name: MR comments go through glab whatever the setting.
+  assert.deepEqual(await json(await fetch(`${server.base}/api/account?tool=glab`)), {
+    username: 'reviewer-bot',
+    tool: 'glab',
+  })
+  // issue.mjs reads the same setting: gh, on that host.
+  const printed = server.output().length
+  await send({ decisions: [{ id: 'f-01', action: 'issue', title: 'T', body: 'B' }] })
+  assert.equal(await server.nextLine('MOVED f-01', printed), 'MOVED f-01')
+  assert.deepEqual((await read('args.txt')).trim().split('\n').slice(0, 5), [
+    'api',
+    '--method',
+    'POST',
+    '--hostname',
+    'git.corp.example',
+  ])
+})
+
+test('a tool forced on the other forge\u2019s host is refused: no token goes to the wrong forge', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const { server, send } = await issueServer(t, {
+    remote: 'git@github.com:acme/app.git',
+    tool: 'glab',
+    env: { XDG_CONFIG_HOME: config },
+  })
+  await fetch(`${server.base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ postWith: 'glab' }),
+  })
+  const tracker = await json(await fetch(`${server.base}/api/tracker`))
+  assert.equal(tracker.kind, null)
+  assert.equal(
+    tracker.reason,
+    "the origin's host github.com is on GitHub: the settings' glab cannot open issues there",
+  )
+  const printed = server.output().length
+  await send({ decisions: [{ id: 'f-01', action: 'issue', title: 'T', body: 'B' }] })
+  assert.match(
+    await server.nextLine('ISSUE_FAILED f-01', printed),
+    /glab cannot open issues there/,
+  )
 })

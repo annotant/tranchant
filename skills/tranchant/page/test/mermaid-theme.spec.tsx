@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { Diagram } from '../src/Diagram'
+import { applyTheme } from '../src/theme'
 import { ThemeToggle } from '../src/ThemeToggle'
 
 const renderMermaid = vi.fn(async () => ({
@@ -16,7 +17,7 @@ test('a diagram is drawn again in the theme the header switches to', async () =>
   vi.spyOn(window, 'matchMedia').mockReturnValue(query)
   render(
     <>
-      <ThemeToggle />
+      <ThemeToggle onPick={applyTheme} />
       <Diagram diagram={{ kind: 'mermaid', source: 'sequenceDiagram\n  A->>B: hi' }} />
     </>,
   )

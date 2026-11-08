@@ -3,7 +3,7 @@
 // agent's; verify.mjs and remove.mjs, a verifier's verdicts; and hook.mjs as a
 // review agent's hooks.
 import assert from 'node:assert/strict'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import { createStore, findingPath } from '../skills/tranchant/scripts/lib/store.mjs'
@@ -11,10 +11,21 @@ import { SCRIPTS, fixture, importReview, run, tempDir } from './helpers.mjs'
 
 /** @type {string} */
 let stateDir
+/** The settings folder prepare.mjs reads: a test writes `tranchant/settings.json` in it. */
+let configDir = ''
 
 before(async (t) => {
   stateDir = await tempDir(t)
+  configDir = await tempDir(t, 'tranchant-config-')
 })
+
+/** Writes the settings file prepare.mjs reads, or removes it with `undefined`. */
+async function settings(/** @type {object | string | undefined} */ content) {
+  const file = path.join(configDir, 'tranchant', 'settings.json')
+  if (content === undefined) return rm(file, { force: true })
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, typeof content === 'string' ? content : JSON.stringify(content))
+}
 
 const PREPARE = path.join(SCRIPTS, 'prepare.mjs')
 const VERIFY = path.join(SCRIPTS, 'verify.mjs')
@@ -67,10 +78,12 @@ async function repository(t) {
 const prepare = (cwd, args = [], env = {}) =>
   run(process.execPath, [PREPARE, ...args], {
     cwd,
-    // No glab unless a test fakes one: the branch's MR is never the machine's.
+    // No glab unless a test fakes one: the branch's MR is never the machine's;
+    // nor are its settings, which a test writes under configDir.
     env: {
       TRANCHANT_STATE_DIR: stateDir,
       TRANCHANT_GLAB: path.join(stateDir, 'no-glab'),
+      XDG_CONFIG_HOME: configDir,
       ...env,
     },
   })
@@ -172,6 +185,64 @@ test('prepare.mjs reviews a named branch with a recipe of its own, its lenses fi
   assert.deepEqual(lenses, [
     { name: 'js', prompt: path.join(recipes, 'js.md'), paths: ['src/**/*.js'] },
   ])
+})
+
+test('prepare.mjs reads the recipe the settings name, --recipe still first, and leaves the lenses turned off out', async (t) => {
+  const { dir } = await repository(t)
+  const recipes = await tempDir(t)
+  await writeFile(path.join(recipes, 'js.md'), 'Look at the JavaScript.\n')
+  await writeFile(path.join(recipes, 'all.md'), 'Look at everything.\n')
+  const recipe = path.join(recipes, 'recipe.json')
+  await writeFile(
+    recipe,
+    JSON.stringify({
+      version: 1,
+      lenses: [
+        { name: 'js', prompt: 'js.md', paths: ['src/**/*.js'] },
+        { name: 'all', prompt: 'all.md' },
+      ],
+    }),
+  )
+  try {
+    await settings({ version: 1, recipe, disabledLenses: ['all', 'security'] })
+    const ran = await prepare(dir)
+    assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+    const { lenses } = await prepared(ran.stdout)
+    assert.deepEqual(
+      lenses.map((lens) => lens.name),
+      ['js'],
+    )
+    // Every lens off: nothing to run.
+    await settings({ version: 1, recipe, disabledLenses: ['all', 'js'] })
+    const refused = await prepare(dir)
+    assert.equal(refused.code, 2)
+    assert.equal(
+      refused.stdout.trim(),
+      'REVIEW_REFUSED every lens of the recipe is turned off in the settings',
+    )
+    // --recipe on the run wins over the settings' recipe, and runs whole: the lenses off are the other recipe's.
+    const own = path.join(recipes, 'own.json')
+    await writeFile(
+      own,
+      JSON.stringify({ version: 1, lenses: [{ name: 'all', prompt: 'all.md' }] }),
+    )
+    const whole = await prepare(dir, ['--recipe', own])
+    assert.equal(whole.code, 0, whole.stdout + whole.stderr)
+    assert.deepEqual(
+      (await prepared(whole.stdout)).lenses.map((lens) => lens.name),
+      ['all'],
+    )
+    // A settings file this Tranchant cannot read: said on stderr, the defaults apply.
+    await settings('{ not json')
+    const fallen = await prepare(dir)
+    assert.equal(fallen.code, 0, fallen.stdout + fallen.stderr)
+    assert.match(fallen.stderr, /^settings: .*settings\.json is not JSON/m)
+    assert.ok(
+      (await prepared(fallen.stdout)).lenses.some((lens) => lens.name === 'correctness'),
+    )
+  } finally {
+    await settings(undefined)
+  }
 })
 
 test('prepare.mjs refuses what it cannot review, and says why', async (t) => {
