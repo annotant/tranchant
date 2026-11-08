@@ -1,6 +1,7 @@
 // The scripts of `/tranchant review`: prepare.mjs, which writes the review's
-// envelope from a branch or a merge request; verify.mjs and remove.mjs, a
-// verifier's verdicts; and hook.mjs as a review agent's hooks.
+// envelope from a branch or a merge request; summarize.mjs, the summary
+// agent's; verify.mjs and remove.mjs, a verifier's verdicts; and hook.mjs as a
+// review agent's hooks.
 import assert from 'node:assert/strict'
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -29,6 +30,7 @@ async function settings(/** @type {object | string | undefined} */ content) {
 const PREPARE = path.join(SCRIPTS, 'prepare.mjs')
 const VERIFY = path.join(SCRIPTS, 'verify.mjs')
 const REMOVE = path.join(SCRIPTS, 'remove.mjs')
+const SUMMARIZE = path.join(SCRIPTS, 'summarize.mjs')
 const HOOK = path.join(SCRIPTS, 'hook.mjs')
 
 /**
@@ -505,6 +507,111 @@ test("a discussing agent's hooks let it read and answer on its own finding only"
   assert.match(await pre(`node ${reply} f-01 --review ${project}`), /its own review/)
   assert.match(await pre(`node ${reply} f-01 --review=${dir}`), /two words/)
   assert.match(await pre(`node ${reply} f-01 --review ${dir} --ended`), /never --ended/)
+})
+
+/** @param {string[]} args @param {string} [input] */
+const summarize = (args, input = '') =>
+  run(process.execPath, [SUMMARIZE, ...args], { input })
+
+test('summarize.mjs writes the summary and strengths while reviewing, then refuses', async (t) => {
+  const { dir } = await live(t, 'summary-1')
+  const said = await summarize(
+    ['--review', dir],
+    JSON.stringify({
+      summary: '  Adds a total.\n\n## Change Map\n\n- `src/cart.js`: `total`  ',
+      strengths: [' A test covers the empty cart. '],
+    }),
+  )
+  assert.equal(said.stdout, 'SUMMARIZED\n', said.stderr)
+  const envelope = JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8'))
+  assert.equal(
+    envelope.summary,
+    'Adds a total.\n\n## Change Map\n\n- `src/cart.js`: `total`',
+  )
+  assert.deepEqual(envelope.strengths, ['A test covers the empty cart.'])
+  assert.equal(envelope.status, 'reviewing')
+  // The rest of the review stays: its findings still wait for their verifiers.
+  assert.equal(
+    (await verify(['--pending', '--review', dir])).stdout,
+    'UNVERIFIED f-01\nUNVERIFIED f-02\n',
+  )
+  const longest = await summarize(
+    ['--review', dir],
+    JSON.stringify({ summary: 'x'.repeat(12_000), strengths: ['y'.repeat(500)] }),
+  )
+  assert.equal(longest.stdout, 'SUMMARIZED\n', longest.stderr)
+  // Again: it replaces the first, strengths optional.
+  const again = await summarize(
+    ['--review', dir],
+    JSON.stringify({ summary: 'Fixes it.' }),
+  )
+  assert.equal(again.stdout, 'SUMMARIZED\n', again.stderr)
+  const after = JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8'))
+  assert.equal(after.summary, 'Fixes it.')
+  assert.deepEqual(after.strengths, [])
+  for (const [input, why] of /** @type {[string, RegExp][]} */ ([
+    ['', /no summary given/],
+    ['not json', /not JSON/],
+    [JSON.stringify({ summary: '  ' }), /summary: a Markdown text is required/],
+    [JSON.stringify({ summary: 'x'.repeat(12_001) }), /12000 characters at most/],
+    [JSON.stringify({ summary: 'x', strengths: 'good' }), /an array of texts/],
+    [JSON.stringify({ summary: 'x', strengths: [''] }), /an array of texts/],
+    [JSON.stringify({ summary: 'x', strengths: Array(11).fill('y') }), /10 at most/],
+    [JSON.stringify({ summary: 'x', strengths: ['y'.repeat(501)] }), /500 characters/],
+  ])) {
+    const refused = await summarize(['--review', dir], input)
+    assert.equal(refused.code, 2, input)
+    assert.match(refused.stdout, /^SUMMARY_REFUSED /)
+    assert.match(refused.stdout, why)
+  }
+  await createStore(dir).complete()
+  const late = await summarize(['--review', dir], JSON.stringify({ summary: 'Late.' }))
+  assert.equal(late.code, 2)
+  assert.match(late.stdout, /^SUMMARY_REFUSED the review is complete/)
+  const kept = JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8'))
+  assert.equal(kept.summary, 'Fixes it.')
+})
+
+test("the summary agent's hooks let it read and write the summary of its own review only", async (t) => {
+  const { dir } = await live(t, 'summary-2')
+  const other = await live(t, 'summary-3')
+  const project = await tempDir(t)
+  /** @param {string} command */
+  const pre = async (command) => {
+    const ran = await run(
+      process.execPath,
+      [HOOK, 'pre', '--reviewer', 'sm-summary', '--review', dir, '--project', project],
+      { input: JSON.stringify(bash(command)), env: { TRANCHANT_STATE_DIR: stateDir } },
+    )
+    return ran.stdout
+      ? JSON.parse(ran.stdout).hookSpecificOutput.permissionDecisionReason
+      : undefined
+  }
+  const write = `node ${SUMMARIZE} --review ${dir} <<'EOF'\n{"summary":"$(rm -rf /)"}\nEOF`
+  assert.equal(await pre(write), undefined)
+  assert.equal(
+    await pre(
+      `git -C ${project} log --oneline main...HEAD && git -C ${project} diff --stat`,
+    ),
+    undefined,
+  )
+  assert.match(await pre(`node ${SUMMARIZE} --review ${other.dir}`), /its own review/)
+  assert.match(await pre(`node ${SCRIPTS}add.mjs --review ${dir}`), /writes the summary/)
+  assert.match(await pre(`node ${VERIFY} f-01 --review ${dir}`), /writes the summary/)
+  assert.match(await pre(`echo x > ${project}/a.ts`), /redirection/)
+  // A reviewer or a verifier never writes the summary.
+  const reviewer = await run(
+    process.execPath,
+    [HOOK, 'pre', '--reviewer', 'rv-bugs', '--review', dir, '--project', project],
+    {
+      input: JSON.stringify(bash(`node ${SUMMARIZE} --review ${dir}`)),
+      env: { TRANCHANT_STATE_DIR: stateDir },
+    },
+  )
+  assert.match(
+    JSON.parse(reviewer.stdout).hookSpecificOutput.permissionDecisionReason,
+    /summarize\.mjs is not its script/,
+  )
 })
 
 test('a finding lands unverified, whatever it says', async (t) => {

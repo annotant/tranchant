@@ -87,7 +87,8 @@ const HELP: Record<SettingKey, string> = {
   view: 'The view a review opens in. The Diff / List toggle still switches it for the session.',
   summary: 'Whether the summary is open when a review opens.',
   fixModel: 'The agent that changes the working tree, one per finding.',
-  reviewModel: 'One per lens of the recipe; the agent answering a discussion too.',
+  reviewModel:
+    'One per lens of the recipe; the summary agent and a discussion\u2019s too.',
   verifyModel: 'One per finding, re-reading the code. A cheaper model does well here.',
   maxFixAgents: 'The other fixes wait in the queue.',
   maxReviewAgents: 'Reviewers, verifiers and discussions together.',

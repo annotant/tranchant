@@ -56,7 +56,7 @@ removed.
 | `view`            | `diff`, `list`                    | The page, when a review opens. The Diff / List toggle switches the view for the visit only.                                                                  |
 | `summary`         | `open`, `closed`                  | The page, when a review opens. Opening or closing the summary is for the visit only.                                                                         |
 | `fixModel`        | a model id or alias, `[\w.:-]{1,80}` | The hooks, registering each fix's agent type; `hook.mjs`, for the run's Started step when `claim.mjs` recorded no model.                                |
-| `reviewModel`     | the same                          | The hooks, for each reviewer and each discussing agent.                                                                                                      |
+| `reviewModel`     | the same                          | The hooks, for each reviewer, the summary agent and each discussing agent.                                                                                                      |
 | `verifyModel`     | the same                          | The hooks, for each verifier.                                                                                                                                |
 | `maxFixAgents`    | integer, 1 to 8                   | The hooks, before each round of starts: the fixes waiting start up to it.                                                                                    |
 | `maxReviewAgents` | integer, 1 to 8                   | The hooks, for the reviewers, verifiers and discussing agents together.                                                                                      |

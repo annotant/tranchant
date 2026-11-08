@@ -1122,6 +1122,8 @@ const fingerprints = new Map()
 let statusSeen
 /** The review agents' run files at the last read: their names, sizes and times. */
 let agentsSeen = ''
+/** The review's summary and strengths at the last read. @type {string | undefined} */
+let summarySeen
 
 /**
  * The ids of the findings that landed, or whose decisions or run files
@@ -1178,9 +1180,14 @@ async function changes() {
     agents.push(`${name} ${file}`)
   }
   const agentsNow = agents.join('\n')
-  const reviewChanged = status !== statusSeen || agentsNow !== agentsSeen
+  const summary = latest
+    ? JSON.stringify([latest.summary, latest.strengths])
+    : summarySeen
+  const reviewChanged =
+    status !== statusSeen || agentsNow !== agentsSeen || summary !== summarySeen
   statusSeen = status
   agentsSeen = agentsNow
+  summarySeen = summary
   return { ids, reviewChanged, latest }
 }
 

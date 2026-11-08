@@ -416,6 +416,16 @@ test('the summary renders the Markdown and the strengths, and opens as the setti
   expect(screen.getByRole('heading', { name: 'What looks good' })).toBeDefined()
   expect(screen.getByText('Tests cover the empty state.')).toBeDefined()
   cleanup()
+  await renderApp(
+    payload({ review: { strengths: ['`parseRange` rejects a **reversed** range.'] } }),
+  )
+  const strength = screen
+    .getByRole('region', { name: 'What looks good' })
+    .querySelector('li')
+  expect(strength?.querySelector('code')?.textContent).toBe('parseRange')
+  expect(strength?.querySelector('strong')?.textContent).toBe('reversed')
+  expect(strength?.textContent).not.toContain('`')
+  cleanup()
   const server = fakeServer(payload())
   server.answerSettings(settingsPayload({ summary: 'closed' }))
   render(<App />)
@@ -439,6 +449,53 @@ test('a summary alone, or a strength alone, shows the Summary section', async ()
   await renderApp(payload({ review: { summary: '', strengths: ['Names are clear.'] } }))
   expect(screen.getByText('Summary')).toBeDefined()
   expect(screen.getByText('Names are clear.')).toBeDefined()
+})
+
+test('while the review runs, the summary is written on one line, then lands closed with a ready chip', async () => {
+  const events = fakeEvents()
+  const writing = {
+    ...payload({
+      review: { status: 'reviewing', summary: '', strengths: [], findings: [] },
+    }),
+    reviewers: [{ name: 'sm-summary', running: true, steps: [] }],
+  }
+  const server = await renderApp(writing)
+  expect(screen.getByText('the summary agent reads the change')).toBeDefined()
+  expect(document.querySelector('details.tr-summary')).toBeNull()
+  server.set({
+    ...payload({ review: { status: 'reviewing', findings: [] } }),
+    reviewers: [{ name: 'sm-summary', running: false, outcome: 'done', steps: [] }],
+  })
+  events.send('changed')
+  await screen.findByText('Summary ready')
+  const summary = document.querySelector<HTMLDetailsElement>('details.tr-summary')!
+  expect(summary.open).toBe(false)
+  expect(summary.className).toContain('tr-summary--landed')
+  expect(summary.querySelector('.tr-summary-ready')?.textContent).toBe('ready')
+  expect(screen.queryByText('the summary agent reads the change')).toBeNull()
+  summary.open = true
+  fireEvent(summary, new Event('toggle'))
+  await waitFor(() => expect(summary.querySelector('.tr-summary-ready')).toBeNull())
+  expect(screen.getByRole('heading', { name: 'What looks good' })).toBeDefined()
+})
+
+test('a review in progress keeps its summary closed whatever was remembered, until it ends', async () => {
+  await renderApp(payload({ review: { status: 'reviewing', findings: [] } }))
+  const summary = document.querySelector<HTMLDetailsElement>('details.tr-summary')!
+  expect(summary.open).toBe(false)
+  expect(summary.querySelector('.tr-summary-ready')).toBeNull()
+  expect(summary.textContent).toContain('what the change does and where it moves')
+})
+
+test('a summary agent that ended without a summary leaves no Summary line', async () => {
+  await renderApp({
+    ...payload({
+      review: { status: 'reviewing', summary: '', strengths: [], findings: [] },
+    }),
+    reviewers: [{ name: 'sm-summary', running: false, outcome: 'failed', steps: [] }],
+  })
+  expect(document.querySelector('.tr-summary')).toBeNull()
+  expect(screen.queryByText('the summary agent reads the change')).toBeNull()
 })
 
 test('a changed event reloads the review; a run shows its steps', async () => {

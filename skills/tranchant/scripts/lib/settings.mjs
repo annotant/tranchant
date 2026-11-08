@@ -33,7 +33,7 @@ const MAX_AGENTS = 8
  * @property {'diff' | 'list'} [view] The view a review opens in.
  * @property {'open' | 'closed'} [summary] Whether the summary is open when a review opens.
  * @property {string} [fixModel] The model of each fix's agent.
- * @property {string} [reviewModel] The model of each lens's reviewer, and of a discussing agent.
+ * @property {string} [reviewModel] The model of each lens's reviewer, the summary agent and a discussing agent.
  * @property {string} [verifyModel] The model of each finding's verifier.
  * @property {number} [maxFixAgents] Fix agents at a time, 1 to MAX_AGENTS.
  * @property {number} [maxReviewAgents] Review agents (reviewers, verifiers, discussers) at a time.

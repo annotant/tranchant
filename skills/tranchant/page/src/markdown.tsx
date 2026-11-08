@@ -221,3 +221,8 @@ export function Markdown({ source, headings = true }: Props) {
     </div>
   )
 }
+
+/** One line's inline Markdown (code, bold, links), with no block around it: a list item's text. */
+export function Inline({ source }: { source: string }) {
+  return <>{renderInline(source)}</>
+}

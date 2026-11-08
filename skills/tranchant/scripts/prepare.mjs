@@ -382,7 +382,7 @@ const envelope = {
   verify: true,
   title: change.title,
   ...('mr' in change && { mr: change.mr }),
-  // Blank: the review agents' band already names the lenses, and the page hides the section.
+  // Blank until the summary agent writes them (summarize.mjs); the page hides the section meanwhile.
   summary: '',
   strengths: [],
   findings: [],

@@ -33,10 +33,10 @@ import {
 } from './domain'
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
-import { Markdown } from './markdown'
 import { ReviewAgents } from './ReviewAgents'
 import type { View } from './settings'
 import { SettingsView } from './SettingsView'
+import { Summary } from './Summary'
 import { applyTheme, type Theme } from './theme'
 import { SettingsLink, ThemeToggle } from './ThemeToggle'
 
@@ -246,11 +246,9 @@ export default function App() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [cursorState, setCursor] = useState<string>()
   const [openState, setOpenId] = useState<string>()
-  // The session's picks; absent, the settings decide, as when a review opens.
-  const [summaryPick, setSummaryOpen] = useState<boolean>()
+  // The session's view; absent, the settings decide, as when a review opens.
   const [viewPick, setView] = useState<View>()
   const values = settings.payload?.values
-  const summaryOpen = summaryPick ?? values?.summary !== 'closed'
   const view: View = viewPick ?? values?.view ?? 'diff'
   const theme = values?.theme
   // The server put the pick on <html> before the page loaded; this follows a change.
@@ -562,9 +560,6 @@ export default function App() {
     />
   )
   const reviewing = isReviewing(review)
-  const strengths = review.strengths ?? []
-  // A section with nothing in it would only repeat the band above it.
-  const hasSummary = review.summary.trim() !== '' || strengths.length > 0
   const detail = current ? (
     <FindingDetail
       key={current.id}
@@ -617,28 +612,12 @@ export default function App() {
         project={review?.project ?? ''}
         onOpen={open}
       />
-      {hasSummary && (
-        <details
-          className="tr-summary"
-          open={summaryOpen}
-          onToggle={(event) => setSummaryOpen(event.currentTarget.open)}
-        >
-          <summary>Summary</summary>
-          <div className="tr-summary-body">
-            {review.summary.trim() && <Markdown source={review.summary} />}
-            {strengths.length > 0 && (
-              <section aria-label="What looks good">
-                <h3>What looks good</h3>
-                <ul>
-                  {strengths.map((strength) => (
-                    <li key={strength}>{strength}</li>
-                  ))}
-                </ul>
-              </section>
-            )}
-          </div>
-        </details>
-      )}
+      <Summary
+        review={review}
+        agents={payload?.reviewers ?? []}
+        reviewing={reviewing}
+        openAtStart={values?.summary !== 'closed'}
+      />
       <BatchBar
         review={review}
         records={records}
