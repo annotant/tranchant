@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.3.0 - 2026-11-08
+
 ### Added
 
 - **A summary of the change.** `/tranchant review` starts a summary agent
@@ -16,7 +18,6 @@ released to the `stable` branch.
   good** as soon as they are written, while the lenses still run: one line,
   closed, with a spinner while the agent writes and a "ready" chip when it
   lands, so the findings below never move.
-
 - **Settings.** The gear next to the theme toggle opens a page with every
   option of Tranchant, in four groups: Display (the theme, the view and the
   summary a review opens with), Agents (the model of the fix agents, the
@@ -61,8 +62,8 @@ released to the `stable` branch.
   the review agents' reports, inline code sits on a chip, with a background
   and a border, so a symbol's start and end show in a dense paragraph.
 - **No empty Summary.** The Summary section shows only when the review
-  carries a summary or a strength. `/tranchant review` writes none for now:
-  the review agents' band already names its lenses.
+  carries a summary or a strength: a review file written without them no
+  longer opens on an empty section.
 
 ## 0.2.0 - 2026-11-06
 
