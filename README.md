@@ -162,7 +162,8 @@ fixes only.
 In the page:
 
 - **The diff** of the change is the main view, every finding a marker on
-  its line, the code highlighted (TypeScript, JavaScript and JSON); **List**
+  its line, the code highlighted (TypeScript, JavaScript and JSON), the
+  lines around each hunk a click away; **List**
   shows them by bucket and topic instead, and is what
   you get when the diff cannot be computed (no repository, commits not
   fetched).

@@ -436,6 +436,11 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-row--marked .tr-text { background: var(--tr-mark-line); }
 .tr-row--anchor .tr-gutter { color: var(--tr-text); font-weight: 600; box-shadow: inset 3px 0 0 var(--tr-accent); }
 .tr-code mark { background: var(--tr-mark); color: inherit; border-radius: 2px; }
+.tr-gap {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 2px 8px;
+  border: 1px dashed var(--tr-border); border-radius: var(--tr-radius); color: var(--tr-muted); font-size: 12px;
+}
+.tr-gap-reason { color: var(--tr-warn); }
 .tr-tok--keyword { color: var(--tr-code-keyword); }
 .tr-tok--string { color: var(--tr-code-string); }
 .tr-tok--number { color: var(--tr-code-number); }
