@@ -91,14 +91,14 @@ function Page({ offline = false }: { offline?: boolean }) {
   )
 }
 
-/** A block's rows by their new-side line: a removed line has none, and is left out. */
+/** A hunk's rows by their new-side line: a removed line has none, and is left out. */
 const numbers = (block: Element) =>
   [...block.querySelectorAll('.tr-row:not(.tr-row--removed)')].map((row) =>
     row.classList.contains('tr-row--header')
       ? 'header'
       : Number(row.getAttribute('data-line')),
   )
-const blocks = () => [...document.querySelectorAll('.tr-code')]
+const blocks = () => [...document.querySelectorAll('.tr-hunk')]
 const actions = (group: string) =>
   within(screen.getByRole('group', { name: group }))
     .getAllByRole('button')
@@ -165,6 +165,10 @@ test('unfolding fills the gaps with context rows numbered right, then joins the 
     'line 20 is not in the diff',
   )
   expect(blocks()).toHaveLength(2)
+  // One frame for the file, the bars across it between its hunks.
+  const frames = region.querySelectorAll('.tr-code')
+  expect(frames).toHaveLength(1)
+  expect(frames[0]?.querySelectorAll(':scope > .tr-gap')).toHaveLength(3)
   expect(
     screen.getByRole('group', { name: 'Hidden lines from 1' }).textContent,
   ).toContain('6 lines hidden')

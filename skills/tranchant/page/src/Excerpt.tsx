@@ -105,7 +105,7 @@ const tokensOf = (row: Row, language: Language | undefined): Token[] =>
 
 // A mark wraps the tokens it covers, its background over their colours: the
 // mark and the anchor's gutter are what the eye lands on first.
-function CodeRows({
+export function CodeRows({
   rows,
   marks = NO_MARKS,
   anchor,
@@ -182,20 +182,33 @@ type BlockProps = RowsProps & {
   label?: string | undefined
 }
 
-/** Rows in their frame: `signed` sets the sign column and the gutter together. */
-export function CodeBlock({ rows, signed, digits, label, ...rest }: BlockProps) {
+interface FrameProps {
+  signed: boolean
+  digits: number
+  label?: string | undefined
+  children: ReactNode
+}
+
+/** The frame code sits in: `signed` sets the sign column and the gutter together. */
+export function CodeFrame({ signed, digits, label, children }: FrameProps) {
   return (
     <div
       className={`tr-code ${signed ? 'tr-code--hunk' : ''}`}
-      style={{
-        '--tr-digits': `${digits ?? digitsOf(rows)}ch`,
-        '--tr-sign': signed ? '1ch' : '0ch',
-      }}
+      style={{ '--tr-digits': `${digits}ch`, '--tr-sign': signed ? '1ch' : '0ch' }}
       aria-label={label}
       role="figure"
     >
-      <CodeRows rows={rows} signed={signed} {...rest} />
+      {children}
     </div>
+  )
+}
+
+/** Rows in their frame. */
+export function CodeBlock({ rows, signed, digits, label, ...rest }: BlockProps) {
+  return (
+    <CodeFrame signed={signed} digits={digits ?? digitsOf(rows)} label={label}>
+      <CodeRows rows={rows} signed={signed} {...rest} />
+    </CodeFrame>
   )
 }
 

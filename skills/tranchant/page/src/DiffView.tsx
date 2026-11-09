@@ -11,7 +11,7 @@ import {
   stateLabel,
   stateOf,
 } from './domain'
-import { CodeBlock, digitsOf, NO_MARKS } from './Excerpt'
+import { CodeFrame, CodeRows, digitsOf, NO_MARKS } from './Excerpt'
 import { CommentMark, DiscussionMark } from './FindingList'
 import { languageOfFile } from './syntax'
 
@@ -387,21 +387,27 @@ function FileSection({
           }
         />
       )}
-      {file?.hunks.map((hunk, at) => (
-        <Fragment key={at}>
-          {gapRow(at)}
-          <CodeBlock
-            rows={hunk.rows}
-            signed
-            digits={digits}
-            anchor={opened?.line}
-            marks={marks}
-            under={under}
-            language={language}
-          />
-        </Fragment>
-      ))}
-      {file && gapRow(file.hunks.length)}
+      {file && file.hunks.length > 0 && (
+        // One frame for the file: the hidden lines' bars run across it, between its hunks.
+        <CodeFrame signed digits={digits}>
+          {file.hunks.map((hunk, at) => (
+            <Fragment key={at}>
+              {gapRow(at)}
+              <div className="tr-hunk">
+                <CodeRows
+                  rows={hunk.rows}
+                  signed
+                  anchor={opened?.line}
+                  marks={marks}
+                  under={under}
+                  language={language}
+                />
+              </div>
+            </Fragment>
+          ))}
+          {gapRow(file.hunks.length)}
+        </CodeFrame>
+      )}
     </section>
   )
 }

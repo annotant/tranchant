@@ -436,11 +436,14 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-row--marked .tr-text { background: var(--tr-mark-line); }
 .tr-row--anchor .tr-gutter { color: var(--tr-text); font-weight: 600; box-shadow: inset 3px 0 0 var(--tr-accent); }
 .tr-code mark { background: var(--tr-mark); color: inherit; border-radius: 2px; }
+.tr-hunk + .tr-hunk { border-top: 1px solid var(--tr-border); }
 .tr-gap {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px 14px; padding: 3px 12px;
-  background: var(--tr-bg-3); border: 1px solid var(--tr-border); border-radius: var(--tr-radius);
-  color: var(--tr-muted); font-size: 12px; line-height: 1.6;
+  background: var(--tr-bg-3); border-top: 1px solid var(--tr-border); border-bottom: 1px solid var(--tr-border);
+  color: var(--tr-muted); font: 12px/1.6 var(--tr-font);
 }
+.tr-gap:first-child { border-top: 0; }
+.tr-gap:last-child { border-bottom: 0; }
 .tr-gap-sep { color: var(--tr-border); }
 .tr-gap-action {
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px; border: 0; border-radius: 4px;
