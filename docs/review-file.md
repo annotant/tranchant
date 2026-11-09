@@ -495,7 +495,8 @@ file; the plugin's default is
       "prompt": "correctness.md", // the lens's prompt, relative to the recipe file
       "paths": ["**/*.ts", "**/*.tsx"], // the lens runs when a changed file matches one; ["**"] when absent
     },
-    { "name": "bugs", "prompt": "bugs.md", "otherwise": true }, // the files no other lens matched
+    { "name": "bugs", "prompt": "bugs.md", "paths": ["**"] }, // every changed file
+    { "name": "rest", "prompt": "rest.md", "otherwise": true }, // or: the files no other lens matched
   ],
 }
 ```

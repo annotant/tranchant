@@ -24,7 +24,7 @@ async function prompt(file) {
   return { name, description, body }
 }
 
-test('the recipe maps every front-end extension to a lens, and the rest to bugs', async () => {
+test('the recipe maps every front-end extension to a lens, and every file to bugs and docs', async () => {
   assert.equal(recipe.version, 1)
   const names = recipe.lenses.map((lens) => lens.name)
   assert.deepEqual(names, [...new Set(names)])
@@ -37,25 +37,45 @@ test('the recipe maps every front-end extension to a lens, and the rest to bugs'
     'tests',
     'conventions',
     'bugs',
+    'silent-failures',
+    'docs',
   ])
-  const otherwise = recipe.lenses.filter((lens) => lens.otherwise)
+  // No lens takes only the leftovers: bugs and docs read every file, the code included.
   assert.deepEqual(
-    otherwise.map((lens) => lens.name),
-    ['bugs'],
+    recipe.lenses.filter((lens) => lens.otherwise),
+    [],
   )
-  assert.equal(otherwise[0].paths, undefined)
+  const byName = new Map(recipe.lenses.map((lens) => [lens.name, lens]))
+  assert.deepEqual(byName.get('bugs')?.paths, ['**'])
+  assert.deepEqual(byName.get('docs')?.paths, ['**'])
   const covered = new Set()
-  for (const lens of recipe.lenses.filter((one) => !one.otherwise)) {
+  for (const lens of recipe.lenses) {
     assert.ok(lens.paths?.length, `${lens.name}: paths`)
+    if (lens.paths[0] === '**') continue
     for (const glob of lens.paths) {
       assert.match(glob, GLOB, `${lens.name}: ${glob}`)
       covered.add(glob.slice('**/*.'.length))
     }
   }
-  assert.deepEqual(
-    [...covered].toSorted((a, b) => a.localeCompare(b)),
-    [...FRONT_END].toSorted((a, b) => a.localeCompare(b)),
-  )
+  for (const extension of FRONT_END) assert.ok(covered.has(extension), extension)
+  // Performance and silent failures follow the chain to the server: its code is theirs too.
+  for (const name of ['performance', 'silent-failures']) {
+    const paths = byName.get(name)?.paths ?? []
+    for (const glob of ['**/*.ts', '**/*.mjs', '**/*.py', '**/*.sql'])
+      assert.ok(paths.includes(glob), `${name}: ${glob}`)
+  }
+})
+
+test('each lens follows the execution chain into the server and the dependencies', async () => {
+  for (const lens of recipe.lenses) {
+    const { body } = await prompt(lens.prompt)
+    const text = body.replace(/\s+/g, ' ')
+    assert.match(text, /follow the execution chain to its end/, lens.name)
+    assert.match(text, /`node_modules`/, lens.name)
+    assert.match(text, /never from its name or from memory/, lens.name)
+  }
+  const { body } = await prompt('verifier.md')
+  assert.match(body.replace(/\s+/g, ' '), /settled by its source, never by its name/)
 })
 
 test('each lens of the recipe has its prompt, named after it', async () => {

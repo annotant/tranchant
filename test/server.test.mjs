@@ -1532,6 +1532,8 @@ test('GET /api/settings answers the defaults, the file, the recipe and its lense
     'tests',
     'conventions',
     'bugs',
+    'silent-failures',
+    'docs',
   ])
   assert.equal(answer.problem, undefined)
   assert.equal(answer.recipeProblem, undefined)
