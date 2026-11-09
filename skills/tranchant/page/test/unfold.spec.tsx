@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useMemo } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { useUnfold } from '../src/api'
@@ -99,6 +99,10 @@ const numbers = (block: Element) =>
       : Number(row.getAttribute('data-line')),
   )
 const blocks = () => [...document.querySelectorAll('.tr-code')]
+const actions = (group: string) =>
+  within(screen.getByRole('group', { name: group }))
+    .getAllByRole('button')
+    .map((button) => button.textContent)
 const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, at) => from + at)
 
@@ -170,6 +174,14 @@ test('unfolding fills the gaps with context rows numbered right, then joins the 
   expect(
     screen.getByRole('group', { name: 'Hidden lines from 44' }).textContent,
   ).toContain('More lines below')
+  // A long gap: all of it, or 20 more on either side; the end unknown, all of it is the rest.
+  expect(actions('Hidden lines from 14')).toEqual([
+    '20 more lines',
+    'Show all 23',
+    '20 more lines',
+  ])
+  expect(actions('Hidden lines from 44')).toEqual(['Show to the end', '20 more lines'])
+  expect(actions('Hidden lines from 1')).toEqual(['Show all 6'])
 
   fireEvent.click(
     screen.getByRole('button', { name: 'Show 20 more lines below line 13' }),
@@ -229,6 +241,18 @@ test('a file that ends where the diff stops closes its last gap; lines above a h
   expect(
     screen.getByRole('group', { name: 'Hidden lines from 14' }).textContent,
   ).toContain('3 lines hidden')
+})
+
+test('the gap below, its end unknown, unfolds to the end of the file at once', async () => {
+  vi.stubGlobal('fetch', fetchMock)
+  render(<Page />)
+  fireEvent.click(screen.getByRole('button', { name: 'Show the lines below line 43' }))
+  await waitFor(() => expect(numbers(blocks()[1]!)).toEqual(['header', ...range(37, 60)]))
+  expect(fetchMock).toHaveBeenCalledWith(
+    `/api/lines?path=${encodeURIComponent(PATH)}&from=44&to=${Number.MAX_SAFE_INTEGER}`,
+    expect.anything(),
+  )
+  expect(screen.queryByRole('group', { name: 'Hidden lines from 44' })).toBeNull()
 })
 
 test('offline, or when the server cannot read the file, the row stays, disabled, and says why', async () => {

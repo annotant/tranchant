@@ -230,56 +230,84 @@ interface GapProps {
 
 const lines = (count: number) => `${count} ${count === 1 ? 'line' : 'lines'}`
 
+type Toward = 'up' | 'all' | 'down'
+
+const ARROWS: Record<Toward, string> = {
+  up: 'M5 4h14M12 20V9M7 13l5-5 5 5',
+  all: 'M12 3v6M9 6l3-3 3 3M12 21v-6M9 18l3 3 3-3M5 12h14',
+  down: 'M5 20h14M12 4v11M7 11l5 5 5-5',
+}
+
 /**
- * The lines the diff hides at one place, and buttons to show them: all of a
- * short gap, else 20 more next to the hunk below, or the one above.
+ * The lines the diff hides at one place, as a bar: all of them, and for a long
+ * gap 20 more next to the hunk below, or the one above.
  */
 function GapRow({ gap, last, unfold, offline, onUnfold }: GapProps) {
   const { from, to } = gap
   const size = to === undefined ? undefined : to - from + 1
   const reason = offline ? 'offline' : unfold?.error
   const disabled = !!reason || !!unfold?.pending
-  const actions: { text: string; label: string; from: number; to: number }[] = []
-  if (size !== undefined && to !== undefined && size <= UNFOLD_STEP) {
+  const long = size === undefined || size > UNFOLD_STEP
+  const actions: { toward: Toward; text: string; label: string; to: number }[] = []
+  if (long && !last && to !== undefined) {
     actions.push({
-      text: `Show ${lines(size)}`,
-      label: `Show ${lines(size)}, ${from} to ${to}`,
-      from,
+      toward: 'up',
+      text: `${UNFOLD_STEP} more lines`,
+      label: `Show ${UNFOLD_STEP} more lines above line ${to + 1}`,
       to,
     })
-  } else {
-    if (!last && to !== undefined) {
-      actions.push({
-        text: `↑ ${UNFOLD_STEP} more lines`,
-        label: `Show ${UNFOLD_STEP} more lines above line ${to + 1}`,
-        from: to - UNFOLD_STEP + 1,
-        to,
-      })
-    }
-    if (gap.below > 0) {
-      actions.push({
-        text: `↓ ${UNFOLD_STEP} more lines`,
-        label: `Show ${UNFOLD_STEP} more lines below line ${from - 1}`,
-        from,
-        to: Math.min(to ?? Infinity, from + UNFOLD_STEP - 1),
-      })
-    }
+  }
+  actions.push(
+    size === undefined || to === undefined
+      ? {
+          toward: 'all',
+          text: 'Show to the end',
+          label: `Show the lines below line ${from - 1}`,
+          // The server stops at the file's end.
+          to: Number.MAX_SAFE_INTEGER,
+        }
+      : {
+          toward: 'all',
+          text: `Show all ${size}`,
+          label: `Show ${lines(size)}, ${from} to ${to}`,
+          to,
+        },
+  )
+  if (long && gap.below > 0) {
+    actions.push({
+      toward: 'down',
+      text: `${UNFOLD_STEP} more lines`,
+      label: `Show ${UNFOLD_STEP} more lines below line ${from - 1}`,
+      to: Math.min(to ?? Infinity, from + UNFOLD_STEP - 1),
+    })
   }
   return (
     <div className="tr-gap" role="group" aria-label={`Hidden lines from ${from}`}>
       <span>{size === undefined ? 'More lines below' : `${lines(size)} hidden`}</span>
+      <span className="tr-gap-sep" aria-hidden="true">
+        ·
+      </span>
       {actions.map((action) => (
         <button
-          key={action.text}
+          key={action.toward}
           type="button"
-          className="tr-btn tr-btn--small"
+          className="tr-gap-action"
           aria-label={action.label}
           disabled={disabled}
-          onClick={() => onUnfold(action.from, action.to)}
+          onClick={() =>
+            onUnfold(
+              action.toward === 'up' ? action.to - UNFOLD_STEP + 1 : from,
+              action.to,
+            )
+          }
         >
+          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+            <path d={ARROWS[action.toward]} />
+          </svg>
           {action.text}
         </button>
       ))}
+      {unfold?.pending && <span className="tr-spinner" aria-hidden="true" />}
       {reason && <span className="tr-gap-reason">{reason}</span>}
     </div>
   )

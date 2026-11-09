@@ -9,10 +9,10 @@ released to the `stable` branch.
 
 ### Added
 
-- **Unfold the diff's context.** Above, between and below the hunks, a row
+- **Unfold the diff's context.** Above, between and below the hunks, a bar
   says how many lines the diff hides (below the last one, that there are
-  more, until the file's length is known) and shows them: 20 more next to a
-  hunk, or all of a short gap. Unfolded lines read as context, numbered and
+  more, until the file's length is known) and shows them: all of them, or
+  for a long gap 20 more next to either hunk. Unfolded lines read as context, numbered and
   highlighted, and a finding on one moves from the file's header to its
   line. The server reads them at the diff's head, only for a file of the
   diff (`GET /api/lines`).
