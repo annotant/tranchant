@@ -101,7 +101,7 @@ async function prepared(stdout) {
 
 test('prepare.mjs writes the current branch against the default one, reviewing, outside the repository', async (t) => {
   const { dir, git } = await repository(t)
-  // A file no front-end lens claims: the bugs lens takes it, and it alone.
+  // A file no front-end lens claims: bugs and docs, which read every file, take it too.
   await mkdir(path.join(dir, 'scripts'), { recursive: true })
   await writeFile(path.join(dir, 'scripts', 'release.sh'), 'npm publish\n')
   await git('add', 'scripts/release.sh')
@@ -146,12 +146,14 @@ test('prepare.mjs writes the current branch against the default one, reviewing, 
       'tests',
       'conventions',
       'bugs',
+      'silent-failures',
+      'docs',
     ],
   )
   for (const lens of lenses)
     assert.match(lens.prompt, new RegExp(`/agents/review/${lens.name}\\.md$`))
   assert.ok(lenses[0].paths.includes('**/*.js'))
-  assert.deepEqual(lenses.at(-1).paths, ['scripts/release.sh'])
+  assert.deepEqual(lenses.find((lens) => lens.name === 'bugs')?.paths, ['**'])
   // Nothing written in the repository; and open.mjs imports what it wrote.
   assert.equal(await git('status', '--porcelain'), '')
   const opened = await run(process.execPath, [path.join(SCRIPTS, 'open.mjs'), inbox], {

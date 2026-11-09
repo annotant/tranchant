@@ -104,9 +104,17 @@ duplicated setup.
    the other lenses take the rest. Skip a file that builds no part of the
    front end you can judge.
 4. For each change you doubt, read the file at HEAD around it with the Read
-   tool, and what it calls or is called by (Grep). Run nothing of the
-   project's: no install, build, test or lint; you read, and other reviewers
-   work beside you. `git` and `grep` are fine.
+   tool, then follow the execution chain to its end, wherever it leads: what
+   the code calls and what calls it (Grep), across the front end and the
+   server of the same repository (the route a request reaches, the query it
+   runs, the screen that shows its answer), and into the dependencies it
+   relies on, in `node_modules` or the vendored sources, at the version the
+   lockfile installs. Settle how a library, a framework or the other side of
+   an API behaves from its source, never from its name or from memory: what
+   it throws, what it returns, what it retries or caches. When a finding
+   rests on that code, cite it in `related`. Run nothing of the project's:
+   no install, build, test or lint; you read, and other reviewers work
+   beside you. `git` and `grep` are fine.
 5. Report each finding as you find it, as below; do not wait for the end.
 6. Reply with one line: how many findings you added, or `No finding.`
 

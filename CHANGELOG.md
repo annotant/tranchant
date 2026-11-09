@@ -7,6 +7,37 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.3.1 - 2026-11-08
+
+### Added
+
+- **Two new lenses.** `silent-failures` follows each error from where it
+  starts to where it ends, front end and server alike: errors swallowed,
+  catch-alls, messages that blame the wrong cause, failures with no trace,
+  fallbacks that hide a broken dependency, error branches the dependency
+  never reaches. `docs` checks the comments and documentation of a change
+  against what the code, its dependencies and its server really do: wrong
+  or stale comments, setup steps that do not work, settings left
+  undocumented.
+
+### Changed
+
+- **The lenses follow the execution chain.** Every lens, and the verifier,
+  now reads past the changed lines to the end of the chain: the server
+  route a request reaches and the query it runs, and the dependencies in
+  `node_modules` at the version the lockfile installs. How a library or the
+  other side of an API behaves is settled from its source, never from its
+  name, and cited in the finding's `related` excerpts.
+- **`bugs` reads every file.** It used to take only the files no front-end
+  lens claimed, so a change in TypeScript reached it with no code at all.
+  It now reviews every file of the change, the code included, for logic,
+  error handling, inputs and breaking changes; the verifier merges what it
+  and a front-end lens both report.
+- **`performance` covers the whole chain.** It reviews the server's code
+  as well as the browser's (`.mjs`, `.py`, `.go`, `.sql`…) and judges a
+  cost from the click to the database and back: N+1 queries, queries with
+  no limit, work on the request path, payloads larger than any screen uses.
+
 ## 0.3.0 - 2026-11-08
 
 ### Added

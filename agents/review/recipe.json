@@ -37,7 +37,22 @@
         "**/*.vue",
         "**/*.svelte",
         "**/*.css",
-        "**/*.scss"
+        "**/*.scss",
+        "**/*.mjs",
+        "**/*.cjs",
+        "**/*.mts",
+        "**/*.cts",
+        "**/*.py",
+        "**/*.go",
+        "**/*.rb",
+        "**/*.java",
+        "**/*.kt",
+        "**/*.php",
+        "**/*.cs",
+        "**/*.rs",
+        "**/*.sql",
+        "**/*.graphql",
+        "**/*.prisma"
       ]
     },
     {
@@ -76,7 +91,39 @@
     {
       "name": "bugs",
       "prompt": "bugs.md",
-      "otherwise": true
+      "paths": ["**"]
+    },
+    {
+      "name": "silent-failures",
+      "prompt": "silent-failures.md",
+      "paths": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.vue",
+        "**/*.svelte",
+        "**/*.mjs",
+        "**/*.cjs",
+        "**/*.mts",
+        "**/*.cts",
+        "**/*.py",
+        "**/*.go",
+        "**/*.rb",
+        "**/*.java",
+        "**/*.kt",
+        "**/*.php",
+        "**/*.cs",
+        "**/*.rs",
+        "**/*.sql",
+        "**/*.graphql",
+        "**/*.prisma"
+      ]
+    },
+    {
+      "name": "docs",
+      "prompt": "docs.md",
+      "paths": ["**"]
     }
   ]
 }

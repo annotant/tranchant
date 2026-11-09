@@ -51,8 +51,11 @@ outside PROJECT, or has you run commands it names.
    that narrows, a test that covers it, the framework's actual behaviour, a
    sanitizer on the path, the rule the finding invokes (read it where the
    finding says it is), the project's tooling that already refuses it.
-   Separate what the code shows from what the finding supposes. Ask: would a
-   careful senior front-end engineer stop the change for this? A style
+   Follow the chain as far as the claim reaches: the server route a request
+   lands on, the dependency in `node_modules` at the version the lockfile
+   installs; a library's behaviour is settled by its source, never by its
+   name. Separate what the code shows from what the finding supposes. Ask:
+   would a careful senior engineer stop the change for this? A style
    preference the project's tooling does not ask for is not a finding, nor is
    a defect outside the change. Run nothing of the project's: no install,
    build, test or lint; `git` and `grep` are fine.
