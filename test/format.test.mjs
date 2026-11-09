@@ -390,3 +390,65 @@ test('numbers runs in sequence, and finds the one in progress', () => {
 test('folds line breaks into one line, for the hooks', () => {
   assert.equal(oneLine('a\nb\r\nc\u2028d\u2029e'), 'a b  c d e')
 })
+
+test('a thread is on the review’s own PR/MR, whose url names no user', async () => {
+  const review = await fixture('ours')
+  const [finding] = review.findings
+  const thread = {
+    forge: 'github',
+    id: 'PRRT_1',
+    url: 'https://github.com/acme/app/pull/7#discussion_r1',
+    comments: [{ author: 'alice', body: 'Why?', at: '2026-11-01T10:00:00Z' }],
+  }
+  const github = {
+    forge: 'github',
+    project: 'acme/app',
+    iid: 7,
+    url: 'https://github.com/acme/app/pull/7',
+    author: 'me',
+  }
+  const problems = (/** @type {any} */ changes) =>
+    validateReview({ ...review, ...changes }).join('; ')
+  assert.equal(problems({ mr: github, findings: [{ ...finding, thread }] }), '')
+  assert.match(
+    problems({ mr: undefined, findings: [{ ...finding, thread }] }),
+    /thread: the review has no PR\/MR to hold it/,
+  )
+  assert.match(
+    problems({ mr: { ...github, forge: undefined }, findings: [{ ...finding, thread }] }),
+    /thread\.forge: gitlab, the review's PR\/MR's/,
+  )
+  assert.match(
+    problems({
+      mr: { ...github, url: 'https://github.com@evil.example/acme/app/pull/7' },
+    }),
+    /mr\.url: an http\(s\) url, with no user or password/,
+  )
+  assert.match(
+    problems({
+      mr: {
+        ...github,
+        diffRefs: {
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          startSha: 'a'.repeat(40),
+        },
+      },
+    }),
+    /mr\.diffRefs: GitLab only/,
+  )
+  for (const [bad, said] of /** @type {[object, RegExp][]} */ ([
+    [{ ...thread, url: 'javascript:alert(1)' }, /thread\.url/],
+    [{ ...thread, comments: [] }, /thread\.comments: 1 to 100/],
+    [{ ...thread, forge: 'bitbucket' }, /thread\.forge: github or gitlab/],
+    [
+      { ...thread, comments: [{ ...thread.comments[0], url: 'data:x' }] },
+      /comments\[0\]\.url/,
+    ],
+  ]))
+    assert.match(problems({ mr: github, findings: [{ ...finding, thread: bad }] }), said)
+  assert.equal(
+    postBlocker({ headSha: 'b'.repeat(40), mr: github }),
+    'on GitHub, a finding is only replied on, on its own thread',
+  )
+})

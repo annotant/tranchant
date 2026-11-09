@@ -384,7 +384,7 @@ function FileSection({
             finding.thread?.file
               ? 'on the whole file'
               : finding.thread?.outdated
-                ? `outdated: was on line ${finding.line}`
+                ? 'outdated: the code it was on moved since'
                 : file
                   ? `line ${finding.line} is not in the diff`
                   : 'the diff does not touch this file'

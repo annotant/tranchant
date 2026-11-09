@@ -25,7 +25,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
-import { oneLine, postBlocker, statusOf } from './lib/format.mjs'
+import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
 import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
 import {
   DEFAULTS,
@@ -808,7 +808,7 @@ async function changesOf(id) {
 /** @type {Promise<ComputedDiff> | undefined} */
 let diff
 
-/** The diff, computed once per head: only a refreshed review's moves. A failure is tried again. */
+/** The diff, computed once per head and base: a refresh that moves either computes it again. A failure is tried again. */
 function diffOnce() {
   diff ??= computeDiff().catch((error) => {
     diff = undefined
@@ -1175,7 +1175,11 @@ async function runScript(script, id) {
 async function fallBack(script, id, reason) {
   try {
     const entry = (await store.readDecisions()).findings[id]
-    if (entry?.state === 'queued' && entry.decision?.action === script.action)
+    const replying = script.action === 'post' && !!entry && replyPending(entry)
+    if (
+      replying ||
+      (entry?.state === 'queued' && entry.decision?.action === script.action)
+    )
       await store.fail(id, reason.slice(0, 300))
   } catch (error) {
     if (!(error instanceof StoreRefusal))
@@ -1512,6 +1516,8 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
+    // A reply on a settled finding's thread waits outside the states.
+    if (replyPending(entry)) decided(id, 'post')
     if (entry.state !== 'queued') continue
     const action = entry.decision?.action
     decided(id, action === 'post' || action === 'issue' ? action : 'fix')

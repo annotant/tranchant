@@ -14,6 +14,7 @@ import {
   type Finding,
   type FindingRecord,
   postsFrom,
+  replyPending,
   repliesOn,
   staleMrReason,
   type Review,
@@ -241,6 +242,7 @@ export function FindingDetail({
   const blocker = reply ? undefined : staleMrReason(review)
   const blocked = !!blocker && !disabled && postsFrom(state)
   const change = changeName(review)
+  const replying = replyPending(record)
   const thread = finding.thread
   const tag = tagOf(finding)
   const writable = discussable(state)
@@ -320,7 +322,7 @@ export function FindingDetail({
           <p className="tr-muted" role="note">
             {thread.file
               ? 'On the whole file.'
-              : `Outdated: the comment was on line ${finding.line}, which moved since.`}
+              : 'Outdated: the code the comment was on moved since; its excerpt is the code it read.'}
           </p>
         )}
         <div className="tr-detail-meta">
@@ -389,7 +391,7 @@ export function FindingDetail({
       {finding.diagram && <Diagram diagram={finding.diagram} />}
 
       <section className="tr-section" aria-label="Outcome">
-        {state === 'posted' && record?.posted && (
+        {(state === 'posted' || (reply && state === 'fixed')) && record?.posted && (
           <p className="tr-outcome">
             {reply ? 'Replied on the thread' : 'Posted'}:{' '}
             <a href={record.posted.url} target="_blank" rel="noreferrer">
@@ -398,7 +400,18 @@ export function FindingDetail({
             {record.posted.resolved && ' · resolved'}
           </p>
         )}
-        {state === 'posted' && record?.posted?.unresolved && (
+        {replying && (
+          <p className="tr-outcome tr-pending" role="status">
+            <span className="tr-spinner" aria-hidden="true" />
+            Replying on the thread…
+          </p>
+        )}
+        {record?.reply?.failed && (
+          <p className="tr-outcome tr-error">
+            The reply did not post: {record.reply.failed}
+          </p>
+        )}
+        {record?.posted?.unresolved && (state === 'posted' || reply) && (
           <p className="tr-outcome tr-error">
             The thread is not resolved: {record.posted.unresolved}
           </p>
@@ -610,7 +623,7 @@ export function FindingDetail({
                   Fix now
                 </button>
               )}
-              {reply && can('post') && (
+              {reply && can('post') && !replying && (
                 <button
                   type="button"
                   className={`tr-btn ${state === 'fixed' ? 'tr-btn--primary' : ''}`}

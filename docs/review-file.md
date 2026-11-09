@@ -79,7 +79,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `headSha`     | string                    | Full SHA. The page shows a warning when the checkout moved; a fix still runs, on the current files. |
 | `ownership`   | `ours` or `theirs`        | Decides the default action: `ours`, fix first; `theirs`, post first. Either may post with `mr.diffRefs`. |
 | `status`      | `reviewing` or `complete` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`.  |
-| `mr.forge`    | `github` or `gitlab`, optional | `gitlab` when absent. On GitHub (`/tranchant comments`), `mr.project` is `owner/repo` and `mr.iid` the pull request's number; it has no `diffRefs`: its findings are replied on, never posted as comments of their own. |
+| `mr.forge`    | `github` or `gitlab`, optional | `gitlab` when absent. On GitHub (`/tranchant comments`), `mr.project` is `owner/repo` and `mr.iid` the pull request's number; it has no `diffRefs` (refused there): its findings are replied on, never posted as comments of their own. `mr.url` names no user or password before its host, the host a reply's token goes to. |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
 | `summary`     | string                    | Markdown, shown above the findings. May be blank: with no `strengths` either, the page hides the section. While the review is `reviewing`, `summarize.mjs` writes it and `strengths`; the page shows them as they land. |
 | `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
@@ -152,7 +152,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `diagram.kind`               | `mermaid`, `svg` or `text`          | `mermaid`: [Mermaid](https://mermaid.js.org) source the page draws in its own colours, the way to show a sequence or a flow (`sequenceDiagram`, `flowchart`, `stateDiagram`); strict: no click, no HTML label, and a directive (`%%{init}%%`, front matter) cannot change the security level, the labels, the layout (dagre, `flowchart-elk` included), the theme, its CSS or its font; a source that does not parse shows as text with the parser's message. `svg`: inline SVG drawn by hand, for what Mermaid cannot draw, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference). `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
 | `related[]`                  | object[], optional                  | Up to 4. Same shape as `path`, `line`, `excerpt`, `marks`.                                                                                                                                       |
 | `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs` or `add.mjs`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
-| `thread`                     | object, optional                    | The pull or merge request thread the finding comes from, written by `comments.mjs` (see [`/tranchant comments`](#tranchant-comments)): `forge` (`github` or `gitlab`), `id` (GitHub's review thread node id, GitLab's discussion id), `url`, `comments` (1 to 100, the reviewer's first, then the replies: `author`, `body` up to 65,536 characters, a third party's Markdown, `at`, `url`), `outdated` (its line moved since: `line` is the one it was on, the page puts it on its file's header) and `file` (on the whole file). A post on such a finding replies on the thread. |
+| `thread`                     | object, optional                    | The pull or merge request thread the finding comes from, written by `comments.mjs` (see [`/tranchant comments`](#tranchant-comments)): `forge` (`github` or `gitlab`), `id` (GitHub's review thread node id, GitLab's discussion id), `url`, `comments` (1 to 100, the reviewer's first, then the replies: `author`, `body` up to 65,536 characters, a third party's Markdown, `at`, `url`), `outdated` (the code it was on is not at `line` in the head any more: `line` is only near it, its excerpt the code the comment read; the page puts it on its file's header) and `file` (on the whole file). Its `forge` is the review's `mr.forge` (`gitlab` when absent): a finding whose thread is on another forge, or in a review with no `mr`, is refused. A post on such a finding replies on the thread. |
 | `verified`                   | boolean, optional                   | Set by `verify.mjs` once a verifier confirmed or amended it; read only when the review's `verify` is true. Like `addedAt`, left out when two findings are compared.                             |
 
 #### Topics
@@ -186,6 +186,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       "answer": { "text": "…", "choices": ["…"], "at": "…" },
       "reason": "…", // dropped: the reviewer's words; failed: the error
       "posted": { "discussionId": "…", "url": "…", "at": "…", "resolved": true }, // `unresolved`: why resolving the thread failed
+      "reply": { "text": "…", "resolve": true, "at": "…", "failed": "…" }, // a reply on a settled finding's thread: on its way, or why it failed
       "issue": { "title": "…", "body": "…", "url": "…", "ref": "#12", "at": "…" }, // an issue: url, ref, at once created
       "runs": [/* Run */],
       "events": [/* Event */],
@@ -222,7 +223,7 @@ and `events` is optional.
 Moves the store accepts:
 
 - `fix`: from `open`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. An `asking` finding leaves only through `answer`.
-- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs, and is accepted from `fixed` too (the move `reply`), so a fixed comment gets its answer.
+- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs. On a `fixed` or `posted` thread finding, a reply is no move: it is kept in `reply` while `post.mjs` runs, the state stays, `posted` records it once on the thread and `reply` goes, a failure leaves `reply.failed`; one at a time, again as often as the thread is answered back. On GitHub, `postBlocker` refuses any post but a reply.
 - `issue`: from `open`, `dropped`, `skipped`, `failed` → `queued`, with `issue.title` and `issue.body` (the title cut to one line of 255 characters, the body to 60,000); refused when either is empty. Any ownership, with or without an MR.
 - `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed`, `posted` or `moved`.
 - `posted`, `moved`: the server's, from `queued` → `posted`, `moved`.
@@ -232,13 +233,13 @@ Moves the store accepts:
 - `done`: from `working` → `fixed`. `ask`: from `working` → `asking`. `hook.mjs ended` moves a `working` finding whose agent ended without either to `failed` (`reason`: `the agent ended without done.mjs or ask.mjs`).
 
 A `fixed`, `posted` or `moved` finding is final: no move leaves it (the
-reviewer reverts by hand, or asks for a follow-up in a new review), but the
-reply on a `fixed` finding's thread.
+reviewer reverts by hand, or asks for a follow-up in a new review); a reply
+on its thread is no move.
 
 The page's one-shot button (Post all to do) acts on the `open` findings (To do
 on the page) only, in list order; a selection may apply any move the table
 allows, but a reply on a thread, which is written finding by finding. At start, the server prints `FIX <id>` again for every `queued` fix
-and runs the queued posts and issues again; a `working` finding is left to its agent.
+and runs the queued posts and issues again, and the replies still on their way; a `working` finding is left to its agent.
 
 ### A run
 
@@ -418,31 +419,44 @@ reviewers' comments of your own change into the page:
    resolvable note not resolved (`glab api …/discussions`, system notes left
    out). Each becomes a finding, `t-` and 10 hex digits of its thread's id,
    so the same thread is the same finding on every import: the reviewer's
-   comment its `title` (first line) and `problem`, `Code Quality`, `review`,
-   tagged `question` when it ends with `?` and `suggestion` when it holds a
-   suggestion, its `thread` whole, its excerpt the file at the head around
-   its line (at the commit it was written on when `outdated`). A GitHub thread
-   is `outdated` as GitHub says, or when on the old side; a GitLab one when
-   written on another version whose line does not read the same any more. A
-   GitLab discussion on no file is listed in the summary, with its link.
+   comment its `title` (its first line outside a code block) and `problem`,
+   `Code Quality`, `review`, tagged `question` when it ends with `?` and
+   `suggestion` when it holds a suggestion, its `thread` whole, its excerpt
+   the file at the head around its line, or for an `outdated` one at the
+   commit it was written on (fetched once when the checkout lacks it, else
+   the head), or for a deleted line at the change's merge base. A GitHub
+   thread is `outdated` as GitHub says, when GitHub gives it no line, or on
+   a deleted line; a GitLab one on a deleted line, or written on another
+   version whose line does not read the same any more; either, when neither
+   commit has its file, or its line is past the file's end. A GitLab
+   discussion on no file is listed in the summary, with its link.
 2. The review is `ours`, the PR/MR its `mr` (`forge` set, GitLab's with its
-   `diffRefs`), its id `comments-` and 12 hex digits of the PR/MR's url: it
-   is written to `<state>/inbox/<id>.json` and `INBOX <file>` is printed. A
-   head the checkout lacks is fetched; none unresolved, or a PR/MR the tool
-   cannot read, prints `REVIEW_REFUSED <reason>`, exit 2.
+   `diffRefs`), its id `comments-` and 12 hex digits of the PR/MR's url,
+   its title `Comments on <project>#<n>` (`!<iid>` on GitLab: the PR/MR's
+   own title is a third party's words, and the review's title reaches the
+   session): it is written to `<state>/inbox/<id>.json` and `INBOX <file>`
+   is printed. A head or base the checkout lacks is fetched; a base still
+   missing is the base branch's tip, said in a note. None unresolved, a
+   PR/MR the tool cannot read, a head git cannot fetch (git's words said),
+   or a merge request on another host than the `origin` (`glab api` and
+   the replies go there), prints `REVIEW_REFUSED <reason>`, exit 2.
 3. The hooks open it with `open.mjs --refresh`: run again, the same review
    is refreshed, its envelope replaced (a pushed head moves the diff the
-   server serves), a thread new or with new replies written, the decisions
-   kept, a thread resolved since left as it was.
+   server serves), a finding new or changed written, but one an agent holds
+   (`queued`, `working`, `asking`), which keeps what the reviewer decided
+   on; the decisions kept, a thread resolved since left as it was. The
+   answer says how many were added, updated and kept.
 
 Each finding is then settled like any other. **Fix now** starts its agent,
 the comment its brief, fenced as data as every finding is. **Reply on the
-thread** opens an editor, empty, or after a fix prefilled with what changed;
+thread** opens an editor, empty, or after a fix prefilled with what changed,
+on any thread not settled otherwise, again once it is answered back;
 **Resolve the thread once replied** is a separate choice, never made for the
 reviewer. `post.mjs` replies (`addPullRequestReviewThreadReply`, or a note
 on the GitLab discussion), then resolves when asked (`resolveReviewThread`,
-or the discussion `resolved`). Nothing is pushed: name the commit in the
-reply once you pushed it.
+or the discussion `resolved`), and records the thread resolved only when
+the forge's answer says so. Nothing is pushed: name the commit in the reply
+once you pushed it.
 
 ## The server
 

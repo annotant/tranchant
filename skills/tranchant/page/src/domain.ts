@@ -62,7 +62,7 @@ export interface Thread {
   url: string
   /** The reviewer's comment, then its replies. */
   comments: ThreadComment[]
-  /** Its line moved since it was written: `line` is where it was. */
+  /** The code it was on is not at `line` in the head any more: `line` is only near it. */
   outdated?: boolean
   /** On the whole file, not on a line. */
   file?: boolean
@@ -223,6 +223,8 @@ export interface FindingRecord {
     resolved?: boolean
     unresolved?: string
   }
+  /** A reply on a settled finding's thread: on its way, or `failed` and why; the state stays. */
+  reply?: { text: string; resolve?: boolean; at: string; failed?: string }
   /** `issue`: its title and body; `url` and `ref` (`#12`) once created. */
   issue?: { title: string; body: string; url?: string; ref?: string; at?: string }
   runs: Run[]
@@ -404,11 +406,22 @@ export const repliesOn = (finding: Pick<Finding, 'thread'> | undefined) =>
 export const changeName = (review: Pick<Review, 'mr'>) =>
   review.mr?.forge === 'github' ? 'pull request' : 'merge request'
 
+/** The forge's mark of the change's number: `#7` on GitHub, `!12` on GitLab. */
+export const changeRef = (mr: NonNullable<Review['mr']>) =>
+  `${mr.forge === 'github' ? '#' : '!'}${mr.iid}`
+
+/** A reply on a settled finding's thread is on its way: no other until it lands or fails. */
+export const replyPending = (record: FindingRecord | undefined) =>
+  !!record?.reply && !record.reply.failed && REPLY_IN.has(record.state)
+
 /**
  * The reply a thread's editor opens with: as last written, else after a
- * fix what changed, else nothing: the reviewer writes it.
+ * fix what changed, else nothing: the reviewer writes it. A thread answered
+ * already opens empty, for its next reply.
  */
 export function draftReply(record: FindingRecord | undefined): string {
+  if (record?.reply) return record.reply.text
+  if (record?.state === 'posted') return ''
   if (record?.comment) return record.comment
   const fixed = record?.runs.findLast((run) => run.outcome === 'fixed')
   return record?.state === 'fixed' && fixed?.summary ? `Fixed: ${fixed.summary}` : ''
@@ -530,8 +543,9 @@ export const issueInput = (
 
 const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stopped'])
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
-// A thread's comment, once fixed, still gets its reply.
-const REPLY_FROM = new Set<State>([...POST_FROM, 'fixed'])
+// Settled already, a thread still gets its replies: no move, a record of their own.
+const REPLY_IN = new Set<State>(['fixed', 'posted'])
+const REPLY_FROM = new Set<State>([...POST_FROM, ...REPLY_IN])
 const ISSUE_FROM = POST_FROM
 // Nothing has landed in these states: a reviewer may still drop or skip.
 const UNDECIDED: readonly State[] = ['open', 'queued', 'asking', 'failed', 'stopped']

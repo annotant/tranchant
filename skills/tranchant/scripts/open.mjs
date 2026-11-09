@@ -108,8 +108,10 @@ try {
 }
 if (imported && process.argv.includes('--refresh')) {
   try {
-    const { added, updated } = await store.refresh(review)
-    console.error(`refreshed: ${added} finding(s) added, ${updated} updated`)
+    const { added, updated, kept } = await store.refresh(review)
+    console.error(
+      `refreshed: ${added} finding(s) added, ${updated} updated${kept ? `, ${kept} kept as an agent holds it` : ''}`,
+    )
   } catch (error) {
     if (!(error instanceof StoreRefusal)) throw error
     refuse(`${target}: ${error.message}`)

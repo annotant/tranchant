@@ -733,3 +733,30 @@ test('a fixed thread offers its reply, drafted from what changed; a posted one l
   expect(screen.getByText(/Replied on the thread/)).toBeDefined()
   expect(screen.getByText('The thread is not resolved: no right')).toBeDefined()
 })
+
+test('a reply on a fixed thread shows while on its way, and why it failed', () => {
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'fixed',
+    fields: { reply: { text: 'Fixed', at: '' } },
+  })
+  expect(screen.getByRole('status').textContent).toContain('Replying on the thread')
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'fixed',
+    fields: {
+      reply: { text: 'Fixed', at: '', failed: 'token expired' },
+      posted: { discussionId: 'PRRT_1', url: 'https://x.example/first', at: '' },
+    },
+  })
+  expect(screen.getByText('The reply did not post: token expired')).toBeDefined()
+  expect(screen.getByText(/Replied on the thread/)).toBeDefined()
+  fireEvent.click(button('Reply on the thread')!)
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+    'Fixed',
+  )
+})

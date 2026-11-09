@@ -12,6 +12,7 @@ import {
   idsInBucket,
   openIds,
   orderedFindings,
+  replyPending,
   type State,
   stateLabel,
   staleMrReason,
@@ -240,7 +241,6 @@ test('a thread is replied on with no diff refs, a fixed one too, never in a batc
   })
   expect(allows('post', 'open', comments, THREADED)).toBe(true)
   expect(allows('post', 'fixed', comments, THREADED)).toBe(true)
-  expect(allows('post', 'posted', comments, THREADED)).toBe(false)
   // A finding of its own still needs the diff refs a positioned comment takes.
   expect(allows('post', 'open', comments, FINDINGS[1])).toBe(false)
   expect(allows('post', 'open', review('ours'), THREADED)).toBe(false)
@@ -256,4 +256,18 @@ test('a reply opens as last written, else after a fix with what changed, else em
     runs: [{ id: 'r1', startedAt: '', outcome: 'fixed', summary: 'Skipped it.' }],
   })
   expect(draftReply(fixed)).toBe('Fixed: Skipped it.')
+  // Answered back, a thread replied on already opens empty; a failed reply as written.
+  expect(draftReply(record('posted', { comment: 'Done' }))).toBe('')
+  const failed = { text: 'Done', at: '', failed: 'no right' }
+  expect(draftReply(record('fixed', { reply: failed }))).toBe('Done')
+})
+
+test('a settled thread is replied on again, one reply at a time', () => {
+  const comments = review('ours', { mr: pullRequest(), findings: [THREADED] })
+  expect(allows('post', 'posted', comments, THREADED)).toBe(true)
+  expect(replyPending(record('fixed', { reply: { text: 'x', at: '' } }))).toBe(true)
+  expect(
+    replyPending(record('fixed', { reply: { text: 'x', at: '', failed: 'no' } })),
+  ).toBe(false)
+  expect(replyPending(record('open', { reply: { text: 'x', at: '' } }))).toBe(false)
 })

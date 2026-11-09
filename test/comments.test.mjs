@@ -65,7 +65,12 @@ async function repository(t, remote) {
   const base = await git('rev-parse', 'HEAD')
   await git('switch', '-q', '-c', 'feature/cart')
   await writeFile(path.join(dir, 'src', 'cart.js'), CART)
-  await git('commit', '-q', '-am', 'change')
+  await writeFile(
+    path.join(dir, 'src', 'long.js'),
+    Array.from({ length: 150 }, (_, i) => `export const n${i + 1} = ${i + 1}`).join('\n'),
+  )
+  await git('add', '.')
+  await git('commit', '-q', '-m', 'change')
   const head = await git('rev-parse', 'HEAD')
   return { dir, git, base, head }
 }
@@ -76,7 +81,7 @@ async function repository(t, remote) {
  * recording each call (arguments and stdin) in `calls.jsonl`.
  * @param {import('node:test').TestContext} t
  * @param {string} name
- * @param {[string, unknown][]} answers A key matches when the arguments include it.
+ * @param {[string, unknown][]} answers A key matches when the arguments, or stdin, include it.
  */
 async function fake(t, name, answers) {
   const bin = await tempDir(t)
@@ -94,7 +99,7 @@ async function fake(t, name, answers) {
       // Only a call with a body reads stdin: execFile leaves it open on the others.
       "if (args.includes('--input -')) input = fs.readFileSync(0, 'utf8')",
       `fs.appendFileSync(${JSON.stringify(path.join(bin, 'calls.jsonl'))}, JSON.stringify({ args, input }) + '\\n')`,
-      'const found = answers.find(([key]) => args.includes(key))',
+      "const found = answers.find(([key]) => (args + ' ' + input).includes(key))",
       "if (!found) { console.error('no such call: ' + args); process.exit(1) }",
       "if (typeof found[1] === 'string' && found[1].startsWith('ERROR')) { console.error(found[1]); process.exit(1) }",
       'process.stdout.write(JSON.stringify(found[1]))',
@@ -125,6 +130,8 @@ const comments = (cwd, args, env) =>
       XDG_CONFIG_HOME: configDir,
       TRANCHANT_GH: path.join(stateDir, 'no-gh'),
       TRANCHANT_GLAB: path.join(stateDir, 'no-glab'),
+      // The fixtures' remotes are not there: a fetch fails at once, never over the network.
+      GIT_SSH_COMMAND: 'false',
       ...env,
     },
   })
@@ -210,6 +217,13 @@ test('reads the unresolved threads of a pull request, one finding each, on their
       ghThread('PRRT_2', { line: 4, isResolved: true }, ['Done already']),
       ghThread('PRRT_3', { isOutdated: true, originalLine: 2 }, ['Name it `subtotal`']),
       ghThread('PRRT_4', { subjectType: 'FILE' }, ['Split this file']),
+      ghThread('PRRT_5', { diffSide: 'LEFT', line: 1, originalLine: 1 }, [
+        'Why remove this?',
+      ]),
+      ghThread('PRRT_6', { line: 2 }, [
+        '```suggestion\n  let sum = 0n\n```\nUse a bigint',
+      ]),
+      ghThread('PRRT_7', { path: 'src/long.js', startLine: 10, line: 120 }, ['Too long']),
     ]),
   )
   const ran = await comments(repo.dir, [], { TRANCHANT_GH: gh.file })
@@ -228,8 +242,8 @@ test('reads the unresolved threads of a pull request, one finding each, on their
     author: 'me',
   })
   // The resolved thread stays on the PR.
-  assert.equal(review.findings.length, 3)
-  const [current, outdated, file] = review.findings
+  assert.equal(review.findings.length, 6)
+  const [current, outdated, file, deleted, suggestion, long] = review.findings
   assert.equal(current.line, 3)
   assert.equal(current.tag, 'question')
   assert.equal(current.title, 'Should this skip items without a price?')
@@ -255,6 +269,22 @@ test('reads the unresolved threads of a pull request, one finding each, on their
   assert.equal(outdated.marks, undefined)
   assert.equal(file.thread.file, true)
   assert.equal(file.line, 1)
+  // A deleted line reads in the base's file, where it was.
+  assert.equal(deleted.thread.outdated, true)
+  assert.deepEqual(deleted.excerpt, {
+    startLine: 1,
+    lines: ['export const total = () => 0'],
+  })
+  // A suggestion's code is no title.
+  assert.equal(suggestion.tag, 'suggestion')
+  assert.equal(suggestion.title, 'Use a bigint')
+  // A selection longer than an excerpt keeps its anchor in it.
+  assert.equal(long.excerpt.startLine, 41)
+  assert.equal(long.excerpt.lines.length, 80)
+  assert.deepEqual(long.marks?.[0], { line: 44 })
+  assert.deepEqual(long.marks?.at(-1), { line: 120 })
+  // Nobody's words in the title, which reaches the session.
+  assert.equal(review.title, 'Comments on acme/shop#7')
   // From the origin's forge: the current branch's pull request.
   const [view, graphql] = await gh.calls()
   assert.match(view?.args ?? '', /^pr view --json /)
@@ -421,6 +451,59 @@ test('open.mjs --refresh imports the same pull request again, its decisions kept
   assert.equal(review.findings[0]?.addedAt, finding?.addedAt)
   assert.equal(review.findings[0]?.thread?.comments.length, 2)
   assert.equal(decisions.findings[finding?.id ?? '']?.state, 'skipped')
+
+  // The head moved, a thread an agent holds got a reply, another is resolved since.
+  await repo.git('commit', '-q', '--allow-empty', '-m', 'push')
+  const moved = await repo.git('rev-parse', 'HEAD')
+  const held = review.findings[1]
+  await store.decide(held?.id ?? '', { action: 'fix' })
+  const later = await written(rerun.stdout)
+  later.headSha = moved
+  later.createdAt = new Date(0).toISOString()
+  later.findings = later.findings
+    .filter((/** @type {any} */ one) => one.id === held?.id)
+    .map((/** @type {any} */ one) => ({
+      ...one,
+      thread: {
+        ...one.thread,
+        comments: [...one.thread.comments, { author: 'x', body: 'and more', at: 'now' }],
+      },
+    }))
+  assert.deepEqual(await store.refresh(later), { added: 0, updated: 0, kept: 1 })
+  const after = await store.readReview()
+  assert.equal(after.headSha, moved)
+  assert.equal(after.createdAt, review.createdAt)
+  // The finding the agent holds is what the reviewer decided on; the resolved one stays.
+  assert.equal(
+    after.findings.find((one) => one.id === held?.id)?.thread?.comments.length,
+    1,
+  )
+  assert.equal(after.findings.length, 2)
+  await assert.rejects(
+    store.refresh({ ...later, mr: { ...later.mr, url: `${PR_URL}0` } }),
+    /exists for another change/,
+  )
+})
+
+test('a merge request on another host than the origin is refused', async (t) => {
+  const repo = await repository(t, 'git@gitlab.com:shop/web.git')
+  const glab = await fake(t, 'glab', [
+    [
+      'mr view',
+      {
+        iid: 12,
+        web_url: MR_URL,
+        author: { username: 'me' },
+        diff_refs: { base_sha: repo.base, head_sha: repo.head, start_sha: repo.base },
+      },
+    ],
+  ])
+  const ran = await comments(repo.dir, [MR_URL], { TRANCHANT_GLAB: glab.file })
+  assert.equal(ran.code, 2)
+  assert.match(
+    ran.stdout,
+    /^REVIEW_REFUSED .* is on gitlab\.example\.com, the checkout's origin on gitlab\.com/,
+  )
 })
 
 /**
@@ -564,10 +647,64 @@ test('a fixed thread is replied on with glab; a resolve that fails leaves the re
     resolve?.args ?? '',
     /--method PUT .* projects\/shop%2Fweb\/merge_requests\/12\/discussions\/d1sc$/,
   )
+  // A reply is no move: the finding stays fixed, the reply recorded.
+  const entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'fixed')
+  assert.equal(entry?.reply, undefined)
+  assert.equal(entry?.posted?.url, `${MR_URL}#note_4242`)
+  assert.equal(entry?.posted?.resolved, undefined)
+  assert.equal(entry?.posted?.unresolved, 'ERROR: 403 Forbidden')
+  assert.equal(entry?.runs.at(-1)?.outcome, 'fixed')
+})
+
+test('a reply that fails on a fixed thread keeps it fixed; one on its way holds the next', async (t) => {
+  const { store, id, post } = await replying(
+    t,
+    [['addPullRequestReviewThreadReply', 'ERROR: GraphQL: Could not resolve to a node']],
+    'github',
+  )
+  await store.decide(id, { action: 'fix' })
+  await store.claim(id)
+  await store.done(id, 'Skipped it.')
+  await store.decide(id, { action: 'post', comment: 'Fixed' })
+  await assert.rejects(
+    store.decide(id, { action: 'post', comment: 'Again' }),
+    /is on its way/,
+  )
+  const ran = await post()
+  assert.equal(ran.stdout, 'failed ERROR: GraphQL: Could not resolve to a node\n')
+  const entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'fixed')
+  assert.equal(entry?.reply?.failed, 'ERROR: GraphQL: Could not resolve to a node')
+  // Failed, the reply may be written again.
+  await store.decide(id, { action: 'post', comment: 'Fixed, again' })
+  assert.equal((await store.readDecisions()).findings[id]?.reply?.text, 'Fixed, again')
+})
+
+test('a resolve the forge does not confirm is not recorded as resolved', async (t) => {
+  const reply = 'https://github.com/acme/shop/pull/7#discussion_r99'
+  const { store, id, post } = await replying(
+    t,
+    [
+      [
+        'resolveReviewThread',
+        { data: { resolveReviewThread: { thread: { isResolved: false } } } },
+      ],
+      [
+        'addPullRequestReviewThreadReply',
+        { data: { addPullRequestReviewThreadReply: { comment: { url: reply } } } },
+      ],
+    ],
+    'github',
+  )
+  await store.decide(id, { action: 'post', comment: 'Done', resolve: true })
+  const ran = await post()
+  assert.equal(ran.stdout, `posted ${reply}\n`, ran.stderr)
   const entry = (await store.readDecisions()).findings[id]
   assert.equal(entry?.state, 'posted')
   assert.equal(entry?.posted?.resolved, undefined)
-  assert.equal(entry?.posted?.unresolved, 'ERROR: 403 Forbidden')
-  // The fix stays recorded under the reply.
-  assert.equal(entry?.runs.at(-1)?.outcome, 'fixed')
+  assert.match(entry?.posted?.unresolved ?? '', /^gh did not say the thread is resolved/)
+  // Answered back, a posted thread is replied on again, its state kept.
+  await store.decide(id, { action: 'post', comment: 'See the new commit' })
+  assert.equal((await store.readDecisions()).findings[id]?.state, 'posted')
 })

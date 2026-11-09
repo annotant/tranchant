@@ -6,13 +6,15 @@
 // error. A finding from a PR/MR thread (`thread`) gets a reply on that
 // thread instead, with `gh api graphql` on GitHub, `glab api` on GitLab, then
 // the thread resolved when the reviewer asked: a resolve that fails leaves
-// the reply posted, and says why. Prints `posted <url>` or `failed <reason>`.
+// the reply posted, and says why. A finding settled already (`fixed`, or
+// `posted` and answered back) keeps its state: its `reply` records the post.
+// Prints `posted <url>` or `failed <reason>`.
 // The server runs it on each post decision, one at a time; never an agent.
 // TRANCHANT_GLAB and TRANCHANT_GH name other executables (the tests' fakes).
 import { existsSync } from 'node:fs'
 import { findReview, positional } from './lib/project.mjs'
 import { firstLine, runWithInput } from './lib/command.mjs'
-import { oneLine } from './lib/format.mjs'
+import { oneLine, replyPending } from './lib/format.mjs'
 import { StoreRefusal, createStore } from './lib/store.mjs'
 
 const MAX_REASON = 300
@@ -37,7 +39,11 @@ const { review, decisions } = await store.readAll()
 const finding = review.findings.find((one) => one.id === id)
 if (!finding) failed(`no finding ${id} in the review`)
 const entry = decisions.findings[id]
-if (!finding || entry?.state !== 'queued' || entry.decision?.action !== 'post') {
+const settled = !!entry && replyPending(entry)
+if (
+  !finding ||
+  (!settled && (entry?.state !== 'queued' || entry.decision?.action !== 'post'))
+) {
   failed(`finding ${id} is not queued for a post`)
 }
 
@@ -98,13 +104,29 @@ async function after(tool, args, request) {
       ? process.env.TRANCHANT_GH || 'gh'
       : process.env.TRANCHANT_GLAB || 'glab'
   const ran = await runWithInput(command, args, JSON.stringify(request), cwd)
-  if (ran.code === 0 && !/"errors"\s*:/.test(ran.stdout)) return undefined
-  return (
-    firstLine(ran.stderr) ||
-    firstLine(ran.stdout) ||
-    `${tool} exited with ${ran.code}`
-  ).slice(0, MAX_REASON)
+  if (ran.code !== 0)
+    return (
+      firstLine(ran.stderr) ||
+      firstLine(ran.stdout) ||
+      `${tool} exited with ${ran.code}`
+    ).slice(0, MAX_REASON)
+  let answer
+  try {
+    answer = JSON.parse(ran.stdout)
+  } catch {
+    return `${tool} answered something other than JSON`
+  }
+  // Only the forge's own word that the thread is resolved counts.
+  return confirmed(answer)
+    ? undefined
+    : `${tool} did not say the thread is resolved: ${firstLine(JSON.stringify(answer?.errors ?? answer)).slice(0, 200)}`
 }
+
+/** @param {any} answer gh's GraphQL answer, or GitLab's discussion. */
+const confirmed = (answer) =>
+  answer?.data?.resolveReviewThread?.thread?.isResolved === true ||
+  (Array.isArray(answer?.notes) &&
+    answer.notes.some((/** @type {any} */ one) => one?.resolvable && one.resolved))
 
 /**
  * Records the post, and says where it landed: the reviewer may have moved
@@ -112,11 +134,18 @@ async function after(tool, args, request) {
  * @param {{ discussionId: string, url: string, resolved?: boolean, unresolved?: string }} where
  */
 async function landed(where) {
-  try {
-    await store.posted(id, where)
-  } catch (error) {
-    if (!(error instanceof StoreRefusal)) throw error
-    console.error(`${error.message}; the comment is posted at ${where.url}`)
+  // Posted already: whatever the store says, never a failure the reviewer would retry into a duplicate.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await store.posted(id, where)
+      break
+    } catch (error) {
+      if (!(error instanceof StoreRefusal) && attempt < 3) continue
+      console.error(
+        `${error instanceof Error ? error.message : String(error)}; the comment is posted at ${where.url}`,
+      )
+      break
+    }
   }
   if (where.unresolved) console.error(`the thread is not resolved: ${where.unresolved}`)
   console.log(`posted ${where.url}`)
@@ -126,12 +155,15 @@ async function landed(where) {
 const { mr } = review
 const thread = finding?.thread
 if (thread) {
-  const body = entry?.comment
+  const body = settled ? entry?.reply?.text : entry?.comment
   if (!mr) await give('the review has no PR/MR to reply on')
   if (!body) await give(`the reply on ${id}'s thread is empty`)
-  const resolve = entry?.decision?.resolve === true
+  const resolve = settled
+    ? entry?.reply?.resolve === true
+    : entry?.decision?.resolve === true
   if (thread.forge === 'github') {
-    const host = /^https?:\/\/([^/]+)/.exec(String(mr?.url))?.[1] ?? 'github.com'
+    // The review checked it has no user before its host: this is the host gh's token goes to.
+    const host = new URL(String(mr?.url)).host
     const graphql = ['api', 'graphql', '--method', 'POST', '--hostname', host, ...json]
     const answer = await call('gh', graphql, {
       query:

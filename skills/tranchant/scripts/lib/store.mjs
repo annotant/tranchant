@@ -23,7 +23,10 @@ import {
   oneLine,
   parseDecisions,
   postBlocker,
+  forgeOf,
   problemsText,
+  REPLY_IN,
+  replyPending,
   repliesOn,
   stateWords,
   statusOf,
@@ -261,10 +264,11 @@ export function createStore(dir) {
    * @param {boolean} theirs
    * @param {string} where
    * @param {string} [id]
+   * @param {string} [forge] The review's PR/MR's.
    * @returns {Finding | undefined}
    */
-  function soundFinding(value, theirs, where, id) {
-    const problems = validateFinding(value, { theirs, where })
+  function soundFinding(value, theirs, where, id, forge) {
+    const problems = validateFinding(value, { theirs, where, forge })
     const sound = problems.length === 0 ? value : undefined
     if (sound && (id === undefined || sound.id === id)) return sound
     const why = sound
@@ -303,13 +307,25 @@ export function createStore(dir) {
         }
         continue
       }
-      const finding = soundFinding(value, theirs, `findings/${name}`, id)
+      const finding = soundFinding(
+        value,
+        theirs,
+        `findings/${name}`,
+        id,
+        forgeOf(envelope),
+      )
       if (finding) found.push(finding)
     }
     if (found.length || !Array.isArray(envelope.findings))
       return found.toSorted(byArrival)
     return envelope.findings.flatMap((finding, i) => {
-      const sound = soundFinding(finding, theirs, `review.json findings[${i}]`)
+      const sound = soundFinding(
+        finding,
+        theirs,
+        `review.json findings[${i}]`,
+        undefined,
+        forgeOf(envelope),
+      )
       return sound ? [sound] : []
     })
   }
@@ -506,6 +522,7 @@ export function createStore(dir) {
         const review = await readReview()
         const problems = validateFinding(finding, {
           theirs: review.ownership === 'theirs',
+          forge: forgeOf(review),
         })
         if (problems.length) throw new StoreRefusal(problemsText(problems))
         const known = review.findings.find((one) => one.id === finding.id)
@@ -528,10 +545,12 @@ export function createStore(dir) {
     /**
      * The producer imports its review again (`open.mjs --refresh`): the
      * envelope is replaced, its `createdAt` kept; each finding new or changed
-     * is written, keeping its `addedAt`; one the new import lacks stays, as
-     * do the decisions. Refused unless it is the same PR/MR of the same project.
+     * is written, keeping its `addedAt`, unless an agent holds it (`queued`,
+     * `working`, `asking`): the reviewer decided on what they read; one the
+     * new import lacks stays, as do the decisions. Refused unless it is the
+     * same PR/MR of the same project.
      * @param {Review} review
-     * @returns {Promise<{ added: number, updated: number }>}
+     * @returns {Promise<{ added: number, updated: number, kept: number }>}
      */
     refresh(review) {
       return withFileLock(reviewFile, async () => {
@@ -545,13 +564,23 @@ export function createStore(dir) {
             `id ${review.id} exists for another change: refresh only the same PR/MR`,
           )
         const { findings, ...envelope } = review
+        const decided = (await readDecisions()).findings
         await writeEnvelope({ ...envelope, createdAt: known.createdAt })
         let added = 0
         let updated = 0
+        let kept = 0
         const base = Date.now()
         for (const [i, finding] of findings.entries()) {
           const there = known.findings.find((one) => one.id === finding.id)
           if (there && contentOf(there) === contentOf(finding)) continue
+          const state = decided[finding.id]?.state
+          if (
+            there &&
+            (state === 'queued' || state === 'working' || state === 'asking')
+          ) {
+            kept++
+            continue
+          }
           if (there) updated++
           else added++
           await writeFinding({
@@ -559,7 +588,7 @@ export function createStore(dir) {
             addedAt: there?.addedAt ?? new Date(base + i).toISOString(),
           })
         }
-        return { added, updated }
+        return { added, updated, kept }
       })
     },
 
@@ -634,6 +663,7 @@ export function createStore(dir) {
         }
         const problems = validateFinding(amended, {
           theirs: review.ownership === 'theirs',
+          forge: forgeOf(review),
         })
         if (problems.length) throw new StoreRefusal(problemsText(problems))
         // Under the decisions' lock: no decision lands between the check and the write.
@@ -714,8 +744,20 @@ export function createStore(dir) {
         if (action === 'issue' && (!title?.trim() || !body?.trim())) {
           throw new StoreRefusal(`issue refused: finding ${id} needs a title and a body`)
         }
-        const move = reply && entry.state === 'fixed' ? 'reply' : action
-        const at = apply(id, entry, move, { by: 'reviewer' })
+        if (reply && REPLY_IN.includes(entry.state)) {
+          // Settled already: the reply is a record of its own, the state stays.
+          if (replyPending(entry))
+            throw new StoreRefusal(
+              `post refused: a reply on ${id}'s thread is on its way`,
+            )
+          entry.reply = {
+            text: (comment?.trim() ?? '').slice(0, MAX_TEXT),
+            ...(resolve === true ? { resolve: true } : {}),
+            at: new Date().toISOString(),
+          }
+          return entry
+        }
+        const at = apply(id, entry, action, { by: 'reviewer' })
         entry.decision = {
           action,
           ...(action === 'fix' && context?.trim()
@@ -883,7 +925,11 @@ export function createStore(dir) {
      */
     posted(id, { discussionId, url, resolved, unresolved }) {
       return changeOne(id, (entry) => {
-        const at = apply(id, entry, 'posted', { by: 'server' })
+        const settled = replyPending(entry)
+        const at = settled
+          ? new Date().toISOString()
+          : apply(id, entry, 'posted', { by: 'server' })
+        if (settled) delete entry.reply
         entry.posted = {
           discussionId,
           url,
@@ -922,6 +968,11 @@ export function createStore(dir) {
      */
     fail(id, reason, { by = 'server' } = {}) {
       return changeOne(id, async (entry) => {
+        // A reply on a settled finding fails on its own: the fix stays.
+        if (replyPending(entry) && entry.reply) {
+          entry.reply.failed = reason.trim().slice(0, MAX_TEXT)
+          return entry
+        }
         const run = currentRun(entry)
         const at = apply(id, entry, 'fail', { by, run: run?.id, agent: run?.agent })
         entry.reason = reason.trim().slice(0, MAX_TEXT)

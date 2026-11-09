@@ -17,6 +17,7 @@ import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView
 import {
   allows,
   canPost,
+  changeRef,
   commentedIds,
   counts,
   type DecisionInput,
@@ -99,7 +100,7 @@ function Header({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  !{review.mr.iid}
+                  {changeRef(review.mr)}
                 </a>
               )}
             </>

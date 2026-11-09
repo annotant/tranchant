@@ -20,7 +20,7 @@ import { firstLine, runWithInput } from './lib/command.mjs'
 import { REVIEW_VERSION, oneLine, validateReview, problemsText } from './lib/format.mjs'
 import { STATE_ROOT } from './lib/project.mjs'
 import { loadSettings } from './lib/settings.mjs'
-import { trackerOf } from './lib/tracker.mjs'
+import { trackerOf, webOfRemote } from './lib/tracker.mjs'
 
 /** @typedef {import('./lib/format.mjs').Finding} Finding */
 /** @typedef {import('./lib/format.mjs').Thread} Thread */
@@ -33,11 +33,12 @@ import { trackerOf } from './lib/tracker.mjs'
  * @property {string} id
  * @property {string} url
  * @property {string} path
- * @property {number} line Where it sits, or sat when `outdated`; 1 on a whole file.
+ * @property {number} line Its line in the head, else in `commit`'s file; 1 on a whole file.
  * @property {number} [startLine] A comment on several lines: the first.
  * @property {boolean} outdated
  * @property {boolean} file
- * @property {string} [commit] The commit it was written on, when the head lacks its file.
+ * @property {string} [commit] The commit whose file `line` counts in when `outdated`: the one it was written on.
+ * @property {boolean} [old] On a deleted line: `line` counts in the base's file, read at the change's merge base.
  * @property {ThreadComment[]} comments
  */
 
@@ -51,6 +52,7 @@ const MAX_BODY = 65_536
 const MAX_PAGES = 20
 // A tab is the only control character a line of code may hold, as format.mjs says.
 const CONTROL = /[^\P{Cc}\t]/gu
+const SHA = /^[0-9a-f]{40}$/
 
 /**
  * @param {string} reason
@@ -94,19 +96,23 @@ const commitOf = (cwd, revision) =>
 
 /**
  * `sha`, fetched from origin when the checkout lacks it: by itself, else
- * through `ref` (the forge's ref of the PR/MR's head).
+ * through `ref` (the forge's ref of the PR/MR's head). '' once it is there,
+ * else what git said.
  * @param {string} project
  * @param {string} sha
  * @param {string} [ref]
  */
 async function ensureCommit(project, sha, ref) {
-  if (await commitOf(project, sha)) return true
+  if (await commitOf(project, sha)) return ''
+  let said = 'git fetch found nothing'
   for (const one of [sha, ref]) {
     if (!one) continue
-    await git(project, ['fetch', '--quiet', 'origin', one]).catch(() => undefined)
-    if (await commitOf(project, sha)) return true
+    await git(project, ['fetch', '--quiet', 'origin', one]).catch((error) => {
+      said = `git fetch: ${words(error)}`
+    })
+    if (await commitOf(project, sha)) return ''
   }
-  return false
+  return said
 }
 
 /**
@@ -117,6 +123,13 @@ async function ensureCommit(project, sha, ref) {
  * @param {string} file
  */
 async function linesAt(project, commit, file) {
+  // An old version's commit, gone from the checkout after a force-push: fetched once.
+  if (!(await commitOf(project, commit)) && !tried.has(commit)) {
+    tried.add(commit)
+    const said = await ensureCommit(project, commit)
+    if (said)
+      note(`commit ${commit} is not in the checkout (${said}): its threads read the head`)
+  }
   const text = await git(project, ['cat-file', 'blob', `${commit}:${file}`]).catch(
     () => undefined,
   )
@@ -125,6 +138,9 @@ async function linesAt(project, commit, file) {
   if (lines.at(-1) === '') lines.pop()
   return lines.map((line) => line.replace(/\r$/, ''))
 }
+
+/** The commits fetched once already for an old version's excerpt. @type {Set<string>} */
+const tried = new Set()
 
 /**
  * `body` cut to `max` characters.
@@ -139,8 +155,10 @@ const cut = (body, max) => (body.length <= max ? body : `${body.slice(0, max - 1
  * @param {string} author
  */
 function titleOf(body, author) {
+  // A suggestion's code is no title: the words around it are.
+  const prose = body.replace(/^\s*```[^\n]*\n[\s\S]*?(?:^\s*```\s*$|(?![\s\S]))/gm, '')
   const first =
-    body
+    prose
       .split('\n')
       .map((line) =>
         line
@@ -148,7 +166,7 @@ function titleOf(body, author) {
           .replace(/[`*_~]/g, '')
           .trim(),
       )
-      .find((line) => line && !line.startsWith('```')) ?? ''
+      .find(Boolean) ?? ''
   return cut(first || `Comment by @${author}`, MAX_TITLE)
 }
 
@@ -178,7 +196,11 @@ async function findingOf(project, head, thread) {
     line = lines.length
     outdated = true
   }
-  const first = thread.startLine && !outdated ? Math.max(1, thread.startLine) : line
+  // A selection longer than an excerpt keeps its last lines: the anchor must be in it.
+  const first =
+    thread.startLine && !outdated
+      ? Math.max(1, thread.startLine, line - (79 - CONTEXT))
+      : line
   const from = Math.max(1, Math.min(first, line) - CONTEXT)
   const to = Math.min(lines.length, line + CONTEXT, from + 79)
   const excerpt = lines
@@ -323,10 +345,11 @@ async function github(project, url) {
     )
     if (!comments.length) return []
     const file = node.subjectType === 'FILE'
-    // On the old side, the line is the deleted one's: no place on the new side.
+    // On the old side, the line is the deleted one's, in the base's file.
     const left = node.diffSide === 'LEFT'
     const current = Number.isInteger(node.line) && !left ? node.line : undefined
     const was = Number.isInteger(node.originalLine) ? node.originalLine : undefined
+    const commit = node.comments?.nodes?.[0]?.originalCommit?.oid
     return [
       {
         forge: /** @type {const} */ ('github'),
@@ -337,17 +360,22 @@ async function github(project, url) {
         ...(Number.isInteger(node.startLine) && { startLine: node.startLine }),
         outdated: !file && (node.isOutdated === true || left || current === undefined),
         file,
-        commit: node.comments?.nodes?.[0]?.originalCommit?.oid,
+        ...(left && !file && { old: true }),
+        // A commit goes to git as an argument: a sha, or nothing.
+        ...(typeof commit === 'string' && SHA.test(commit) && { commit }),
         comments,
       },
     ]
   })
   return {
-    title: String(pr.title || pr.url),
+    name: `${owner}/${name}#${pr.number}`,
     branch: String(pr.headRefName || `#${pr.number}`),
     headSha: pr.headRefOid,
     headRef: `pull/${pr.number}/head`,
-    base: { sha: pr.baseRefOid, name: `origin/${pr.baseRefName}` },
+    base: {
+      sha: SHA.test(String(pr.baseRefOid)) ? pr.baseRefOid : undefined,
+      name: `origin/${pr.baseRefName}`,
+    },
     mr: {
       forge: /** @type {const} */ ('github'),
       project: `${owner}/${name}`,
@@ -370,7 +398,13 @@ async function gitlab(project, url) {
   const branch = url
     ? undefined
     : (
-        await git(project, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')
+        await git(project, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(
+          (error) =>
+            // git says 1 for a detached HEAD, and its own words for anything else.
+            error?.code === 1
+              ? ''
+              : refuse(`git cannot read the branch: ${words(error)}`),
+        )
       ).trim()
   if (!url && !branch) return refuse('HEAD is detached: give the merge request url')
   let mr
@@ -400,8 +434,15 @@ async function gitlab(project, url) {
     return refuse(
       `glab read ${url ?? 'the merge request'} without its iid, url or diff_refs`,
     )
-  const where = /^https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/\d+/.exec(mr.web_url)
-  const projectId = where?.[1] ?? mr.project_id
+  const where = /^https?:\/\/([^/]+)\/(.+?)\/-\/merge_requests\/\d+/.exec(mr.web_url)
+  const projectId = where?.[2] ?? mr.project_id
+  // glab api, here and to reply, goes to the origin's host: the merge request must be there.
+  const remote = await git(project, ['remote', 'get-url', 'origin']).catch(() => '')
+  const origin = webOfRemote(remote)?.host
+  if (where?.[1] && origin && where[1].toLowerCase() !== origin)
+    return refuse(
+      `${mr.web_url} is on ${where[1]}, the checkout's origin on ${origin}: run it from a checkout of the merge request's project`,
+    )
   const endpoint = `projects/${encodeURIComponent(String(projectId))}/merge_requests/${mr.iid}/discussions`
   /** @type {any[]} */
   const discussions = []
@@ -464,14 +505,10 @@ async function gitlab(project, url) {
     const newLine = Number.isInteger(position.new_line) ? position.new_line : undefined
     const oldLine = Number.isInteger(position.old_line) ? position.old_line : undefined
     let outdated = !file && newLine === undefined
-    if (
-      !file &&
-      newLine !== undefined &&
-      position.head_sha &&
-      position.head_sha !== head
-    ) {
+    const written = sha.test(String(position.head_sha)) ? position.head_sha : undefined
+    if (!file && newLine !== undefined && written && written !== head) {
       // Written on an older version: in place only while its line still reads the same.
-      const then = await linesAt(project, position.head_sha, filePath)
+      const then = await linesAt(project, written, filePath)
       const now = await linesAt(project, head, filePath)
       outdated = !then || !now || then[newLine - 1] !== now[newLine - 1]
     }
@@ -483,12 +520,13 @@ async function gitlab(project, url) {
       line: file ? 1 : (newLine ?? oldLine ?? 1),
       outdated,
       file,
-      ...(typeof position.head_sha === 'string' && { commit: position.head_sha }),
+      ...(!file && newLine === undefined && oldLine !== undefined && { old: true }),
+      ...(written && { commit: written }),
       comments,
     })
   }
   return {
-    title: typeof mr.title === 'string' && mr.title.trim() ? mr.title.trim() : mr.web_url,
+    name: `${projectId}!${mr.iid}`,
     branch: String(mr.source_branch || `!${mr.iid}`),
     headSha: head,
     headRef: `merge-requests/${mr.iid}/head`,
@@ -523,7 +561,9 @@ if (target !== undefined && !/^https?:\/\//.test(target))
   refuse(`${target} is not a pull request or merge request url`)
 
 const cwd = process.cwd()
-const top = await git(cwd, ['rev-parse', '--show-toplevel']).catch(() => '')
+const top = await git(cwd, ['rev-parse', '--show-toplevel']).catch((error) =>
+  refuse(`${cwd} is not in a git repository: ${words(error)}`),
+)
 if (!top.trim()) refuse(`${cwd} is not in a git repository`)
 const project = path.resolve(top.trim())
 
@@ -543,24 +583,44 @@ const change =
   (await forgeOf(target)) === 'github'
     ? await github(project, target)
     : await gitlab(project, target)
-if (!(await ensureCommit(project, change.headSha, change.headRef)))
+const missing = await ensureCommit(project, change.headSha, change.headRef)
+if (missing)
   refuse(
-    `commit ${change.headSha}, the head of ${change.mr.url}, is not in ${project}: fetch it first`,
+    `commit ${change.headSha}, the head of ${change.mr.url}, is not in ${project} (${missing}): fetch it first`,
   )
-const base =
-  change.base.sha && (await ensureCommit(project, change.base.sha))
-    ? change.base.sha
-    : (await commitOf(project, change.base.name))
-      ? change.base.name
-      : refuse(`the base of ${change.mr.url} is not in ${project}: fetch it first`)
+/** @type {string} */
+let base
+const baseMissing = change.base.sha
+  ? await ensureCommit(project, change.base.sha)
+  : 'the forge did not name it'
+if (change.base.sha && !baseMissing) base = change.base.sha
+else if (await commitOf(project, change.base.name)) {
+  base = change.base.name
+  note(
+    `the base commit of ${change.mr.url} is not in the checkout (${baseMissing}): the diff runs from ${base}, which may have moved since`,
+  )
+} else
+  base = refuse(
+    `the base of ${change.mr.url} is not in ${project} (${baseMissing}): fetch it first`,
+  )
 if (!change.found.length)
   refuse(
     `${change.mr.url} has no unresolved review thread on a file${change.general.length ? ` (${change.general.length} on the merge request itself)` : ''}`,
   )
 
+// A deleted line counts in the base's file as the change found it.
+const mergeBase =
+  (await git(project, ['merge-base', base, change.headSha]).catch(() => '')).trim() ||
+  base
 const findings = []
 for (const found of change.found)
-  findings.push(await findingOf(project, change.headSha, found))
+  findings.push(
+    await findingOf(
+      project,
+      change.headSha,
+      found.old ? { ...found, commit: mergeBase } : found,
+    ),
+  )
 const kind = change.mr.forge === 'github' ? 'pull request' : 'merge request'
 const summary = [
   `The unresolved review threads of the ${kind} [${change.mr.url}](${change.mr.url}): ${findings.length} on its files.`,
@@ -587,7 +647,8 @@ const review = {
   base,
   headSha: change.headSha,
   ownership: 'ours',
-  title: `Comments on ${change.title}`.slice(0, 300),
+  // The PR/MR's own title is a third party's words: it would reach the session as the tool's answer.
+  title: `Comments on ${change.name}`.slice(0, 300),
   mr: change.mr,
   summary,
   strengths: [],

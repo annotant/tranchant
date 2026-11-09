@@ -881,7 +881,15 @@ async function reviewDir($: $, given: string, flag?: '--verify' | '--refresh') {
   const imported = lines
     .find((line) => line.startsWith('REVIEW '))
     ?.slice('REVIEW '.length)
-  if (imported) return { dir: normalize(imported.trim()) }
+  if (imported)
+    return {
+      dir: normalize(imported.trim()),
+      // open.mjs --refresh says what the import changed.
+      refreshed: ran.stderr
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('refreshed: ')),
+    }
   const refused = lines.find((line) => line.startsWith('REVIEW_REFUSED'))
   return {
     error: refused
@@ -1779,7 +1787,13 @@ async function startComments($: $, target: string | undefined) {
     .map((line) => short(line.slice('note: '.length), 300))
   const found = await reviewDir($, inbox, '--refresh')
   if ('error' in found) return found.error
-  return [...notes, await startServing($, found.dir)].join('\n')
+  return [
+    ...notes,
+    ...('refreshed' in found && found.refreshed
+      ? [`Imported again: ${found.refreshed.slice('refreshed: '.length)}.`]
+      : []),
+    await startServing($, found.dir),
+  ].join('\n')
 }
 
 /** `/tranchant status`'s lines about the review agents of review `dir`. */
@@ -1866,7 +1880,7 @@ export const register: Register = (on) => {
     await registerCommand($, {
       name: 'tranchant',
       description:
-        'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, status, or stop)',
+        'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, the comments of a PR/MR, status, or stop)',
       argumentHint:
         '<review.json> | review [<branch> | <mr url>] | comments [<pr/mr url>] | status | stop',
       immediate: true,

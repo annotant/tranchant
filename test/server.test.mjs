@@ -386,6 +386,39 @@ test('answers the diff of the change, every playground finding on an added line 
   }
 })
 
+test('a review imported again at another head serves that head’s diff', async (t) => {
+  const placed = await playground(t, 'ours')
+  const server = await startServer(t, { name: 'ours', overrides: placed })
+  assert.match(server.first, /^READY /, server.output())
+  assert.equal((await diffOf(server)).body.head, placed.headSha)
+  const git = (/** @type {string[]} */ ...args) =>
+    run('git', [
+      '-C',
+      placed.project,
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      ...args,
+    ])
+  await writeFile(path.join(placed.project, 'pushed.txt'), 'pushed\n')
+  await git('add', 'pushed.txt')
+  await git('commit', '-q', '-m', 'pushed')
+  const moved = (await git('rev-parse', 'HEAD')).stdout.trim()
+  const events = await listen(server.base)
+  // What open.mjs --refresh writes: the envelope at the new head.
+  const file = path.join(server.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(file, JSON.stringify({ ...envelope, headSha: moved }))
+  await events.changed()
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200)
+  assert.equal(body.head, moved)
+  assert.ok(body.files.some((/** @type {any} */ one) => one.path === 'pushed.txt'))
+})
+
 test('a diff that failed is computed again on the next request', async (t) => {
   const placed = await playground(t, 'ours')
   const git = path.join(placed.project, '.git')
