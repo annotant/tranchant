@@ -62,19 +62,21 @@ wrong.
 agent per lens of a recipe, each reading the change's diff and the files it
 needs, then a verifier per finding as they land, and the page fills while
 they run. The default recipe targets web front ends: React, Vue, Svelte or
-plain TypeScript and HTML. Its lenses live in `agents/review/`, one prompt
-each:
+plain TypeScript and HTML, and follows them to the server they call. Its
+lenses live in `agents/review/`, one prompt each:
 
 | Lens            | Looks for                                                                                                                            |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `correctness`   | State and effects (stale closures, missing cleanup), lifecycle, async races, stale data after a mutation, loading and error states, event handling |
 | `types`         | `any` and unsafe casts that hide a defect, missing narrowing, nullability, unions that are not exhaustive, public types that leak internals |
 | `accessibility` | Semantics, keyboard reachability, focus management, labels and names, contrast and motion through the project's own tokens            |
-| `performance`   | Render churn, memoisation misuse, import weight, layout thrash, unbounded lists, request storms                                        |
+| `performance`   | The whole chain, from the screen to the server and its data: render churn, memoisation misuse, import weight, layout thrash, unbounded lists, request storms, N+1 queries, unbounded queries, oversized payloads |
 | `security`      | HTML injection (`innerHTML` and its framework equivalents), URL and link handling, secrets in client code, unsafe deserialisation       |
 | `tests`         | What the change should test and does not, assertions that cannot fail, flaky patterns, tests that test the mock                        |
 | `conventions`   | The project's own conventions, read from its `CLAUDE.md`, its lint and formatter configuration and the patterns its code already uses   |
-| `bugs`          | Everything the front-end lenses do not cover (scripts, configuration, build, server code): logic, error handling, inputs, breaking changes |
+| `bugs`          | Every file of the change, the code included, front end and server alike: logic, error handling, inputs, configuration, breaking changes |
+| `silent-failures` | Errors swallowed, catch-alls, misleading messages, failures with no trace, fallbacks that hide a broken dependency, error branches never reached |
+| `docs`          | Comments and documentation against what the code, its dependencies and its server do: wrong or stale comments, setup steps that do not work, settings left undocumented |
 
 A finding is a defect or a real risk, never a style nit the project's own
 tooling does not ask for, and never a rule from outside the project: the
@@ -97,7 +99,11 @@ precision over recall.
 
 The recipe (`agents/review/recipe.json`) maps each lens to the path globs it
 applies to (`*.tsx`, `*.ts`, `*.jsx`, `*.js`, `*.vue`, `*.svelte`, `*.css`,
-`*.scss`, `*.html`); the `bugs` lens takes the files no other lens claims.
+`*.scss`, `*.html`); `performance` and `silent-failures` add the server's
+code, and `bugs` and `docs` read every file. Every lens follows the
+execution chain past the changed lines: the server route a request reaches,
+and the dependencies in `node_modules` at the version the lockfile installs,
+whose source settles how a library behaves.
 `--recipe <path>` runs your own, in the same shape. See
 [the review file](docs/review-file.md#the-recipe).
 
