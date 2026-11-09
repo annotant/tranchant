@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.3.1 - 2026-11-08
+
 ### Added
 
 - **Two new lenses.** `silent-failures` follows each error from where it
