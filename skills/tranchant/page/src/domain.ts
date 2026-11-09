@@ -46,6 +46,28 @@ interface Related {
   marks?: Mark[]
 }
 
+/** One comment of a reviewer's thread on the PR/MR. */
+interface ThreadComment {
+  author: string
+  /** Markdown, a third party's. */
+  body: string
+  at: string
+  url?: string
+}
+
+/** The PR/MR thread a finding comes from: posting on it replies there. */
+export interface Thread {
+  forge: 'github' | 'gitlab'
+  id: string
+  url: string
+  /** The reviewer's comment, then its replies. */
+  comments: ThreadComment[]
+  /** Its line moved since it was written: `line` is where it was. */
+  outdated?: boolean
+  /** On the whole file, not on a line. */
+  file?: boolean
+}
+
 export interface Finding {
   id: string
   topic: string
@@ -71,6 +93,8 @@ export interface Finding {
   addedAt?: string
   /** A verifier confirmed it; read only when the review's `verify` is true. */
   verified?: boolean
+  /** The PR/MR thread it comes from (`/tranchant comments`). */
+  thread?: Thread
 }
 
 interface DiffRefs {
@@ -80,6 +104,8 @@ interface DiffRefs {
 }
 
 interface MergeRequest {
+  /** `gitlab` when absent. */
+  forge?: 'github' | 'gitlab'
   project: string | number
   iid: number
   url: string
@@ -132,8 +158,10 @@ export interface DecisionInput {
   action: Action
   /** `fix`: what the agent should know. */
   context?: string
-  /** `post`: the comment as the reviewer rewrote it. */
+  /** `post`: the comment as the reviewer rewrote it, or the reply on a thread. */
   comment?: string
+  /** `post` on a thread: resolve it once replied. */
+  resolve?: boolean
   /** `drop`: why. */
   reason?: string
   /** `issue`: the issue as the reviewer wrote it. */
@@ -187,7 +215,14 @@ export interface FindingRecord {
   answer?: { text: string; choices?: string[]; at: string }
   /** `dropped`: the reviewer's words; `failed`: the error. */
   reason?: string
-  posted?: { discussionId: string; url: string; at: string }
+  /** `resolved` once its thread was resolved after a reply; `unresolved`, why it could not be. */
+  posted?: {
+    discussionId: string
+    url: string
+    at: string
+    resolved?: boolean
+    unresolved?: string
+  }
   /** `issue`: its title and body; `url` and `ref` (`#12`) once created. */
   issue?: { title: string; body: string; url?: string; ref?: string; at?: string }
   runs: Run[]
@@ -361,6 +396,24 @@ export function staleMrReason(review: PostScope): string | undefined {
 export const canPost = (review: PostScope) =>
   !!review.mr?.diffRefs && !staleMrReason(review)
 
+/** Whether posting on `finding` replies on its PR/MR thread, written in the page. */
+export const repliesOn = (finding: Pick<Finding, 'thread'> | undefined) =>
+  finding?.thread !== undefined
+
+/** The forge's name for the review's change. */
+export const changeName = (review: Pick<Review, 'mr'>) =>
+  review.mr?.forge === 'github' ? 'pull request' : 'merge request'
+
+/**
+ * The reply a thread's editor opens with: as last written, else after a
+ * fix what changed, else nothing: the reviewer writes it.
+ */
+export function draftReply(record: FindingRecord | undefined): string {
+  if (record?.comment) return record.comment
+  const fixed = record?.runs.findLast((run) => run.outcome === 'fixed')
+  return record?.state === 'fixed' && fixed?.summary ? `Fixed: ${fixed.summary}` : ''
+}
+
 /** A finding a batch or a shortcut may post as is: it has its text. */
 export const hasComment = (finding: Pick<Finding, 'comment'> | undefined) =>
   !!finding?.comment?.trim()
@@ -477,6 +530,8 @@ export const issueInput = (
 
 const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stopped'])
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
+// A thread's comment, once fixed, still gets its reply.
+const REPLY_FROM = new Set<State>([...POST_FROM, 'fixed'])
 const ISSUE_FROM = POST_FROM
 // Nothing has landed in these states: a reviewer may still drop or skip.
 const UNDECIDED: readonly State[] = ['open', 'queued', 'asking', 'failed', 'stopped']
@@ -499,12 +554,22 @@ export const postsFrom = (state: State) => POST_FROM.has(state)
 /** A move the page offers: the store's, `answer` being sent by the asking form. */
 export type Move = Action | 'stop' | 'answer'
 
-type Rule = (state: State, review: PostScope) => boolean
+type Rule = (
+  state: State,
+  review: PostScope,
+  finding?: Pick<Finding, 'thread'>,
+) => boolean
 
-/** The store's moves table: a `fixed`, `posted` or `moved` finding is final. */
+/**
+ * The store's moves table: a `fixed`, `posted` or `moved` finding is final,
+ * but for a reply on the thread a fixed one came from.
+ */
 const MOVES: Record<Move, Rule> = {
   fix: (state) => FIX_FROM.has(state),
-  post: (state, review) => canPost(review) && POST_FROM.has(state),
+  post: (state, review, finding) =>
+    repliesOn(finding)
+      ? !!review.mr && REPLY_FROM.has(state)
+      : canPost(review) && POST_FROM.has(state),
   issue: (state) => ISSUE_FROM.has(state),
   drop: (state) => DROP_FROM.has(state),
   skip: (state) => SKIP_FROM.has(state),
@@ -512,9 +577,13 @@ const MOVES: Record<Move, Rule> = {
   answer: (state) => state === 'asking',
 }
 
-/** Whether the store accepts `move` on a finding in `state`. */
-export const allows = (move: Move, state: State, review: PostScope): boolean =>
-  MOVES[move](state, review)
+/** Whether the store accepts `move` on a finding in `state`; `finding` decides what a post is. */
+export const allows = (
+  move: Move,
+  state: State,
+  review: PostScope,
+  finding?: Pick<Finding, 'thread'>,
+): boolean => MOVES[move](state, review, finding)
 
 interface TopicGroup {
   topic: string
@@ -580,13 +649,21 @@ export function counts(review: Pick<Review, 'findings'>, records: Records) {
   return tally
 }
 
-/** Of `ids`, the findings `action` can move now; a batch applies only to those. */
+/**
+ * Of `ids`, the findings `action` can move now; a batch applies only to
+ * those. A thread's reply is written finding by finding: never in a batch.
+ */
 export const applicable = (
   ids: Iterable<string>,
   action: Action,
   records: Records,
-  review: PostScope,
-): string[] => [...ids].filter((id) => allows(action, stateOf(records, id), review))
+  review: PostScope & Pick<Review, 'findings'>,
+): string[] =>
+  [...ids].filter((id) => {
+    const finding = review.findings.find((one) => one.id === id)
+    if (action === 'post' && repliesOn(finding)) return false
+    return allows(action, stateOf(records, id), review, finding)
+  })
 
 /** Ids of the findings in `bucket`. */
 export const idsInBucket = (review: Pick<Review, 'findings'>, bucket: Bucket) =>

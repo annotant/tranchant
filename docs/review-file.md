@@ -79,6 +79,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `headSha`     | string                    | Full SHA. The page shows a warning when the checkout moved; a fix still runs, on the current files. |
 | `ownership`   | `ours` or `theirs`        | Decides the default action: `ours`, fix first; `theirs`, post first. Either may post with `mr.diffRefs`. |
 | `status`      | `reviewing` or `complete` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`.  |
+| `mr.forge`    | `github` or `gitlab`, optional | `gitlab` when absent. On GitHub (`/tranchant comments`), `mr.project` is `owner/repo` and `mr.iid` the pull request's number; it has no `diffRefs`: its findings are replied on, never posted as comments of their own. |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
 | `summary`     | string                    | Markdown, shown above the findings. May be blank: with no `strengths` either, the page hides the section. While the review is `reviewing`, `summarize.mjs` writes it and `strengths`; the page shows them as they land. |
 | `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
@@ -151,6 +152,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `diagram.kind`               | `mermaid`, `svg` or `text`          | `mermaid`: [Mermaid](https://mermaid.js.org) source the page draws in its own colours, the way to show a sequence or a flow (`sequenceDiagram`, `flowchart`, `stateDiagram`); strict: no click, no HTML label, and a directive (`%%{init}%%`, front matter) cannot change the security level, the labels, the layout (dagre, `flowchart-elk` included), the theme, its CSS or its font; a source that does not parse shows as text with the parser's message. `svg`: inline SVG drawn by hand, for what Mermaid cannot draw, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference). `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
 | `related[]`                  | object[], optional                  | Up to 4. Same shape as `path`, `line`, `excerpt`, `marks`.                                                                                                                                       |
 | `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs` or `add.mjs`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
+| `thread`                     | object, optional                    | The pull or merge request thread the finding comes from, written by `comments.mjs` (see [`/tranchant comments`](#tranchant-comments)): `forge` (`github` or `gitlab`), `id` (GitHub's review thread node id, GitLab's discussion id), `url`, `comments` (1 to 100, the reviewer's first, then the replies: `author`, `body` up to 65,536 characters, a third party's Markdown, `at`, `url`), `outdated` (its line moved since: `line` is the one it was on, the page puts it on its file's header) and `file` (on the whole file). A post on such a finding replies on the thread. |
 | `verified`                   | boolean, optional                   | Set by `verify.mjs` once a verifier confirmed or amended it; read only when the review's `verify` is true. Like `addedAt`, left out when two findings are compared.                             |
 
 #### Topics
@@ -171,6 +173,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       "decision": {
         "action": "fix",
         "context": "keep the early return, no throw",
+        "resolve": true, // a post on a thread: resolve it once replied
         "at": "…",
       },
       "comment": "…", // a post: the text as posted, when the reviewer edited it
@@ -182,7 +185,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       },
       "answer": { "text": "…", "choices": ["…"], "at": "…" },
       "reason": "…", // dropped: the reviewer's words; failed: the error
-      "posted": { "discussionId": "…", "url": "…", "at": "…" },
+      "posted": { "discussionId": "…", "url": "…", "at": "…", "resolved": true }, // `unresolved`: why resolving the thread failed
       "issue": { "title": "…", "body": "…", "url": "…", "ref": "#12", "at": "…" }, // an issue: url, ref, at once created
       "runs": [/* Run */],
       "events": [/* Event */],
@@ -219,7 +222,7 @@ and `events` is optional.
 Moves the store accepts:
 
 - `fix`: from `open`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. An `asking` finding leaves only through `answer`.
-- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`.
+- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs, and is accepted from `fixed` too (the move `reply`), so a fixed comment gets its answer.
 - `issue`: from `open`, `dropped`, `skipped`, `failed` → `queued`, with `issue.title` and `issue.body` (the title cut to one line of 255 characters, the body to 60,000); refused when either is empty. Any ownership, with or without an MR.
 - `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed`, `posted` or `moved`.
 - `posted`, `moved`: the server's, from `queued` → `posted`, `moved`.
@@ -229,11 +232,12 @@ Moves the store accepts:
 - `done`: from `working` → `fixed`. `ask`: from `working` → `asking`. `hook.mjs ended` moves a `working` finding whose agent ended without either to `failed` (`reason`: `the agent ended without done.mjs or ask.mjs`).
 
 A `fixed`, `posted` or `moved` finding is final: no move leaves it (the
-reviewer reverts by hand, or asks for a follow-up in a new review).
+reviewer reverts by hand, or asks for a follow-up in a new review), but the
+reply on a `fixed` finding's thread.
 
 The page's one-shot button (Post all to do) acts on the `open` findings (To do
 on the page) only, in list order; a selection may apply any move the table
-allows. At start, the server prints `FIX <id>` again for every `queued` fix
+allows, but a reply on a thread, which is written finding by finding. At start, the server prints `FIX <id>` again for every `queued` fix
 and runs the queued posts and issues again; a `working` finding is left to its agent.
 
 ### A run
@@ -399,6 +403,47 @@ reviews a change with no producer of your own:
 Nothing is written in the reviewed working tree; a merge request's head is
 fetched into its `.git` when the checkout lacks it.
 
+## `/tranchant comments`
+
+`/tranchant comments [<pull request or merge request url>]` brings the
+reviewers' comments of your own change into the page:
+
+1. `comments.mjs` runs in the session's folder. With no url, it reads the
+   current branch's pull request (`gh pr view`) or merge request (`glab mr
+   view <branch>`), whichever forge the `origin` remote is on (the settings'
+   `postWith` naming it for a host neither tool recognises); a url names its
+   forge (`/pull/<n>` GitHub, `/-/merge_requests/<n>` GitLab). It reads the
+   unresolved review threads: GitHub's `reviewThreads` with `isResolved`
+   false (GraphQL, through `gh api graphql`), GitLab's discussions with a
+   resolvable note not resolved (`glab api …/discussions`, system notes left
+   out). Each becomes a finding, `t-` and 10 hex digits of its thread's id,
+   so the same thread is the same finding on every import: the reviewer's
+   comment its `title` (first line) and `problem`, `Code Quality`, `review`,
+   tagged `question` when it ends with `?` and `suggestion` when it holds a
+   suggestion, its `thread` whole, its excerpt the file at the head around
+   its line (at the commit it was written on when `outdated`). A GitHub thread
+   is `outdated` as GitHub says, or when on the old side; a GitLab one when
+   written on another version whose line does not read the same any more. A
+   GitLab discussion on no file is listed in the summary, with its link.
+2. The review is `ours`, the PR/MR its `mr` (`forge` set, GitLab's with its
+   `diffRefs`), its id `comments-` and 12 hex digits of the PR/MR's url: it
+   is written to `<state>/inbox/<id>.json` and `INBOX <file>` is printed. A
+   head the checkout lacks is fetched; none unresolved, or a PR/MR the tool
+   cannot read, prints `REVIEW_REFUSED <reason>`, exit 2.
+3. The hooks open it with `open.mjs --refresh`: run again, the same review
+   is refreshed, its envelope replaced (a pushed head moves the diff the
+   server serves), a thread new or with new replies written, the decisions
+   kept, a thread resolved since left as it was.
+
+Each finding is then settled like any other. **Fix now** starts its agent,
+the comment its brief, fenced as data as every finding is. **Reply on the
+thread** opens an editor, empty, or after a fix prefilled with what changed;
+**Resolve the thread once replied** is a separate choice, never made for the
+reviewer. `post.mjs` replies (`addPullRequestReviewThreadReply`, or a note
+on the GitLab discussion), then resolves when asked (`resolveReviewThread`,
+or the discussion `resolved`). Nothing is pushed: name the commit in the
+reply once you pushed it.
+
 ## The server
 
 `server.mjs --review <dir>` serves the page and its API on a free port of
@@ -466,9 +511,10 @@ server's.
 | `claim.mjs <id>`                                                                                                            | `queued` → `working`; starts a run; prints the finding as JSON, fenced, for the agent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `done.mjs <id> "<summary>"`                                                                                                 | `working` → `fixed`, with the files the run changed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `ask.mjs <id> "<question>" [--option "<label>: <description>"]… [--multiple]`                                               | `working` → `asking`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `post.mjs <id>`                                                                                                             | Posts `comment` (the reviewer's edit when there is one) as a positioned discussion on the MR: `glab api --method POST --header 'Content-Type: application/json' --input -` with a JSON body (`position` of type `text`, the three `diffRefs` SHAs, `old_path` and `new_path` both set to `path`, `new_line`), run from `project` so glab picks the host from the remote; then `queued` → `posted` with `posted.url`, or `failed` with glab's first error line. Run by the server on a `post` decision, never by an agent.                                                                                                  |
+| `comments.mjs [<url>]`                                                                                                      | Run from the session's folder: writes the review of a pull or merge request's unresolved threads to `<state>/inbox/<id>.json` and prints `INBOX <file>`; notes on stderr (`note: …`). See [`/tranchant comments`](#tranchant-comments). |
+| `post.mjs <id>`                                                                                                             | Posts `comment` (the reviewer's edit when there is one) as a positioned discussion on the MR: `glab api --method POST --header 'Content-Type: application/json' --input -` with a JSON body (`position` of type `text`, the three `diffRefs` SHAs, `old_path` and `new_path` both set to `path`, `new_line`), run from `project` so glab picks the host from the remote; then `queued` → `posted` with `posted.url`, or `failed` with glab's first error line. On a finding with a `thread`, replies on it instead: on GitHub `gh api graphql --method POST --hostname <the PR's host> --input -` (`addPullRequestReviewThreadReply`), on GitLab `glab api --method POST … projects/<project>/merge_requests/<iid>/discussions/<id>/notes` with `{ body }`; then, with the decision's `resolve`, `resolveReviewThread` or a `PUT` of the discussion with `{ resolved: true }`. A resolve that fails leaves the reply `posted`, its reason in `posted.unresolved`. Run by the server on a `post` decision, never by an agent.                                                                                                  |
 | `issue.mjs <id>`                                                                                                            | Opens the issue the reviewer wrote (`issue.title`, `issue.body`) on the project `/api/tracker` names (the settings' `postWith` naming the forge for a host neither tool recognises), run from `project`: on GitHub `gh api --method POST --hostname <host> --header 'Content-Type: application/json' --input - repos/<owner>/<repo>/issues` with `{ title, body }`; on GitLab `glab api --method POST --hostname <host> … projects/<the remote's path, encoded>/issues` with `{ title, description }`. The tool has 60 seconds (`TRANCHANT_TOOL_TIMEOUT_MS`). Then `queued` → `moved` with `issue.url` and `issue.ref` (`#<number>`, `#<iid>`, absent when the answer has none), or `failed` with the tool's first error line; an answer without the issue's url fails saying where to check, since the issue may be open. Prints `moved <url>` or `failed <reason>`. Run by the server on an `issue` decision, never by an agent; a run that ends without a reason (a crash) is failed by the server, as a post is. |
-| `open.mjs <review.json> [--verify]`                                                                                         | Validates and imports a review: the envelope into `review.json`, each inline finding into `findings/<id>.json`; prints `REVIEW <dir>`. `verify` and `verified` are dropped; `--verify`, which `/tranchant review` passes, keeps `verify`. Review and finding ids match `[\w-]{1,64}`: they become folder names and words on protocol lines. An id already imported with the same envelope (`status`, `verify` and `findings` aside: a review grows) is reused, decisions kept, its inline findings not there yet added; with another envelope, or a finding of other content, it is refused (`REVIEW_REFUSED id <id> exists with other content`, `REVIEW_REFUSED finding <id> exists with other content`): the producer mints a new id. |
+| `open.mjs <review.json> [--verify \| --refresh]`                                                                                         | Validates and imports a review: the envelope into `review.json`, each inline finding into `findings/<id>.json`; prints `REVIEW <dir>`. `verify` and `verified` are dropped; `--verify`, which `/tranchant review` passes, keeps `verify`. Review and finding ids match `[\w-]{1,64}`: they become folder names and words on protocol lines. An id already imported with the same envelope (`status`, `verify` and `findings` aside: a review grows) is reused, decisions kept, its inline findings not there yet added; with another envelope, or a finding of other content, it is refused (`REVIEW_REFUSED id <id> exists with other content`, `REVIEW_REFUSED finding <id> exists with other content`): the producer mints a new id. `--refresh`, which `/tranchant comments` passes, takes the same PR/MR of the same project again: the envelope replaced (its `createdAt` kept), the findings new or changed written (their `addedAt` kept), the decisions untouched. |
 | `add.mjs --review <dir> [--file <finding.json>]`                                                                            | Adds one finding, from the file or stdin, to a review still `reviewing`: checked as a review's are (id, anchor, `comment` when `theirs`), written to `findings/<id>.json` with `addedAt`; prints `ADDED <id>`. The same finding again is accepted silently; another one under the same id, an unsound one, or any once the review is complete prints `ADD_REFUSED <reason>` and exits 2.                                                                                                                                                                                                                                   |
 | `complete.mjs --review <dir>`                                                                                               | Sets `status` to `complete`; prints `COMPLETE`. On a review complete already, `COMPLETE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `prepare.mjs [<branch> \| <mr url>] [--recipe <file>]`                                                                      | Run from the session's folder: writes the envelope of `/tranchant review` to `<state>/inbox/<id>.json`, prints `INBOX <file>`, then `LENS <json>` (`{ name, prompt, paths }`) per lens the change touches (the recipe: `--recipe`, else the settings' `recipe` with its `disabledLenses` left out, else the plugin's; a settings file it cannot read is said on stderr and read as none). `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying (or every one turned off), a merge request glab cannot read (glab's reason).                                                                                                                                                                                                                                                                                                                    |

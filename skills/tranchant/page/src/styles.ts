@@ -562,6 +562,12 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-options { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .tr-option { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
 .tr-option input { margin: 3px 0 0; }
+/* A PR/MR thread: the reviewer's comment, then its replies, each under its author. */
+.tr-thread { display: flex; flex-direction: column; gap: 8px; }
+.tr-thread-comments { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.tr-thread-comment { padding: 8px 12px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg-2); overflow-wrap: anywhere; }
+.tr-thread-comment + .tr-thread-comment { margin-left: 16px; }
+.tr-thread-meta { margin: 0 0 4px; font-size: 13px; }
 
 .tr-steps { max-height: 260px; overflow: auto; margin: 0; padding: 6px 10px; list-style: none; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg-2); font-size: 13px; }
 .tr-step { display: flex; align-items: center; gap: 8px; padding: 2px 0; }

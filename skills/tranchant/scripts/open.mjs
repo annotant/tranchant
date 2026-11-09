@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// open.mjs <review.json> [--verify]
+// open.mjs <review.json> [--verify | --refresh]
 // Validates a review file and imports it into the state folder,
 // <state>/<hash of its project>/reviews/<its id>/: review.json keeps the
 // envelope, findings/<id>.json each finding the producer wrote inline, and
@@ -10,7 +10,9 @@
 // it is refused: the producer mints a new id. `verify` and the findings'
 // `verified` are the hooks' alone: dropped, unless `--verify`, which
 // `/tranchant review` passes for the envelope prepare.mjs wrote, keeps
-// `verify`. Any refusal prints
+// `verify`. `--refresh`, which `/tranchant comments` passes, takes an id
+// imported already as the same PR/MR imported again: its envelope replaced,
+// its findings new or changed written, its decisions kept. Any refusal prints
 // `REVIEW_REFUSED <reason>` and exits 2.
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -104,7 +106,15 @@ try {
   if (errorCode(error) !== 'ENOENT') throw error
   imported = false
 }
-if (imported) {
+if (imported && process.argv.includes('--refresh')) {
+  try {
+    const { added, updated } = await store.refresh(review)
+    console.error(`refreshed: ${added} finding(s) added, ${updated} updated`)
+  } catch (error) {
+    if (!(error instanceof StoreRefusal)) throw error
+    refuse(`${target}: ${error.message}`)
+  }
+} else if (imported) {
   /** @type {import('./lib/format.mjs').Review} */
   let known
   try {

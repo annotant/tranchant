@@ -161,7 +161,7 @@ const text = (value, max = MAX_TEXT) =>
 /**
  * One decision of a batch, as the page sends it; undefined when it is not one.
  * @param {any} input
- * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, reason?: string, title?: string, body?: string } | undefined}
+ * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, reason?: string, title?: string, body?: string } | undefined}
  */
 function sanitiseDecision(input) {
   if (!input || typeof input !== 'object') return undefined
@@ -172,6 +172,7 @@ function sanitiseDecision(input) {
     action,
     context: text(input.context),
     comment: text(input.comment),
+    resolve: input.resolve === true,
     reason: text(input.reason),
     title: text(input.title, MAX_ISSUE_TITLE),
     body: text(input.body, MAX_ISSUE_BODY),
@@ -302,7 +303,10 @@ function trackerOnce(values) {
   const key = forge ?? 'auto'
   let tracker = trackers.get(key)
   if (tracker) return tracker
-  tracker = trackerOf(project, { gitlab: !!review.mr, forge }).then(
+  tracker = trackerOf(project, {
+    gitlab: !!review.mr && review.mr.forge !== 'github',
+    forge,
+  }).then(
     ({ kind, web, prefix }) => ({ kind, web, prefix }),
     (error) => {
       const reason = String(error?.message ?? error)
@@ -804,7 +808,7 @@ async function changesOf(id) {
 /** @type {Promise<ComputedDiff> | undefined} */
 let diff
 
-/** The diff, computed once: the review's head never changes. A failure is tried again. */
+/** The diff, computed once per head: only a refreshed review's moves. A failure is tried again. */
 function diffOnce() {
   diff ??= computeDiff().catch((error) => {
     diff = undefined
@@ -1310,8 +1314,15 @@ function announceLanded(latest) {
  */
 async function refresh(first) {
   const { ids, reviewChanged, latest } = await changes()
+  // `/tranchant comments` imported its PR/MR again, which moved: the diff is the new head's.
+  const moved =
+    !!latest && (latest.headSha !== review.headSha || latest.base !== review.base)
+  if (latest && moved) {
+    review = latest
+    diff = undefined
+  }
   announceLanded(latest)
-  if (first || (!ids.length && !reviewChanged)) return
+  if (first || (!ids.length && !reviewChanged && !moved)) return
   const event = `event: changed\ndata: ${JSON.stringify({ ids })}\n\n`
   for (const res of listeners) res.write(event)
 }

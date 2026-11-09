@@ -24,6 +24,7 @@ import {
   parseDecisions,
   postBlocker,
   problemsText,
+  repliesOn,
   stateWords,
   statusOf,
   validateEnvelope,
@@ -333,7 +334,7 @@ export function createStore(dir) {
     await rename(temp, target)
   }
 
-  /** @param {Review} envelope */
+  /** @param {Omit<Review, 'findings'> & { findings?: Finding[] }} envelope */
   async function writeEnvelope(envelope) {
     const temp = `${reviewFile}.${process.pid}.tmp`
     await writeFile(temp, `${JSON.stringify(envelope, null, 2)}\n`)
@@ -525,6 +526,44 @@ export function createStore(dir) {
     },
 
     /**
+     * The producer imports its review again (`open.mjs --refresh`): the
+     * envelope is replaced, its `createdAt` kept; each finding new or changed
+     * is written, keeping its `addedAt`; one the new import lacks stays, as
+     * do the decisions. Refused unless it is the same PR/MR of the same project.
+     * @param {Review} review
+     * @returns {Promise<{ added: number, updated: number }>}
+     */
+    refresh(review) {
+      return withFileLock(reviewFile, async () => {
+        const known = await readReview()
+        if (
+          known.project !== review.project ||
+          !known.mr ||
+          known.mr.url !== review.mr?.url
+        )
+          throw new StoreRefusal(
+            `id ${review.id} exists for another change: refresh only the same PR/MR`,
+          )
+        const { findings, ...envelope } = review
+        await writeEnvelope({ ...envelope, createdAt: known.createdAt })
+        let added = 0
+        let updated = 0
+        const base = Date.now()
+        for (const [i, finding] of findings.entries()) {
+          const there = known.findings.find((one) => one.id === finding.id)
+          if (there && contentOf(there) === contentOf(finding)) continue
+          if (there) updated++
+          else added++
+          await writeFinding({
+            ...finding,
+            addedAt: there?.addedAt ?? new Date(base + i).toISOString(),
+          })
+        }
+        return { added, updated }
+      })
+    },
+
+    /**
      * The review's summary and strengths, replacing the previous ones, while
      * the review is `reviewing`: the page shows them as soon as they land.
      * @param {any} given `{ summary, strengths }`
@@ -650,14 +689,22 @@ export function createStore(dir) {
      * agent follows), a post (with the `comment` as they edited it), an issue
      * (with its `title` and `body`), a drop (with their `reason`) or a skip. A
      * post needs the MR's `diffRefs` at the commit reviewed, whatever the
-     * ownership; a question is answered with `answer`, not decided again.
+     * ownership; on a finding from a PR/MR thread, it is a reply on the
+     * thread instead, written by the reviewer (`comment`), `resolve` it once
+     * posted, and a `fixed` one may still be replied on. A question is
+     * answered with `answer`, not decided again.
      * @param {string} id
-     * @param {{ action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, reason?: string, title?: string, body?: string }} decision
+     * @param {{ action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, reason?: string, title?: string, body?: string }} decision
      * @returns {Promise<Entry>}
      */
-    decide(id, { action, context, comment, reason, title, body }) {
+    decide(id, { action, context, comment, resolve, reason, title, body }) {
       return changeOne(id, (entry, finding, known) => {
-        if (action === 'post') {
+        const reply = action === 'post' && repliesOn(finding)
+        if (reply && !known.mr) {
+          throw new StoreRefusal('post refused: the review has no PR/MR to reply on')
+        } else if (reply && !comment?.trim()) {
+          throw new StoreRefusal(`post refused: the reply on ${id}'s thread is empty`)
+        } else if (action === 'post' && !reply) {
           const blocker = postBlocker(known)
           if (blocker) throw new StoreRefusal(`post refused: ${blocker}`)
           if (!comment?.trim() && !finding.comment) {
@@ -667,12 +714,14 @@ export function createStore(dir) {
         if (action === 'issue' && (!title?.trim() || !body?.trim())) {
           throw new StoreRefusal(`issue refused: finding ${id} needs a title and a body`)
         }
-        const at = apply(id, entry, action, { by: 'reviewer' })
+        const move = reply && entry.state === 'fixed' ? 'reply' : action
+        const at = apply(id, entry, move, { by: 'reviewer' })
         entry.decision = {
           action,
           ...(action === 'fix' && context?.trim()
             ? { context: context.trim().slice(0, MAX_TEXT) }
             : {}),
+          ...(reply && resolve === true ? { resolve: true } : {}),
           at,
         }
         delete entry.reason
@@ -826,15 +875,22 @@ export function createStore(dir) {
     },
 
     /**
-     * The comment is on the MR.
+     * The comment is on the MR, or the reply on its thread: `resolved` once
+     * the thread was resolved too, `unresolved` why it could not be.
      * @param {string} id
-     * @param {{ discussionId: string, url: string }} where
+     * @param {{ discussionId: string, url: string, resolved?: boolean, unresolved?: string }} where
      * @returns {Promise<Entry>}
      */
-    posted(id, { discussionId, url }) {
+    posted(id, { discussionId, url, resolved, unresolved }) {
       return changeOne(id, (entry) => {
         const at = apply(id, entry, 'posted', { by: 'server' })
-        entry.posted = { discussionId, url, at }
+        entry.posted = {
+          discussionId,
+          url,
+          at,
+          ...(resolved ? { resolved: true } : {}),
+          ...(unresolved ? { unresolved: unresolved.slice(0, MAX_TEXT) } : {}),
+        }
         delete entry.reason
         return entry
       })

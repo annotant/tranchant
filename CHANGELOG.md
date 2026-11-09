@@ -9,6 +9,15 @@ released to the `stable` branch.
 
 ### Added
 
+- **Your reviewers' comments in the page.** `/tranchant comments [<url>]`
+  reads the unresolved review threads of your pull request (`gh`) or merge
+  request (`glab`), the current branch's by default, one finding per
+  thread on its line, with the comment, its replies and its link; a thread
+  whose line moved since sits on its file's header. Fix it with an agent
+  (the comment its fenced brief), reply on the thread from the page,
+  prefilled after a fix, and resolve it if you choose, move it to an issue
+  or skip it. Run it again to pull new comments in, your decisions kept.
+
 - **Unfold the diff's context.** Above, between and below the hunks, a bar
   says how many lines the diff hides (below the last one, that there are
   more, until the file's length is known) and shows them: all of them, or

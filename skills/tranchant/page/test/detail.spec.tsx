@@ -22,8 +22,10 @@ import {
   FINDINGS,
   mergeRequest,
   payload,
+  pullRequest,
   record,
   review,
+  THREADED,
   withoutComment,
 } from './fixture'
 
@@ -675,4 +677,59 @@ test('while its issue opens, the finding shows a spinner and offers nothing else
   expect(document.querySelector('.tr-pending .tr-spinner')).not.toBeNull()
   for (const name of ['Stop', 'Drop', 'Skip', 'Fix now', 'Open an issue'])
     expect(button(name)).toBeNull()
+})
+
+test('a thread shows its comments, and is replied on, resolved if asked', () => {
+  const { onDecide } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+  })
+  expect(screen.getByText('@alice')).toBeDefined()
+  expect(screen.getByText('missing', { selector: 'strong' })).toBeDefined()
+  expect(screen.getByText('Looking into it')).toBeDefined()
+  expect(screen.queryByText('Problem')).toBeNull()
+  // Fixing comes first; posting is a reply, never a comment of its own.
+  expect(button('Fix now')?.className).toContain('tr-btn--primary')
+  expect(button('Post a comment')).toBeNull()
+  fireEvent.click(button('Reply on the thread')!)
+  const reply = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
+  expect(reply.value).toBe('')
+  expect(button('Reply')?.hasAttribute('disabled')).toBe(true)
+  fireEvent.change(reply, { target: { value: 'Done' } })
+  fireEvent.click(screen.getByLabelText('Resolve the thread once replied'))
+  fireEvent.click(button('Reply')!)
+  expect(onDecide).toHaveBeenCalledWith([
+    { id: THREADED.id, action: 'post', comment: 'Done', resolve: true },
+  ])
+})
+
+test('a fixed thread offers its reply, drafted from what changed; a posted one links it', () => {
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'fixed',
+    fields: {
+      runs: [{ id: 'r1', startedAt: '', outcome: 'fixed', summary: 'Skipped it.' }],
+    },
+  })
+  fireEvent.click(button('Reply on the thread')!)
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+    'Fixed: Skipped it.',
+  )
+  cleanup()
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'posted',
+    fields: {
+      posted: {
+        discussionId: 'PRRT_1',
+        url: 'https://x.example/r',
+        at: '',
+        unresolved: 'no right',
+      },
+    },
+  })
+  expect(screen.getByText(/Replied on the thread/)).toBeDefined()
+  expect(screen.getByText('The thread is not resolved: no right')).toBeDefined()
 })

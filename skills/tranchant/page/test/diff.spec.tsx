@@ -3,7 +3,7 @@ import { expect, test, vi } from 'vitest'
 import { marksInDiff, parseDiff, placeFindings } from '../src/diff'
 import { DiffView, FileList, readingIndex } from '../src/DiffView'
 import type { Finding } from '../src/domain'
-import { DIFF, DIFF_FILES, FINDINGS, record, STACKED } from './fixture'
+import { DIFF, DIFF_FILES, FINDINGS, record, STACKED, THREADED } from './fixture'
 
 const ids = (list: readonly Finding[] | undefined) => list?.map((finding) => finding.id)
 const stats = new Map(DIFF_FILES.map((file) => [file.path, file]))
@@ -266,4 +266,16 @@ test('the view highlights a file in the language of its extension, another stays
     screen.getByRole('region', { name: 'src/b.ts' }).querySelector('.tr-tok--keyword')
       ?.textContent,
   ).toBe('const')
+})
+
+test('a thread whose line moved, or on a whole file, sits on its file’s header', () => {
+  const files = parseDiff(DIFF)
+  const inPlace = placeFindings(files, [THREADED])
+  expect(ids(inPlace.sections[0]?.lines.get(42))).toEqual([THREADED.id])
+  for (const flag of ['outdated', 'file'] as const) {
+    const moved = { ...THREADED, thread: { ...THREADED.thread!, [flag]: true } }
+    const { sections } = placeFindings(files, [moved])
+    expect(sections[0]?.lines.size).toBe(0)
+    expect(ids(sections[0]?.header)).toEqual([THREADED.id])
+  }
 })

@@ -3,7 +3,9 @@ import { Diagram } from './Diagram'
 import { Discussion, type Taken } from './Discussion'
 import {
   allows,
+  changeName,
   draftComment,
+  draftReply,
   BUCKET_LABELS,
   type DecisionInput,
   discussable,
@@ -12,6 +14,7 @@ import {
   type Finding,
   type FindingRecord,
   postsFrom,
+  repliesOn,
   staleMrReason,
   type Review,
   STATE_DETAILS,
@@ -20,6 +23,7 @@ import {
   type Step,
   stateOf,
   tagOf,
+  type Thread as ReviewThread,
   type Tracker,
 } from './domain'
 import { Excerpt } from './Excerpt'
@@ -48,6 +52,49 @@ interface Props {
 }
 
 type Mode = 'idle' | 'editing' | 'dropping' | 'issuing'
+
+const when = (at: string) => {
+  const date = new Date(at)
+  return Number.isNaN(date.getTime()) ? at : date.toLocaleString()
+}
+
+/** The PR/MR thread the finding comes from: the reviewer's comment and its replies, data to read. */
+function ThreadView({ thread, change }: { thread: ReviewThread; change: string }) {
+  return (
+    <section className="tr-section tr-thread" aria-label="Review thread">
+      <p className="tr-muted">
+        Unresolved on the {change}:{' '}
+        <a href={thread.url} target="_blank" rel="noreferrer">
+          open the thread
+        </a>
+      </p>
+      <ol className="tr-thread-comments">
+        {thread.comments.map((comment) => (
+          <li
+            key={comment.url ?? `${comment.author} ${comment.at}`}
+            className="tr-thread-comment"
+          >
+            <p className="tr-thread-meta">
+              <strong>@{comment.author}</strong>{' '}
+              {comment.url ? (
+                <a href={comment.url} target="_blank" rel="noreferrer">
+                  {when(comment.at)}
+                </a>
+              ) : (
+                <span className="tr-muted">{when(comment.at)}</span>
+              )}
+            </p>
+            {comment.body.trim() ? (
+              <Markdown source={comment.body} headings={false} />
+            ) : (
+              <p className="tr-muted">No text.</p>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
 
 function CopyAnchor({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -172,7 +219,11 @@ export function FindingDetail({
   const [mode, setMode] = useState<Mode>('idle')
   const [showContext, setShowContext] = useState(false)
   const [context, setContext] = useState('')
-  const [comment, setComment] = useState(() => draftComment(finding, record))
+  const reply = repliesOn(finding)
+  const [comment, setComment] = useState(() =>
+    reply ? draftReply(record) : draftComment(finding, record),
+  )
+  const [resolve, setResolve] = useState(false)
   const [reason, setReason] = useState('')
   const [issue, setIssue] = useState<{ title: string; body: string }>()
   const noTracker = tracker?.kind === null
@@ -182,12 +233,15 @@ export function FindingDetail({
   // The tool is opening it: nothing else is offered until it lands or fails.
   const opening = state === 'queued' && record?.decision?.action === 'issue'
   const can = (move: Parameters<typeof allows>[0]) =>
-    !disabled && !opening && allows(move, state, review)
+    !disabled && !opening && allows(move, state, review, finding)
   const theirs = review.ownership === 'theirs'
   // Ours with an MR: fixing comes first, posting is the secondary choice.
-  const oursWithMr = !theirs && !!review.mr?.diffRefs
-  const blocker = staleMrReason(review)
+  const oursWithMr = !theirs && !reply && !!review.mr?.diffRefs
+  // A reply on a thread is positioned nowhere: the diff refs do not hold it back.
+  const blocker = reply ? undefined : staleMrReason(review)
   const blocked = !!blocker && !disabled && postsFrom(state)
+  const change = changeName(review)
+  const thread = finding.thread
   const tag = tagOf(finding)
   const writable = discussable(state)
   const hasThread = !!discussion?.messages.length
@@ -220,10 +274,17 @@ export function FindingDetail({
   const postAsWritten = () => decide({ action: 'post' })
   const editAndPost = () =>
     decide(
-      comment.trim() && comment.trim() !== finding.comment
-        ? { action: 'post', comment: comment.trim() }
-        : { action: 'post' },
+      reply
+        ? { action: 'post', comment: comment.trim(), ...(resolve && { resolve: true }) }
+        : comment.trim() && comment.trim() !== finding.comment
+          ? { action: 'post', comment: comment.trim() }
+          : { action: 'post' },
     )
+  const startReply = () => {
+    // After a fix, the empty editor opens with what changed.
+    setComment((text) => (text.trim() ? text : draftReply(record)))
+    setMode('editing')
+  }
   const startIssue = () => {
     // Drafted when opened, not when mounted: the tracker may have answered since.
     // A failed attempt's issue comes back as the reviewer wrote it.
@@ -255,6 +316,13 @@ export function FindingDetail({
               : 'Not verified: the review ended before a verifier confirmed it.'}
           </p>
         )}
+        {thread && (thread.outdated || thread.file) && (
+          <p className="tr-muted" role="note">
+            {thread.file
+              ? 'On the whole file.'
+              : `Outdated: the comment was on line ${finding.line}, which moved since.`}
+          </p>
+        )}
         <div className="tr-detail-meta">
           <CopyAnchor text={`${finding.path}:${finding.line}`} />
           <span className={`tr-chip tr-chip--bucket-${finding.bucket}`}>
@@ -279,20 +347,24 @@ export function FindingDetail({
         language={languageOfFile(finding.path)}
       />
 
-      <dl className="tr-pwf">
-        <dt>Problem</dt>
-        <dd>
-          <Markdown source={finding.problem} headings={false} />
-        </dd>
-        <dt>Why</dt>
-        <dd>
-          <Markdown source={finding.why} headings={false} />
-        </dd>
-        <dt>Fix</dt>
-        <dd>
-          <Markdown source={finding.fix} headings={false} />
-        </dd>
-      </dl>
+      {thread ? (
+        <ThreadView thread={thread} change={change} />
+      ) : (
+        <dl className="tr-pwf">
+          <dt>Problem</dt>
+          <dd>
+            <Markdown source={finding.problem} headings={false} />
+          </dd>
+          <dt>Why</dt>
+          <dd>
+            <Markdown source={finding.why} headings={false} />
+          </dd>
+          <dt>Fix</dt>
+          <dd>
+            <Markdown source={finding.fix} headings={false} />
+          </dd>
+        </dl>
+      )}
 
       {finding.related && finding.related.length > 0 && (
         <details className="tr-related">
@@ -319,10 +391,16 @@ export function FindingDetail({
       <section className="tr-section" aria-label="Outcome">
         {state === 'posted' && record?.posted && (
           <p className="tr-outcome">
-            Posted:{' '}
+            {reply ? 'Replied on the thread' : 'Posted'}:{' '}
             <a href={record.posted.url} target="_blank" rel="noreferrer">
               {record.posted.url}
             </a>
+            {record.posted.resolved && ' · resolved'}
+          </p>
+        )}
+        {state === 'posted' && record?.posted?.unresolved && (
+          <p className="tr-outcome tr-error">
+            The thread is not resolved: {record.posted.unresolved}
           </p>
         )}
         {state === 'moved' && record?.issue?.url && (
@@ -474,17 +552,28 @@ export function FindingDetail({
               className="tr-textarea"
               value={comment}
               onChange={(event) => setComment(event.target.value)}
-              aria-label="Comment to post"
+              aria-label={reply ? 'Reply on the thread' : 'Comment to post'}
+              placeholder={reply ? `Your reply on the ${change}'s thread` : undefined}
               rows={6}
               autoFocus
             />
+            {reply && (
+              <label className="tr-option">
+                <input
+                  type="checkbox"
+                  checked={resolve}
+                  onChange={(event) => setResolve(event.target.checked)}
+                />
+                <span>Resolve the thread once replied</span>
+              </label>
+            )}
             <div className="tr-actions">
               <button
                 type="submit"
                 className="tr-btn tr-btn--primary"
                 disabled={!comment.trim()}
               >
-                Post
+                {reply ? 'Reply' : 'Post'}
               </button>
               <button type="button" className="tr-btn" onClick={() => setMode('idle')}>
                 Cancel
@@ -519,6 +608,16 @@ export function FindingDetail({
                   onClick={fix}
                 >
                   Fix now
+                </button>
+              )}
+              {reply && can('post') && (
+                <button
+                  type="button"
+                  className={`tr-btn ${state === 'fixed' ? 'tr-btn--primary' : ''}`}
+                  title={`Write a reply on the ${change}'s thread, and resolve it if you like`}
+                  onClick={startReply}
+                >
+                  Reply on the thread
                 </button>
               )}
               {oursWithMr && (can('post') || blocked) && (

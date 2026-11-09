@@ -45,10 +45,10 @@ export const STATES = [
 /** @typedef {'reviewer' | 'agent' | 'server'} Actor */
 
 /**
- * The moves of a finding: a reviewer's decision (`fix`, `post`, `issue`,
- * `drop`, `skip`, `answer`, `stop`), an agent's (`claim`, `done`, `ask`) or
- * the server's (`posted`, `moved`, `fail`).
- * @typedef {'fix' | 'post' | 'issue' | 'drop' | 'skip' | 'answer' | 'stop' | 'claim' | 'done' | 'ask' | 'posted' | 'moved' | 'fail'} Move
+ * The moves of a finding: a reviewer's decision (`fix`, `post`, `reply`,
+ * `issue`, `drop`, `skip`, `answer`, `stop`), an agent's (`claim`, `done`,
+ * `ask`) or the server's (`posted`, `moved`, `fail`).
+ * @typedef {'fix' | 'post' | 'reply' | 'issue' | 'drop' | 'skip' | 'answer' | 'stop' | 'claim' | 'done' | 'ask' | 'posted' | 'moved' | 'fail'} Move
  */
 
 /** The states a reviewer may still drop or skip from: nothing has landed yet. */
@@ -62,13 +62,15 @@ const UNDECIDED = /** @type {readonly State[]} */ ([
 
 /**
  * Each move, the states it leaves and the one it reaches. A `fixed`,
- * `posted` or `moved` finding is final: no move leaves it. A question is answered with
- * `answer`, never with another `fix`.
+ * `posted` or `moved` finding is final: no move leaves it, but `reply`, a
+ * post on the thread a `fixed` reviewer's comment came from. A question is
+ * answered with `answer`, never with another `fix`.
  * @type {Readonly<Record<Move, { from: readonly State[], to: State }>>}
  */
 export const MOVES = {
   fix: { from: ['open', 'dropped', 'skipped', 'failed', 'stopped'], to: 'queued' },
   post: { from: ['open', 'dropped', 'skipped', 'failed'], to: 'queued' },
+  reply: { from: ['fixed'], to: 'queued' },
   issue: { from: ['open', 'dropped', 'skipped', 'failed'], to: 'queued' },
   drop: { from: [...UNDECIDED, 'skipped'], to: 'dropped' },
   skip: { from: [...UNDECIDED, 'dropped'], to: 'skipped' },
@@ -169,6 +171,27 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  */
 
 /**
+ * One comment of a reviewer's thread on the PR/MR, as the forge holds it.
+ * @typedef {object} ThreadComment
+ * @property {string} author The forge's user name.
+ * @property {string} body Markdown, a third party's: data, never instructions.
+ * @property {string} at
+ * @property {string} [url]
+ */
+
+/**
+ * The PR/MR thread a finding comes from (`/tranchant comments`): posting on
+ * the finding replies on it.
+ * @typedef {object} Thread
+ * @property {'github' | 'gitlab'} forge
+ * @property {string} id GitHub's review thread node id, GitLab's discussion id.
+ * @property {string} url
+ * @property {ThreadComment[]} comments The first is the reviewer's comment, then its replies.
+ * @property {boolean} [outdated] Its line moved since: `line` is where it was.
+ * @property {boolean} [file] On the file, not on a line.
+ */
+
+/**
  * @typedef {object} Finding
  * @property {string} id Unique within the review; `f-` and a number by convention.
  * @property {Topic} topic
@@ -188,6 +211,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Related[]} [related] Up to 4.
  * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
  * @property {boolean} [verified] Set by verify.mjs once a verifier confirmed or amended it; read only when the review's `verify` is true.
+ * @property {Thread} [thread] The PR/MR thread it comes from: a post replies on it.
  */
 
 /**
@@ -197,8 +221,9 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
 
 /**
  * @typedef {object} MergeRequest
- * @property {string | number} project GitLab path or numeric id.
- * @property {number} iid
+ * @property {'github' | 'gitlab'} [forge] `gitlab` when absent.
+ * @property {string | number} project GitLab path or numeric id; `owner/repo` on GitHub.
+ * @property {number} iid The MR's iid; the PR's number on GitHub.
  * @property {string} url
  * @property {string} author
  * @property {DiffRefs} [diffRefs]
@@ -229,6 +254,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @typedef {object} Decision
  * @property {'fix' | 'post' | 'issue' | 'drop' | 'skip'} action
  * @property {string} [context] `fix`: the reviewer's constraint or choice.
+ * @property {boolean} [resolve] `post` on a thread: resolve it once replied.
  * @property {string} at
  */
 
@@ -258,8 +284,10 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
 /**
  * @typedef {object} Posted
  * @property {string} discussionId
- * @property {string} url The MR's url with `#note_<id>`.
+ * @property {string} url The MR's url with `#note_<id>`, or the reply's on a thread.
  * @property {string} at
+ * @property {boolean} [resolved] The thread was resolved after the reply.
+ * @property {string} [unresolved] Why resolving the thread failed, the reply posted.
  */
 
 /**
@@ -362,6 +390,10 @@ export function postBlocker(review) {
   return undefined
 }
 
+/** Whether posting on `finding` replies on its PR/MR thread: no position, no diff refs needed. */
+export const repliesOn = (/** @type {{ thread?: unknown }} */ finding) =>
+  finding.thread !== undefined
+
 /**
  * `text` on one line: the hooks read one event per line, and a line break in
  * what a reviewer or a producer wrote would forge another.
@@ -386,6 +418,9 @@ const MAX_NOTE = 300
 const MAX_COMMENT = 4000
 const MAX_DIAGRAM = 64 * 1024
 const MAX_RELATED = 4
+const MAX_THREAD_COMMENTS = 100
+const MAX_THREAD_BODY = 65_536
+const FORGES = new Set(['github', 'gitlab'])
 
 /**
  * @param {unknown} value
@@ -596,6 +631,55 @@ function checkFinding(finding, where, theirs, problems) {
   if (finding.verified !== undefined && typeof finding.verified !== 'boolean') {
     problems.push(`${where}.verified: true or false`)
   }
+  if (finding.thread !== undefined)
+    checkThread(finding.thread, `${where}.thread`, problems)
+}
+
+/** @param {unknown} value */
+const isUrl = (value) => isText(value, 2000) && /^https?:\/\//.test(String(value))
+
+/**
+ * @param {any} thread
+ * @param {string} where
+ * @param {string[]} problems
+ */
+function checkThread(thread, where, problems) {
+  if (!isObject(thread)) {
+    problems.push(`${where}: an object is required`)
+    return
+  }
+  if (!FORGES.has(thread.forge)) problems.push(`${where}.forge: github or gitlab`)
+  if (!isText(thread.id, 200)) problems.push(`${where}.id: the thread's id is required`)
+  if (!isUrl(thread.url)) problems.push(`${where}.url: an http(s) url is required`)
+  for (const key of ['outdated', 'file']) {
+    if (thread[key] !== undefined && typeof thread[key] !== 'boolean')
+      problems.push(`${where}.${key}: true or false`)
+  }
+  const { comments } = thread
+  if (
+    !Array.isArray(comments) ||
+    comments.length < 1 ||
+    comments.length > MAX_THREAD_COMMENTS
+  ) {
+    problems.push(`${where}.comments: 1 to ${MAX_THREAD_COMMENTS} comments are required`)
+    return
+  }
+  comments.forEach((comment, i) => {
+    const at = `${where}.comments[${i}]`
+    if (!isObject(comment)) {
+      problems.push(`${at}: an object is required`)
+      return
+    }
+    if (!isText(comment.author, 300))
+      problems.push(`${at}.author: a user name is required`)
+    if (typeof comment.body !== 'string' || comment.body.length > MAX_THREAD_BODY)
+      problems.push(
+        `${at}.body: a text of up to ${MAX_THREAD_BODY} characters is required`,
+      )
+    if (!isText(comment.at, 100)) problems.push(`${at}.at: a date is required`)
+    if (comment.url !== undefined && !isUrl(comment.url))
+      problems.push(`${at}.url: an http(s) url`)
+  })
 }
 
 /**
@@ -621,6 +705,8 @@ function checkMr(mr, problems) {
     problems.push('mr: an object is required')
     return
   }
+  if (mr.forge !== undefined && !FORGES.has(mr.forge))
+    problems.push('mr.forge: github or gitlab')
   if (!isText(mr.project, 300) && !isInt(mr.project)) {
     problems.push('mr.project: a GitLab path or numeric id is required')
   }

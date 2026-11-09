@@ -856,10 +856,11 @@ async function startServing($: $, dir: string) {
 
 /**
  * `review` is a review file to import, or a folder open.mjs made: the folder
- * to serve, or why there is none. `verify`: prepare.mjs's envelope, which
- * keeps its `verify`; open.mjs drops it from any other file.
+ * to serve, or why there is none. `--verify`: prepare.mjs's envelope, which
+ * keeps its `verify`; open.mjs drops it from any other file. `--refresh`:
+ * comments.mjs's, the same PR/MR imported again, its decisions kept.
  */
-async function reviewDir($: $, given: string, verify = false) {
+async function reviewDir($: $, given: string, flag?: '--verify' | '--refresh') {
   const cwd = normalize(await $.session.cwd())
   const path = resolve(cwd, given)
   const exists = (file: string) => $.fs.exists(file).catch(() => false)
@@ -869,12 +870,9 @@ async function reviewDir($: $, given: string, verify = false) {
       error: `No review at ${path}: give a review file, or a review folder holding review.json.`,
     }
   const ran = await $.process
-    .run(
-      ['node', `${skillDir($)}/scripts/open.mjs`, path, ...(verify ? ['--verify'] : [])],
-      {
-        cwd,
-      },
-    )
+    .run(['node', `${skillDir($)}/scripts/open.mjs`, path, ...(flag ? [flag] : [])], {
+      cwd,
+    })
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
   const lines = ran.stdout
     .split('\n')
@@ -1010,18 +1008,20 @@ async function registerCommand($: $, command: Parameters<$['command']['register'
     )
 }
 
-/** `/tranchant <review.json> | review [<target>] | status | stop`: the answer the person reads. */
+/** `/tranchant <review.json> | review [<target>] | comments [<url>] | status | stop`: the answer the person reads. */
 async function openCommand($: $, args: string) {
   const word = args.trim()
   if (word === 'stop') return stopServing($)
   if (word === 'status') return statusText($)
   const [first, ...rest] = word.split(/\s+/)
+  if (first === 'comments')
+    return rest.length > 1 ? COMMENTS_USAGE : startComments($, rest[0])
   if (first === 'review') {
     const parsed = reviewArgs(rest)
     return 'error' in parsed ? parsed.error : startReview($, parsed.target, parsed.recipe)
   }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] | comments [<pull request or merge request url>] | status | stop'
   return openReview($, word)
 }
 
@@ -1128,6 +1128,7 @@ let completing: Promise<void> = Promise.resolve()
 
 const REVIEW_USAGE =
   'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]'
+const COMMENTS_USAGE = 'Usage: /tranchant comments [<pull request or merge request url>]'
 
 const AGENT_PREFIX = {
   summarizer: 'sm',
@@ -1716,7 +1717,7 @@ async function startReview($: $, target: string | undefined, recipe: string | un
     .split('\n')
     .map((line) => line.trim())
     .find((line) => line.startsWith('settings: '))
-  const found = await reviewDir($, inbox, true)
+  const found = await reviewDir($, inbox, '--verify')
   if ('error' in found) return found.error
   const { dir } = found
   const served = await startServing($, dir)
@@ -1746,6 +1747,39 @@ async function startReview($: $, target: string | undefined, recipe: string | un
       : []),
     served,
   ].join('\n')
+}
+
+/**
+ * `/tranchant comments`: comments.mjs reads the PR/MR's unresolved review
+ * threads into a review, one finding per thread, which opens like a review
+ * file; run again, the same review is refreshed, its decisions kept. No
+ * agent reviews it: each fix starts as any finding's.
+ */
+async function startComments($: $, target: string | undefined) {
+  const cwd = normalize(await $.session.cwd())
+  const ran = await $.process
+    .run(['node', `${skillDir($)}/scripts/comments.mjs`, ...(target ? [target] : [])], {
+      cwd,
+    })
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const lines = ran.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const refused = lines.find((line) => line.startsWith('REVIEW_REFUSED '))
+  if (refused)
+    return `Tranchant cannot read the comments: ${refused.slice('REVIEW_REFUSED '.length)}`
+  const inbox = lines.find((line) => line.startsWith('INBOX '))?.slice('INBOX '.length)
+  if (!inbox)
+    return `Tranchant could not read the comments: ${short(ran.stderr.trim() || `comments.mjs exited ${ran.exitCode}`, 300)}`
+  const notes = ran.stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('note: '))
+    .map((line) => short(line.slice('note: '.length), 300))
+  const found = await reviewDir($, inbox, '--refresh')
+  if ('error' in found) return found.error
+  return [...notes, await startServing($, found.dir)].join('\n')
 }
 
 /** `/tranchant status`'s lines about the review agents of review `dir`. */
@@ -1785,7 +1819,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: 'open',
       description:
-        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
+        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with comments, opens the unresolved review threads of a pull request or merge request; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -1819,6 +1853,11 @@ export const register: Register = (on) => {
             description:
               "With run: a recipe file to use instead of the plugin's default one.",
           },
+          comments: {
+            type: 'boolean',
+            description:
+              "true opens the unresolved review threads of a pull request or merge request instead, one finding per thread, refreshed when opened again; target its url, absent the current branch's; review is then left out.",
+          },
         },
       },
     })
@@ -1828,7 +1867,8 @@ export const register: Register = (on) => {
       name: 'tranchant',
       description:
         'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, status, or stop)',
-      argumentHint: '<review.json> | review [<branch> | <mr url>] | status | stop',
+      argumentHint:
+        '<review.json> | review [<branch> | <mr url>] | comments [<pr/mr url>] | status | stop',
       immediate: true,
     })
     await registerRunning($)
@@ -1846,6 +1886,11 @@ export const register: Register = (on) => {
   on('tool.call', { tool: OPEN_TOOL }, async ($, e) => {
     if (e.stop === true) return { result: await stopServing($) }
     if (e.status === true) return { result: await statusText($) }
+    if (e.comments === true) {
+      const target =
+        typeof e.target === 'string' && e.target.trim() ? e.target.trim() : undefined
+      return { result: await startComments($, target) }
+    }
     if (e.run === true) {
       const target =
         typeof e.target === 'string' && e.target.trim() ? e.target.trim() : undefined

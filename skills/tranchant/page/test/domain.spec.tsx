@@ -7,6 +7,7 @@ import {
   commentedIds,
   counts,
   draftIssue,
+  draftReply,
   groupFindings,
   idsInBucket,
   openIds,
@@ -15,7 +16,15 @@ import {
   stateLabel,
   staleMrReason,
 } from '../src/domain'
-import { FINDINGS, mergeRequest, ORDER, record, review } from './fixture'
+import {
+  FINDINGS,
+  mergeRequest,
+  ORDER,
+  pullRequest,
+  record,
+  review,
+  THREADED,
+} from './fixture'
 
 test('findings group by bucket, then topic, then path:line', () => {
   const groups = groupFindings(FINDINGS)
@@ -222,4 +231,29 @@ test('every state shows a human word, never its own name', () => {
     skipped: 'Set aside',
     stopped: 'Set aside',
   })
+})
+
+test('a thread is replied on with no diff refs, a fixed one too, never in a batch', () => {
+  const comments = review('ours', {
+    mr: pullRequest(),
+    findings: [THREADED, FINDINGS[1]!],
+  })
+  expect(allows('post', 'open', comments, THREADED)).toBe(true)
+  expect(allows('post', 'fixed', comments, THREADED)).toBe(true)
+  expect(allows('post', 'posted', comments, THREADED)).toBe(false)
+  // A finding of its own still needs the diff refs a positioned comment takes.
+  expect(allows('post', 'open', comments, FINDINGS[1])).toBe(false)
+  expect(allows('post', 'open', review('ours'), THREADED)).toBe(false)
+  const records = { [THREADED.id]: record('fixed') }
+  expect(applicable([THREADED.id], 'post', records, comments)).toEqual([])
+  expect(applicable([THREADED.id], 'fix', {}, comments)).toEqual([THREADED.id])
+})
+
+test('a reply opens as last written, else after a fix with what changed, else empty', () => {
+  expect(draftReply(undefined)).toBe('')
+  expect(draftReply(record('failed', { comment: 'On it' }))).toBe('On it')
+  const fixed = record('fixed', {
+    runs: [{ id: 'r1', startedAt: '', outcome: 'fixed', summary: 'Skipped it.' }],
+  })
+  expect(draftReply(fixed)).toBe('Fixed: Skipped it.')
 })

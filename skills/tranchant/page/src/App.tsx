@@ -468,7 +468,8 @@ export default function App() {
         const blind =
           action === 'post' &&
           !hasComment(ordered.find((finding) => finding.id === cursor))
-        if (!blind && allows(action, stateOf(records, cursor), review)) {
+        const finding = ordered.find((one) => one.id === cursor)
+        if (!blind && allows(action, stateOf(records, cursor), review, finding)) {
           if (cursor === openId) void decideShown({ id: cursor, action })
           else void decide([{ id: cursor, action }])
         }
