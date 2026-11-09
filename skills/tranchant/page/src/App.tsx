@@ -6,12 +6,13 @@ import {
   postDecisions,
   postStop,
   useDiff,
+  useUnfold,
   useReview,
   useSettings,
   useTracker,
 } from './api'
 import { BatchBar } from './BatchBar'
-import { parseDiff, placeFindings, type Section } from './diff'
+import { parseDiff, placeFindings, type Section, unfoldFile } from './diff'
 import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView'
 import {
   allows,
@@ -282,9 +283,17 @@ export default function App() {
   )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
   const [diffPane, setDiffPane] = useState<HTMLElement | null>(null)
-  const files = useMemo(
+  const parsed = useMemo(
     () => (diff.status === 'ready' ? parseDiff(diff.payload.diff) : undefined),
     [diff],
+  )
+  const { unfolds, unfold } = useUnfold(
+    diff.status === 'ready' ? diff.payload.head : undefined,
+  )
+  // The unfolded lines are the diff's: a finding on one sits on its line.
+  const files = useMemo(
+    () => parsed?.map((file) => unfoldFile(file, unfolds.get(file.path))),
+    [parsed, unfolds],
   )
   const stats = useMemo(
     () =>
@@ -702,6 +711,13 @@ export default function App() {
                 discussed={discussed}
                 onOpen={open}
                 onToggle={toggle}
+                unfolds={unfolds}
+                offline={!reachable}
+                onUnfold={(path, from, to) => {
+                  // The first finding opens itself: unfolding may move another one first.
+                  if (!openState && openId) setOpenId(openId)
+                  void unfold(path, from, to)
+                }}
               />
             ) : (
               <p className="tr-muted tr-pad">Loading the diff…</p>

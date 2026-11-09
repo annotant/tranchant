@@ -10,7 +10,8 @@
 // findings, its run files and its review agents' (reviewers/), and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
-// It computes the change's diff (/api/diff) once, with git, for the page's main view.
+// It computes the change's diff (/api/diff) once, with git, for the page's main view,
+// and serves the text of its files at its head (/api/lines), for the lines its hunks hide.
 // It serves and writes the user's settings (/api/settings, lib/settings.mjs),
 // one write at a time, and pushes `settings` when the file changes.
 // Only runs while a session watches (/tranchant): no server, no page.
@@ -355,6 +356,11 @@ class DiffUnavailable extends Error {}
  */
 
 /**
+ * The diff the page reads, and the head commit it was computed at.
+ * @typedef {{ payload: DiffPayload, headSha: string }} ComputedDiff
+ */
+
+/**
  * The files of `git diff --numstat -z`: `added`, `deleted` and the path, tab
  * separated; a rename has an empty path then the old and the new one; `-`
  * counts a binary.
@@ -476,7 +482,7 @@ async function ensureRepository() {
 /**
  * The unified diff of the change and its files: the MR's own diff refs when
  * the review has them at its head, else what reached `headSha` since `base`.
- * @returns {Promise<DiffPayload>}
+ * @returns {Promise<ComputedDiff>}
  */
 async function computeDiff() {
   const mrRefs = review.mr?.diffRefs
@@ -497,7 +503,9 @@ async function computeDiff() {
   const range = refs ? `${baseSha}..${headSha}` : `${baseSha}...${headSha}`
   // --relative: the findings' paths are relative to `project`, which may be a
   // folder of the repository.
-  const flags = ['--no-color', '--no-ext-diff', '--relative']
+  // Three lines of context, whatever the user's diff.context: the page reads
+  // the file's end from a last hunk with fewer.
+  const flags = ['--no-color', '--no-ext-diff', '--relative', '--unified=3']
   let patch
   let numstat
   try {
@@ -522,7 +530,63 @@ async function computeDiff() {
   if (!patch.stdout.trim()) {
     throw new DiffUnavailable(`the diff of ${base}...${head} is empty`)
   }
-  return { base, head, files: parseNumstat(numstat.stdout), diff: patch.stdout }
+  return {
+    payload: { base, head, files: parseNumstat(numstat.stdout), diff: patch.stdout },
+    headSha,
+  }
+}
+
+/** A range of lines the file does not have; `total` says how many it has. */
+class OutsideFile extends Error {
+  /** @param {string} message @param {number} total */
+  constructor(message, total) {
+    super(message)
+    this.total = total
+  }
+}
+
+/**
+ * Lines `from` to `to` (1-based, `to` cut at the file's end) of `file` at the
+ * diff's head, and how many the file has. Only a text file of the diff is
+ * read: no other file of the repository is reachable through the page.
+ * @param {string} file
+ * @param {number} from
+ * @param {number} to
+ * @returns {Promise<{ path: string, from: number, to: number, total: number, lines: string[] } | undefined>}
+ *   undefined when the diff has no such file.
+ */
+async function linesOf(file, from, to) {
+  const { payload, headSha } = await diffOnce()
+  // git resolves `..` after `./`: a crafted tree's entry would lead out of the file.
+  const dotted = file
+    .split('/')
+    .some((part) => part === '' || part === '.' || part === '..')
+  if (dotted || !payload.files.some((one) => one.path === file && !one.binary)) {
+    return undefined
+  }
+  let content
+  try {
+    // `./`: the path is relative to the project, which may be a folder of the repository.
+    content = (await git(['cat-file', 'blob', `${headSha}:./${file}`])).stdout
+  } catch (error) {
+    const words =
+      errorCode(error) === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+        ? `it is larger than ${MAX_DIFF_MIB} MiB`
+        : gitWords(error)
+    const reason = `${file} cannot be read at ${headSha}: ${words}`
+    throw new DiffUnavailable(reason, { cause: error })
+  }
+  const lines = content.split('\n').map((line) => line.replace(/\r$/, ''))
+  if (content.endsWith('\n')) lines.pop()
+  const total = content ? lines.length : 0
+  if (from > total) {
+    throw new OutsideFile(
+      `${file} has ${total} lines: line ${from} is past its end`,
+      total,
+    )
+  }
+  const last = Math.min(to, total)
+  return { path: file, from, to: last, total, lines: lines.slice(from - 1, last) }
 }
 
 /**
@@ -737,7 +801,7 @@ async function changesOf(id) {
   }
 }
 
-/** @type {Promise<DiffPayload> | undefined} */
+/** @type {Promise<ComputedDiff> | undefined} */
 let diff
 
 /** The diff, computed once: the review's head never changes. A failure is tried again. */
@@ -848,13 +912,43 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/diff') {
     try {
-      return send(res, 200, await diffOnce())
+      return send(res, 200, (await diffOnce()).payload)
     } catch (error) {
       if (!(error instanceof DiffUnavailable)) throw error
       // git's whole stderr, warnings included: the reason keeps one line of it.
       const detail = stderrOf(error.cause).trim()
       console.error(
         `tranchant server: /api/diff: ${error.message}${detail && `\n${detail}`}`,
+      )
+      return send(res, 409, { error: error.message })
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lines') {
+    const file = url.searchParams.get('path') ?? ''
+    const from = Number(url.searchParams.get('from'))
+    const to = Number(url.searchParams.get('to'))
+    if (
+      !Number.isSafeInteger(from) ||
+      !Number.isSafeInteger(to) ||
+      from < 1 ||
+      to < from
+    ) {
+      return send(res, 400, { error: 'from and to are line numbers, from first' })
+    }
+    try {
+      const answer = await linesOf(file, from, to)
+      if (!answer)
+        return send(res, 404, { error: `${file} is not a text file of the diff` })
+      return send(res, 200, answer)
+    } catch (error) {
+      if (error instanceof OutsideFile) {
+        return send(res, 416, { error: error.message, total: error.total })
+      }
+      if (!(error instanceof DiffUnavailable)) throw error
+      const detail = stderrOf(error.cause).trim()
+      console.error(
+        `tranchant server: /api/lines: ${error.message}${detail && `\n${detail}`}`,
       )
       return send(res, 409, { error: error.message })
     }
