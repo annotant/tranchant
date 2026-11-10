@@ -6,6 +6,7 @@ import type {
   Step,
   Tracker,
 } from './domain'
+import type { Unfolded } from './diff'
 import type { SettingsPayload, StoredSettings } from './settings'
 
 const REVIEW = '/api/review'
@@ -16,6 +17,7 @@ const STOP = '/api/stop'
 const DISCUSS = '/api/discuss'
 const RUNS = '/api/runs/'
 const DIFF = '/api/diff'
+const LINES = '/api/lines'
 const CHANGES = '/api/changes/'
 const ACCOUNT = '/api/account'
 const TRACKER = '/api/tracker'
@@ -80,6 +82,85 @@ export interface DiffPayload {
 }
 
 const fetchDiff = () => request<DiffPayload>(DIFF)
+
+/** What `GET /api/lines` answers: lines `from` to `to` of a file at the diff's head. */
+interface LinesPayload {
+  from: number
+  to: number
+  total: number
+  lines: string[]
+}
+
+const fetchLines = (path: string, from: number, to: number) =>
+  request<LinesPayload>(
+    `${LINES}?${new URLSearchParams({ path, from: String(from), to: String(to) }).toString()}`,
+  )
+
+/** What the reader unfolded in one file, and whether more can be. */
+export interface FileUnfold extends Unfolded {
+  pending: boolean
+  /** Why the server refused to read the file (404, 409): its rows stay disabled. */
+  error?: string
+}
+
+const NO_UNFOLDS: ReadonlyMap<string, FileUnfold> = new Map()
+
+/**
+ * The lines the reader unfolded around the diff's hunks, by path; forgotten
+ * when the head changes. `unfold(path, from, to)` reads lines `from` to `to`
+ * at the head; past the file's end, it learns where the file ends.
+ */
+export function useUnfold(head: string | undefined) {
+  const [state, setState] = useState<{
+    head: string | undefined
+    files: ReadonlyMap<string, FileUnfold>
+  }>({ head, files: NO_UNFOLDS })
+  const files = state.head === head ? state.files : NO_UNFOLDS
+  // The head a late answer must still be on to land.
+  const current = useRef(head)
+  useEffect(() => {
+    current.current = head
+  }, [head])
+
+  const unfold = useCallback(
+    async (path: string, from: number, to: number) => {
+      const update = (change: (one: FileUnfold) => FileUnfold) =>
+        setState((previous) => {
+          const base = previous.head === head ? previous.files : NO_UNFOLDS
+          const one = base.get(path) ?? { lines: new Map(), pending: false }
+          return { head, files: new Map(base).set(path, change(one)) }
+        })
+      update((one) => ({ ...one, pending: true }))
+      try {
+        const answer = await fetchLines(path, from, to)
+        if (current.current !== head) return
+        update((one) => {
+          const lines = new Map(one.lines)
+          answer.lines.forEach((text, at) => lines.set(answer.from + at, text))
+          return { lines, total: answer.total, pending: false }
+        })
+      } catch (error) {
+        if (current.current !== head) return
+        // Past the end: the file ends before `from`, and nothing is wrong.
+        const past = error instanceof HttpError && error.status === 416
+        // A 404 or 409 is final; a dropped request or a 5xx may pass, and leaves the buttons.
+        const refused =
+          error instanceof HttpError && (error.status === 404 || error.status === 409)
+        update((one) => ({
+          lines: one.lines,
+          ...(past
+            ? { total: from - 1 }
+            : one.total !== undefined && { total: one.total }),
+          pending: false,
+          ...(refused && { error: error.message }),
+        }))
+      }
+    },
+    [head],
+  )
+
+  return { unfolds: files, unfold }
+}
 
 export const postDecisions = (decisions: DecisionInput[]) =>
   request<DecisionsResult>(DECISIONS, {

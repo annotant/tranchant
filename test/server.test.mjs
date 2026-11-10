@@ -386,6 +386,39 @@ test('answers the diff of the change, every playground finding on an added line 
   }
 })
 
+test('a review imported again at another head serves that head’s diff', async (t) => {
+  const placed = await playground(t, 'ours')
+  const server = await startServer(t, { name: 'ours', overrides: placed })
+  assert.match(server.first, /^READY /, server.output())
+  assert.equal((await diffOf(server)).body.head, placed.headSha)
+  const git = (/** @type {string[]} */ ...args) =>
+    run('git', [
+      '-C',
+      placed.project,
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      ...args,
+    ])
+  await writeFile(path.join(placed.project, 'pushed.txt'), 'pushed\n')
+  await git('add', 'pushed.txt')
+  await git('commit', '-q', '-m', 'pushed')
+  const moved = (await git('rev-parse', 'HEAD')).stdout.trim()
+  const events = await listen(server.base)
+  // What open.mjs --refresh writes: the envelope at the new head.
+  const file = path.join(server.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(file, JSON.stringify({ ...envelope, headSha: moved }))
+  await events.changed()
+  const { status, body } = await diffOf(server)
+  assert.equal(status, 200)
+  assert.equal(body.head, moved)
+  assert.ok(body.files.some((/** @type {any} */ one) => one.path === 'pushed.txt'))
+})
+
 test('a diff that failed is computed again on the next request', async (t) => {
   const placed = await playground(t, 'ours')
   const git = path.join(placed.project, '.git')
@@ -473,6 +506,113 @@ test('lists a rename with its old path, a binary with no counts, and a quoted pa
     ],
   )
   assert.ok(body.diff.includes('diff --git "a/say \\"hi\\".ts" "b/say \\"hi\\".ts"\n'))
+})
+
+/** GET /api/lines on `server`: its status and body. @param {Server} server @param {Record<string, string>} query */
+async function linesOf(server, query) {
+  const response = await fetch(
+    `${server.base}/api/lines?${new URLSearchParams(query).toString()}`,
+  )
+  return { status: response.status, body: await json(response) }
+}
+
+/** `count` lines, `line <n>`, but line `changed`, with CRLF ends. */
+const numbered = (/** @type {number} */ count, /** @type {number} */ changed) =>
+  Array.from({ length: count }, (_, at) =>
+    at + 1 === changed ? `changed ${at + 1}` : `line ${at + 1}`,
+  ).join('\r\n') + '\r\n'
+
+test('answers the lines of a file of the diff at its head, and refuses any other path or range', async (t) => {
+  const root = await tempDir(t, 'tranchant-lines-')
+  const project = path.join(root, 'web')
+  await mkdir(project)
+  await writeFile(path.join(project, 'long.ts'), numbered(30, 0))
+  await writeFile(path.join(project, 'gone.ts'), 'bye\n')
+  await writeFile(path.join(project, 'old.ts'), 'one\ntwo\nthree\nfour\n')
+  await writeFile(path.join(project, 'secret.txt'), 'not in the diff\n')
+  await writeFile(path.join(project, 'logo.png'), Buffer.from([0x89, 0x50, 0, 1]))
+  await writeFile(path.join(root, 'outside.ts'), 'outside\n')
+  await gitIn(root, 'init', '-q', '-b', 'main')
+  await gitIn(root, 'add', '-A')
+  await gitIn(root, 'commit', '-q', '-m', 'base')
+  await gitIn(root, 'checkout', '-q', '-b', 'lines')
+  await writeFile(path.join(project, 'long.ts'), numbered(30, 15))
+  await writeFile(path.join(project, 'logo.png'), Buffer.from([0x89, 0x50, 0, 2]))
+  await writeFile(path.join(root, 'outside.ts'), 'still outside\n')
+  await gitIn(root, 'rm', '-q', 'web/gone.ts')
+  await gitIn(root, 'mv', 'web/old.ts', 'web/new.ts')
+  await writeFile(path.join(project, 'new.ts'), 'one\ntwo\nthree\nFOUR\n')
+  await writeFile(path.join(project, 'say "hi" é.ts'), 'hi\nthere\n')
+  // The user's own context: the page reads a file's end from three lines of it.
+  await gitIn(root, 'config', 'diff.context', '1')
+  await gitIn(root, 'add', '-A')
+  await gitIn(root, 'commit', '-q', '-m', 'head')
+  const headSha = await gitIn(root, 'rev-parse', 'HEAD')
+  // The working tree moved on: the lines are the head's.
+  await writeFile(path.join(project, 'long.ts'), 'edited since\n')
+  const server = await startServer(t, {
+    name: 'ours',
+    overrides: { project, base: 'main', headSha },
+  })
+  assert.deepEqual(await linesOf(server, { path: 'long.ts', from: '14', to: '16' }), {
+    status: 200,
+    body: {
+      path: 'long.ts',
+      from: 14,
+      to: 16,
+      total: 30,
+      lines: ['line 14', 'changed 15', 'line 16'],
+    },
+  })
+  // `to` past the end stops at the file's last line.
+  assert.deepEqual(
+    (await linesOf(server, { path: 'long.ts', from: '29', to: '99' })).body,
+    {
+      path: 'long.ts',
+      from: 29,
+      to: 30,
+      total: 30,
+      lines: ['line 29', 'line 30'],
+    },
+  )
+  assert.deepEqual(await linesOf(server, { path: 'long.ts', from: '31', to: '50' }), {
+    status: 416,
+    body: { error: 'long.ts has 30 lines: line 31 is past its end', total: 30 },
+  })
+  /** @type {Record<string, string>[]} */
+  const refused = [
+    { path: 'long.ts', from: '0', to: '3' },
+    { path: 'long.ts', from: '5', to: '4' },
+    { path: 'long.ts', from: 'x', to: '4' },
+    { path: 'long.ts', from: '1' },
+  ]
+  for (const query of refused) {
+    assert.equal((await linesOf(server, query)).status, 400, JSON.stringify(query))
+  }
+  // Only a text file of the diff: not another file, nor one out of the project.
+  for (const file of ['secret.txt', '../outside.ts', 'logo.png', '', '/etc/passwd']) {
+    assert.deepEqual(await linesOf(server, { path: file, from: '1', to: '1' }), {
+      status: 404,
+      body: { error: `${file} is not a text file of the diff` },
+    })
+  }
+  // A renamed file by its new path, a quoted one by its own name, as the page parses them.
+  assert.deepEqual(
+    (await linesOf(server, { path: 'new.ts', from: '1', to: '2' })).body.lines,
+    ['one', 'two'],
+  )
+  assert.deepEqual(
+    (await linesOf(server, { path: 'say "hi" é.ts', from: '2', to: '2' })).body.lines,
+    ['there'],
+  )
+  const { body: diff } = await diffOf(server)
+  assert.ok(
+    diff.diff.includes(' line 12\r\n line 13\r\n line 14\r\n-line 15\r\n+changed 15'),
+    'three lines of context, whatever diff.context says',
+  )
+  const gone = await linesOf(server, { path: 'gone.ts', from: '1', to: '1' })
+  assert.equal(gone.status, 409)
+  assert.match(gone.body.error, new RegExp(`^gone.ts cannot be read at ${headSha}: `))
 })
 
 test('says why the diff is unavailable', async (t) => {

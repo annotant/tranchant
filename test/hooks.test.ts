@@ -30,11 +30,11 @@ const lens = (name: string) =>
 /** prepare.mjs's lines: the envelope it wrote, and two lenses. */
 const PREPARED = [`INBOX ${INBOX}`, lens('bugs'), lens('style'), ''].join('\n')
 
-const ok = (stdout: string, exitCode = 0) => ({
+const ok = (stdout: string, exitCode = 0, stderr = '') => ({
   value: {
     exitCode,
     stdout,
-    stderr: '',
+    stderr,
     isStdoutTruncated: false,
     isStderrTruncated: false,
   },
@@ -48,6 +48,7 @@ const ok = (stdout: string, exitCode = 0) => ({
 /** `spawnRefused`: why every spawn is refused; `completeSays`: complete.mjs's refusal, exit 2. */
 /** `unreadable`: the review's review.json, which the hooks cannot load; `mr`: its MR. */
 /** `settings`: the user's settings file, as JSON; `env`: the session's environment, besides HOME. */
+/** `commenting`: what comments.mjs prints, and on stderr. */
 function world(
   on: On,
   {
@@ -63,7 +64,9 @@ function world(
     mr,
     settings,
     env = {},
+    commenting = { stdout: `INBOX ${INBOX}\n`, stderr: '' },
   }: {
+    commenting?: { stdout: string; stderr: string }
     spawnRefused?: string
     completeSays?: string
     unreadable?: string
@@ -171,7 +174,17 @@ function world(
   const prepared: { argv: string[]; cwd?: string }[] = []
   const completed: string[][] = []
   const replies: string[][] = []
+  const commented: { argv: string[]; cwd?: string }[] = []
+  const opened: string[][] = []
   on('process.run', (_$, e) => {
+    if (e.argv[1]?.endsWith('/scripts/comments.mjs')) {
+      commented.push({ argv: e.argv.slice(2), cwd: e.init?.cwd })
+      return ok(
+        commenting.stdout,
+        commenting.stdout.startsWith('REVIEW_REFUSED') ? 2 : 0,
+        commenting.stderr,
+      )
+    }
     if (e.argv[1]?.endsWith('/scripts/reply.mjs')) {
       replies.push(e.argv.slice(2))
       return ok(`UNANSWERED ${e.argv[2] ?? ''}\n`)
@@ -200,6 +213,7 @@ function world(
     }
     if (e.argv[1]?.endsWith('/scripts/open.mjs')) {
       imported.push(e.argv[2] ?? '')
+      opened.push(e.argv.slice(2))
       order.push('import')
       return ok(`${refusing ?? `REVIEW ${DIR}`}\n`)
     }
@@ -328,6 +342,8 @@ function world(
     logged,
     stopped,
     imported,
+    commented,
+    opened,
     browsed,
     ended: endings,
     notes,
@@ -1005,6 +1021,44 @@ test('a review prepare.mjs refuses is answered as refused, no server started', a
   expect(w.spawned).toEqual([])
   expect((await $.command.run(command('review a b'))).text).toMatch(
     /^Usage: \/tranchant review/,
+  )
+})
+
+test('comments reads the PR/MR into a review, opened with --refresh, its notes said', async ($, on) => {
+  const w = world(on, {
+    commenting: {
+      stdout: `INBOX ${INBOX}\n`,
+      stderr: 'note: the base commit is not in the checkout\n',
+    },
+  })
+  const ran = $.tool.call({
+    tool: 'mcp__tranchant__open',
+    comments: true,
+    target: 'https://github.com/acme/shop/pull/7',
+    tool_use_id: 'c1',
+  })
+  await w.print(READY)
+  const { result } = await ran
+  expect(w.commented).toEqual([
+    { argv: ['https://github.com/acme/shop/pull/7'], cwd: ROOT },
+  ])
+  expect(w.opened).toEqual([[INBOX, '--refresh']])
+  expect(result).toMatch(/^the base commit is not in the checkout\nTranchant serves /)
+  // No agent reviews it: the reviewer settles each thread.
+  await w.clock.settle()
+  expect(w.spawned).toEqual([])
+  await w.exit(0)
+})
+
+test('comments that comments.mjs refuses are answered as refused, no server started', async ($, on) => {
+  const w = world(on, {
+    commenting: { stdout: 'REVIEW_REFUSED no unresolved review thread\n', stderr: '' },
+  })
+  const { text } = await $.command.run(command('comments'))
+  expect(text).toBe('Tranchant cannot read the comments: no unresolved review thread')
+  expect(w.servers).toEqual([])
+  expect((await $.command.run(command('comments a b'))).text).toMatch(
+    /^Usage: \/tranchant comments/,
   )
 })
 

@@ -6,16 +6,29 @@ import {
   applicable,
   commentedIds,
   counts,
+  discussable,
   draftIssue,
+  draftReply,
   groupFindings,
   idsInBucket,
   openIds,
   orderedFindings,
+  replyPending,
   type State,
   stateLabel,
   staleMrReason,
+  threadItems,
+  threadResolved,
 } from '../src/domain'
-import { FINDINGS, mergeRequest, ORDER, record, review } from './fixture'
+import {
+  FINDINGS,
+  mergeRequest,
+  ORDER,
+  pullRequest,
+  record,
+  review,
+  THREADED,
+} from './fixture'
 
 test('findings group by bucket, then topic, then path:line', () => {
   const groups = groupFindings(FINDINGS)
@@ -222,4 +235,85 @@ test('every state shows a human word, never its own name', () => {
     skipped: 'Set aside',
     stopped: 'Set aside',
   })
+})
+
+test('a thread is replied on with no diff refs, a fixed one too, never in a batch', () => {
+  const comments = review('ours', {
+    mr: pullRequest(),
+    findings: [THREADED, FINDINGS[1]!],
+  })
+  expect(allows('post', 'open', comments, THREADED)).toBe(true)
+  expect(allows('post', 'fixed', comments, THREADED)).toBe(true)
+  // A finding of its own still needs the diff refs a positioned comment takes.
+  expect(allows('post', 'open', comments, FINDINGS[1])).toBe(false)
+  expect(allows('post', 'open', review('ours'), THREADED)).toBe(false)
+  const records = { [THREADED.id]: record('fixed') }
+  expect(applicable([THREADED.id], 'post', records, comments)).toEqual([])
+  expect(applicable([THREADED.id], 'fix', {}, comments)).toEqual([THREADED.id])
+})
+
+test('a reply opens as last written, else after a fix with what changed, else empty', () => {
+  expect(draftReply(undefined)).toBe('')
+  expect(draftReply(record('failed', { comment: 'On it' }))).toBe('On it')
+  const fixed = record('fixed', {
+    runs: [{ id: 'r1', startedAt: '', outcome: 'fixed', summary: 'Skipped it.' }],
+  })
+  expect(draftReply(fixed)).toBe('Fixed: Skipped it.')
+  // Answered back, a thread replied on already opens empty; a failed reply as written.
+  expect(draftReply(record('posted', { comment: 'Done' }))).toBe('')
+  const failed = { text: 'Done', at: '', failed: 'no right' }
+  expect(draftReply(record('fixed', { reply: failed }))).toBe('Done')
+})
+
+test('a settled thread is replied on again, one reply at a time', () => {
+  const comments = review('ours', { mr: pullRequest(), findings: [THREADED] })
+  expect(allows('post', 'posted', comments, THREADED)).toBe(true)
+  expect(replyPending(record('fixed', { reply: { text: 'x', at: '' } }))).toBe(true)
+  expect(
+    replyPending(record('fixed', { reply: { text: 'x', at: '', failed: 'no' } })),
+  ).toBe(false)
+  expect(replyPending(record('open', { reply: { text: 'x', at: '' } }))).toBe(false)
+})
+
+test("a thread's items: yours marked, a first reply on its way or failed after them", () => {
+  const thread = THREADED.thread!
+  const queued = {
+    ...record('queued'),
+    decision: { action: 'post' as const, at: '' },
+    comment: 'On it',
+  }
+  expect(
+    threadItems(thread, queued, 'me').map(({ author, mine, sent }) => [
+      author,
+      mine,
+      sent,
+    ]),
+  ).toEqual([
+    ['alice', false, undefined],
+    ['me', true, undefined],
+    ['me', true, 'sending'],
+  ])
+  const failed = { ...queued, state: 'failed' as const, reason: 'token expired' }
+  expect(threadItems(thread, failed, undefined).at(-1)).toMatchObject({
+    author: 'you',
+    body: 'On it',
+    sent: 'failed',
+    failed: 'token expired',
+  })
+  // Nobody known as the viewer: nobody's comment reads as theirs.
+  expect(threadItems(thread, undefined, undefined).some((one) => one.mine)).toBe(false)
+  expect(
+    threadResolved({
+      ...record('posted'),
+      replies: [{ text: 'x', url: 'u', at: '', resolved: true }],
+    }),
+  ).toBe(true)
+  expect(threadResolved(record('posted'))).toBe(false)
+})
+
+test('a thread is discussed once fixed or replied on; another finding is not', () => {
+  expect(discussable('posted', THREADED)).toBe(true)
+  expect(discussable('fixed', THREADED)).toBe(true)
+  expect(discussable('fixed', FINDINGS[0])).toBe(false)
+  expect(discussable('queued', THREADED)).toBe(false)
 })

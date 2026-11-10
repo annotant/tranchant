@@ -5,9 +5,13 @@ import { NO_MARKS, parseHunk, type Row } from './Excerpt'
 type FileStatus = 'added' | 'deleted' | 'modified' | 'renamed'
 
 interface DiffHunk {
-  /** The `@@` line. */
+  /** Its `@@` line, git's ranges; empty for a block of unfolded lines alone. */
   header: string
   rows: Row[]
+  /** The first new-side line it covers. */
+  first: number
+  /** The last new-side line it covers: `first - 1` when it covers none. */
+  last: number
 }
 
 export interface DiffFile {
@@ -17,6 +21,8 @@ export interface DiffFile {
   status: FileStatus
   binary: boolean
   hunks: DiffHunk[]
+  /** The file's line count at the head, when the diff tells it or the server did. */
+  end?: number
 }
 
 const PREFIX = /^[ab]\//
@@ -127,15 +133,42 @@ const FILE_LINES: [prefix: string, read: (file: DiffFile, rest: string) => void]
 
 const FILE_HEADER = 'diff --git '
 
+const HUNK_RANGE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/
+
+/** The context git keeps around a change: the server asks for this many. */
+const CONTEXT = 3
+
+function hunkOf(lines: readonly string[]): DiffHunk {
+  const header = lines[0] ?? ''
+  const range = HUNK_RANGE.exec(header)
+  const start = Number(range?.[1] ?? 1)
+  const count = Number(range?.[2] ?? 1)
+  // `+c,0` covers nothing: its lines would come after line c.
+  const first = count ? start : start + 1
+  return { header, rows: parseHunk(lines.join('\n')), first, last: first + count - 1 }
+}
+
+/**
+ * The file's last line when the diff tells it: the whole new file, nothing
+ * left of a deleted one, or a last hunk that ran out of context.
+ */
+function endOf(file: DiffFile): number | undefined {
+  const last = file.hunks.at(-1)
+  if (file.status === 'deleted') return 0
+  if (!last) return undefined
+  if (file.status === 'added') return last.last
+  const rows = last.rows.filter((row) => row.kind !== 'meta')
+  const trailing = rows.length - 1 - rows.findLastIndex((row) => row.kind !== 'context')
+  return trailing < CONTEXT ? last.last : undefined
+}
+
 /** A unified diff as git prints it, file by file, its hunks numbered on the new side. */
 export function parseDiff(text: string): DiffFile[] {
   const files: DiffFile[] = []
   let file: DiffFile | undefined
   let hunk: string[] | undefined
   const endHunk = () => {
-    if (file && hunk) {
-      file.hunks.push({ header: hunk[0] ?? '', rows: parseHunk(hunk.join('\n')) })
-    }
+    if (file && hunk) file.hunks.push(hunkOf(hunk))
     hunk = undefined
   }
   for (const line of text.split('\n')) {
@@ -162,14 +195,108 @@ export function parseDiff(text: string): DiffFile[] {
     }
   }
   endHunk()
+  for (const one of files) {
+    const end = endOf(one)
+    if (end !== undefined) one.end = end
+  }
   return files
+}
+
+/** The head's lines the reader unfolded in one file, by new-side line, and its length once known. */
+export interface Unfolded {
+  lines: ReadonlyMap<number, string>
+  total?: number | undefined
+}
+
+/**
+ * The file with its unfolded lines in place, as context rows: a hunk grows
+ * by the lines next to it, and two hunks the reader joined are one, the
+ * lower one's header gone.
+ */
+export function unfoldFile(file: DiffFile, unfolded: Unfolded | undefined): DiffFile {
+  if (!unfolded) return file
+  const end = unfolded.total ?? file.end
+  const known = end === undefined ? file : { ...file, end }
+  const { lines } = unfolded
+  if (!lines.size || !file.hunks.length) return known
+  const hunks: DiffHunk[] = []
+  let block: DiffHunk | undefined
+  // Lines are hidden above the block: the hunk it reaches keeps its header.
+  let hiddenAbove = false
+  const close = () => {
+    if (block) hunks.push(block)
+    block = undefined
+  }
+  const add = (number: number, text: string) => {
+    const row: Row = { kind: 'context', number, text }
+    if (block) {
+      block.rows.push(row)
+      block.last = number
+      return
+    }
+    block = { header: '', rows: [row], first: number, last: number }
+    hiddenAbove = number > 1
+  }
+  let next = 1
+  for (const hunk of file.hunks) {
+    const gap = hunk.first > next
+    for (let number = next; number < hunk.first; number++) {
+      const text = lines.get(number)
+      if (text === undefined) close()
+      else add(number, text)
+    }
+    const [head, ...body] = hunk.rows
+    if (block && gap) {
+      const keep = hiddenAbove && head?.kind === 'header'
+      block.rows = keep ? [head, ...block.rows, ...body] : [...block.rows, ...body]
+      if (keep) block.header = hunk.header
+      block.last = hunk.last
+    } else {
+      close()
+      block = { ...hunk, rows: [...hunk.rows] }
+    }
+    hiddenAbove = false
+    next = hunk.last + 1
+  }
+  const limit = end ?? Infinity
+  for (let number = next; number <= limit; number++) {
+    const text = lines.get(number)
+    if (text === undefined) break
+    add(number, text)
+  }
+  close()
+  return { ...known, hunks }
+}
+
+/** Lines the diff hides: above a hunk, or below the last one. */
+export interface Gap {
+  from: number
+  /** Its last line; unknown below the last hunk until the server says where the file ends. */
+  to: number | undefined
+  /** The index of the hunk under it; the hunks' count below the last. */
+  below: number
+}
+
+/** The lines `file` hides around its hunks; none in a file the change adds, deletes, or does not show. */
+export function gapsOf(file: DiffFile): Gap[] {
+  if (file.binary || file.status === 'added' || file.status === 'deleted') return []
+  const gaps: Gap[] = []
+  let next = 1
+  file.hunks.forEach((hunk, below) => {
+    if (hunk.first > next) gaps.push({ from: next, to: hunk.first - 1, below })
+    next = hunk.last + 1
+  })
+  if (file.hunks.length && (file.end === undefined || file.end >= next)) {
+    gaps.push({ from: next, to: file.end, below: file.hunks.length })
+  }
+  return gaps
 }
 
 export interface Section {
   path: string
   /** The diff's file; absent when the diff does not touch the path. */
   file?: DiffFile
-  /** The findings on the file's header: their line is not in the diff. */
+  /** The findings on the file's header: their line is not in the diff, or a thread's moved. */
   header: Finding[]
   /** By new-side line, the findings there, stacked in the list's order. */
   lines: Map<number, Finding[]>
@@ -206,7 +333,9 @@ export function placeFindings(
       section = { path: finding.path, header: [], lines: new Map() }
       sections.set(finding.path, section)
     }
-    if (shown.get(finding.path)?.has(finding.line)) {
+    // A thread whose line moved, or on a whole file, has no line to sit on.
+    const offLine = finding.thread?.outdated === true || finding.thread?.file === true
+    if (!offLine && shown.get(finding.path)?.has(finding.line)) {
       const stack = section.lines.get(finding.line) ?? []
       stack.push(finding)
       section.lines.set(finding.line, stack)

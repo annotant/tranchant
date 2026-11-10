@@ -241,6 +241,18 @@ test('opening an issue stays on the finding, to watch it open', async () => {
   expect(selectedOption()).toBe('f-02')
 })
 
+test('posting a comment stays on the finding, to watch it land', async () => {
+  const server = await renderApp(
+    payload({ ownership: 'theirs', review: { mr: mergeRequest() } }),
+  )
+  expect(selectedOption()).toBe('f-02')
+  fireEvent.click(screen.getByRole('button', { name: 'Post as written' }))
+  await waitFor(() => expect(decisionsOf(server.posts.at(-1))[0]?.action).toBe('post'))
+  // Long enough for a jump to the next finding to have happened.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(selectedOption()).toBe('f-02')
+})
+
 test('the next open finding wraps to the start of the list', async () => {
   await renderApp()
   fireEvent.click(screen.getByText('Use the design tokens'))

@@ -145,6 +145,8 @@ run script.
 /tranchant review feature/cart        # another branch, against the default branch
 /tranchant review <merge request url> # someone else's MR, read with glab
 /tranchant review ../other-repo       # another repository, at its current branch
+/tranchant comments                   # the unresolved review threads of the current branch's PR/MR
+/tranchant comments <PR or MR url>    # those of another one
 /tranchant <review.json>              # import a review and open its page
 /tranchant status                     # what is running
 /tranchant stop                       # stop the server and every agent
@@ -159,10 +161,22 @@ looks for the branch's open MR: found, the page offers posting next to
 fixing; not found, or `glab` missing or logged out, the review goes on with
 fixes only.
 
+`/tranchant comments` brings back what your reviewers said: each unresolved
+review thread of your pull request (`gh`) or merge request (`glab`) becomes a
+finding on its line, with the reviewer's comment, its replies and a link to
+it; a thread whose line moved since sits on its file's header, with the line
+it was on. **Fix now** hands the comment to an agent, as its brief; **Reply
+on the thread** writes your answer there, prefilled after a fix with what
+changed, and **Resolve the thread once replied** is yours to tick. Run it
+again after new comments: the page refreshes, your decisions kept. Resolved
+threads are not imported; a merge request's discussions on no file are
+listed in the summary.
+
 In the page:
 
 - **The diff** of the change is the main view, every finding a marker on
-  its line, the code highlighted (TypeScript, JavaScript and JSON); **List**
+  its line, the code highlighted (TypeScript, JavaScript and JSON), the
+  lines around each hunk a click away; **List**
   shows them by bucket and topic instead, and is what
   you get when the diff cannot be computed (no repository, commits not
   fetched).

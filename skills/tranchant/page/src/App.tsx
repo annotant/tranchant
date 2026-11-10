@@ -6,16 +6,18 @@ import {
   postDecisions,
   postStop,
   useDiff,
+  useUnfold,
   useReview,
   useSettings,
   useTracker,
 } from './api'
 import { BatchBar } from './BatchBar'
-import { parseDiff, placeFindings, type Section } from './diff'
+import { parseDiff, placeFindings, type Section, unfoldFile } from './diff'
 import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView'
 import {
   allows,
   canPost,
+  changeRef,
   commentedIds,
   counts,
   type DecisionInput,
@@ -98,7 +100,7 @@ function Header({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  !{review.mr.iid}
+                  {changeRef(review.mr)}
                 </a>
               )}
             </>
@@ -282,9 +284,17 @@ export default function App() {
   )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
   const [diffPane, setDiffPane] = useState<HTMLElement | null>(null)
-  const files = useMemo(
+  const parsed = useMemo(
     () => (diff.status === 'ready' ? parseDiff(diff.payload.diff) : undefined),
     [diff],
+  )
+  const { unfolds, unfold } = useUnfold(
+    diff.status === 'ready' ? diff.payload.head : undefined,
+  )
+  // The unfolded lines are the diff's: a finding on one sits on its line.
+  const files = useMemo(
+    () => parsed?.map((file) => unfoldFile(file, unfolds.get(file.path))),
+    [parsed, unfolds],
   )
   const stats = useMemo(
     () =>
@@ -416,8 +426,8 @@ export default function App() {
       const applied = await decide([decision])
       const now = latest.current
       if (!applied.includes(decision.id) || now.openId !== decision.id) return
-      // An issue was written, not triaged in a keystroke: the reviewer watches it open.
-      if (decision.action === 'issue') return
+      // An issue or a comment was written, not triaged in a keystroke: the reviewer watches it land.
+      if (decision.action === 'issue' || decision.action === 'post') return
       const next = nextOpen(now.ordered, now.records, decision.id)
       if (next) open(next)
       else setSettled(true)
@@ -459,7 +469,8 @@ export default function App() {
         const blind =
           action === 'post' &&
           !hasComment(ordered.find((finding) => finding.id === cursor))
-        if (!blind && allows(action, stateOf(records, cursor), review)) {
+        const finding = ordered.find((one) => one.id === cursor)
+        if (!blind && allows(action, stateOf(records, cursor), review, finding)) {
           if (cursor === openId) void decideShown({ id: cursor, action })
           else void decide([{ id: cursor, action }])
         }
@@ -702,6 +713,13 @@ export default function App() {
                 discussed={discussed}
                 onOpen={open}
                 onToggle={toggle}
+                unfolds={unfolds}
+                offline={!reachable}
+                onUnfold={(path, from, to) => {
+                  // The first finding opens itself: unfolding may move another one first.
+                  if (!openState && openId) setOpenId(openId)
+                  void unfold(path, from, to)
+                }}
               />
             ) : (
               <p className="tr-muted tr-pad">Loading the diff…</p>

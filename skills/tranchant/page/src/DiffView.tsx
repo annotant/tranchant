@@ -1,8 +1,8 @@
-// Hunks have no identity but their place in the file: a new diff re-renders them all.
+// Hunks have no identity but their place in the file: a new diff, or two joined, re-renders those after.
 /* oxlint-disable react/no-array-index-key */
-import { useEffect, useState } from 'react'
-import type { DiffStat } from './api'
-import { type DiffFile, marksInDiff, type Section } from './diff'
+import { Fragment, useEffect, useState } from 'react'
+import type { DiffStat, FileUnfold } from './api'
+import { type DiffFile, type Gap, gapsOf, marksInDiff, type Section } from './diff'
 import {
   type Finding,
   type Records,
@@ -11,7 +11,7 @@ import {
   stateLabel,
   stateOf,
 } from './domain'
-import { CodeBlock, digitsOf, NO_MARKS } from './Excerpt'
+import { CodeFrame, CodeRows, digitsOf, NO_MARKS } from './Excerpt'
 import { CommentMark, DiscussionMark } from './FindingList'
 import { languageOfFile } from './syntax'
 
@@ -207,18 +207,134 @@ function Stat({ stat }: { stat: DiffStat | undefined }) {
   )
 }
 
-type ViewProps = MarkerState & {
-  sections: readonly Section[]
-  stats: ReadonlyMap<string, DiffStat>
+/** How many hidden lines a click unfolds. */
+const UNFOLD_STEP = 20
+
+/** What the rows of hidden lines need: without `onUnfold`, the view has none. */
+interface UnfoldProps {
+  /** By path, what the reader unfolded. */
+  unfolds?: ReadonlyMap<string, FileUnfold> | undefined
+  /** The server does not answer: nothing can be unfolded. */
+  offline?: boolean | undefined
+  onUnfold?: ((path: string, from: number, to: number) => void) | undefined
 }
 
-type SectionProps = MarkerState & {
-  section: Section
-  index: number
-  stat: DiffStat | undefined
+interface GapProps {
+  gap: Gap
+  /** Below the last hunk: lines only unfold downwards. */
+  last: boolean
+  unfold: FileUnfold | undefined
+  offline: boolean
+  onUnfold: (from: number, to: number) => void
 }
 
-function FileSection({ section, index, stat, ...state }: SectionProps) {
+const lines = (count: number) => `${count} ${count === 1 ? 'line' : 'lines'}`
+
+type Toward = 'up' | 'all' | 'down'
+
+const ARROWS: Record<Toward, string> = {
+  up: 'M5 4h14M12 20V9M7 13l5-5 5 5',
+  all: 'M12 3v6M9 6l3-3 3 3M12 21v-6M9 18l3 3 3-3M5 12h14',
+  down: 'M5 20h14M12 4v11M7 11l5 5 5-5',
+}
+
+/**
+ * The lines the diff hides at one place, as a bar: all of them, and for a long
+ * gap 20 more next to the hunk below, or the one above.
+ */
+function GapRow({ gap, last, unfold, offline, onUnfold }: GapProps) {
+  const { from, to } = gap
+  const size = to === undefined ? undefined : to - from + 1
+  const reason = offline ? 'offline' : unfold?.error
+  const disabled = !!reason || !!unfold?.pending
+  const long = size === undefined || size > UNFOLD_STEP
+  const actions: { toward: Toward; text: string; label: string; to: number }[] = []
+  if (long && !last && to !== undefined) {
+    actions.push({
+      toward: 'up',
+      text: `${UNFOLD_STEP} more lines`,
+      label: `Show ${UNFOLD_STEP} more lines above line ${to + 1}`,
+      to,
+    })
+  }
+  actions.push(
+    size === undefined || to === undefined
+      ? {
+          toward: 'all',
+          text: 'Show to the end',
+          label: `Show the lines below line ${from - 1}`,
+          // The server stops at the file's end.
+          to: Number.MAX_SAFE_INTEGER,
+        }
+      : {
+          toward: 'all',
+          text: `Show all ${size}`,
+          label: `Show ${lines(size)}, ${from} to ${to}`,
+          to,
+        },
+  )
+  if (long && gap.below > 0) {
+    actions.push({
+      toward: 'down',
+      text: `${UNFOLD_STEP} more lines`,
+      label: `Show ${UNFOLD_STEP} more lines below line ${from - 1}`,
+      to: Math.min(to ?? Infinity, from + UNFOLD_STEP - 1),
+    })
+  }
+  return (
+    <div className="tr-gap" role="group" aria-label={`Hidden lines from ${from}`}>
+      <span>{size === undefined ? 'More lines below' : `${lines(size)} hidden`}</span>
+      <span className="tr-gap-sep" aria-hidden="true">
+        ·
+      </span>
+      {actions.map((action) => (
+        <button
+          key={action.toward}
+          type="button"
+          className="tr-gap-action"
+          aria-label={action.label}
+          disabled={disabled}
+          onClick={() =>
+            onUnfold(
+              action.toward === 'up' ? action.to - UNFOLD_STEP + 1 : from,
+              action.to,
+            )
+          }
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+            <path d={ARROWS[action.toward]} />
+          </svg>
+          {action.text}
+        </button>
+      ))}
+      {unfold?.pending && <span className="tr-spinner" aria-hidden="true" />}
+      {reason && <span className="tr-gap-reason">{reason}</span>}
+    </div>
+  )
+}
+
+type ViewProps = MarkerState &
+  UnfoldProps & {
+    sections: readonly Section[]
+    stats: ReadonlyMap<string, DiffStat>
+  }
+
+type SectionProps = MarkerState &
+  UnfoldProps & {
+    section: Section
+    index: number
+    stat: DiffStat | undefined
+  }
+
+function FileSection({
+  section,
+  index,
+  stat,
+  unfolds,
+  offline = false,
+  onUnfold,
+  ...state
+}: SectionProps) {
   const { file } = section
   const { open } = state
   // One gutter for the file: its hunks line up.
@@ -233,6 +349,22 @@ function FileSection({ section, index, stat, ...state }: SectionProps) {
       <Markers key={line} {...state} findings={stack} />,
     ]),
   )
+  const gaps = file && onUnfold ? gapsOf(file) : []
+  const gapRow = (below: number) => {
+    const gap = gaps.find((one) => one.below === below)
+    return (
+      gap &&
+      onUnfold && (
+        <GapRow
+          gap={gap}
+          last={below === file?.hunks.length}
+          unfold={unfolds?.get(section.path)}
+          offline={offline}
+          onUnfold={(from, to) => onUnfold(section.path, from, to)}
+        />
+      )
+    )
+  }
   return (
     <section className="tr-file" id={fileId(index)} aria-label={section.path}>
       <header className="tr-file-head">
@@ -249,24 +381,37 @@ function FileSection({ section, index, stat, ...state }: SectionProps) {
           {...state}
           findings={section.header}
           note={(finding) =>
-            file
-              ? `line ${finding.line} is not in the diff`
-              : 'the diff does not touch this file'
+            finding.thread?.file
+              ? 'on the whole file'
+              : finding.thread?.outdated
+                ? 'outdated: the code it was on moved since'
+                : file
+                  ? `line ${finding.line} is not in the diff`
+                  : 'the diff does not touch this file'
           }
         />
       )}
-      {file?.hunks.map((hunk, at) => (
-        <CodeBlock
-          key={at}
-          rows={hunk.rows}
-          signed
-          digits={digits}
-          anchor={opened?.line}
-          marks={marks}
-          under={under}
-          language={language}
-        />
-      ))}
+      {file && file.hunks.length > 0 && (
+        // One frame for the file: the hidden lines' bars run across it, between its hunks.
+        <CodeFrame signed digits={digits}>
+          {file.hunks.map((hunk, at) => (
+            <Fragment key={at}>
+              {gapRow(at)}
+              <div className="tr-hunk">
+                <CodeRows
+                  rows={hunk.rows}
+                  signed
+                  anchor={opened?.line}
+                  marks={marks}
+                  under={under}
+                  language={language}
+                />
+              </div>
+            </Fragment>
+          ))}
+          {gapRow(file.hunks.length)}
+        </CodeFrame>
+      )}
     </section>
   )
 }
