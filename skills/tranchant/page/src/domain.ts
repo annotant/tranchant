@@ -4,8 +4,7 @@
 export type Ownership = 'ours' | 'theirs'
 export type Bucket = 'review' | 'auto'
 export type Tag = 'concern' | 'question' | 'suggestion'
-/** `reviewing` while the producer still adds findings; `complete` once done. */
-/** `preparing` while the Lenses step builds the lenses; `refused` when one could not be built. */
+/** `preparing` while the lenses build, `reviewing` while findings land, then `complete`; `refused` when a lens could not be built. */
 type Status = 'preparing' | 'reviewing' | 'complete' | 'refused'
 
 /** A lens a review ran, as review.json records it. */

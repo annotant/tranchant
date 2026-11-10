@@ -158,9 +158,13 @@ test('prepare.mjs writes the current branch against the default one, preparing, 
   assert.deepEqual(lenses.find((lens) => lens.name === 'bugs')?.paths, ['**'])
   // Nothing written in the repository; and open.mjs imports what it wrote.
   assert.equal(await git('status', '--porcelain'), '')
-  const opened = await run(process.execPath, [path.join(SCRIPTS, 'open.mjs'), inbox], {
-    env: { TRANCHANT_STATE_DIR: stateDir },
-  })
+  const opened = await run(
+    process.execPath,
+    [path.join(SCRIPTS, 'open.mjs'), inbox, '--verify'],
+    {
+      env: { TRANCHANT_STATE_DIR: stateDir },
+    },
+  )
   assert.match(opened.stdout, /^REVIEW /, opened.stdout + opened.stderr)
 })
 
@@ -757,4 +761,37 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
   )
   // No finding's decisions were touched: a review agent holds none.
   assert.deepEqual((await createStore(dir).readDecisions()).findings, {})
+})
+
+test("a review agent's git takes no option that runs a program, however abbreviated", async (t) => {
+  const { dir } = await live(t, 'agent-git')
+  const project = await tempDir(t)
+  const hook = async (/** @type {string} */ command) => {
+    const ran = await run(
+      process.execPath,
+      [HOOK, 'pre', '--reviewer', 'rv-git', '--review', dir, '--project', project],
+      {
+        input: JSON.stringify({ agent_id: 'a1', ...bash(command) }),
+        env: { TRANCHANT_STATE_DIR: stateDir },
+      },
+    )
+    return ran.stdout
+      ? JSON.parse(ran.stdout).hookSpecificOutput.permissionDecisionReason
+      : undefined
+  }
+  // git takes a long option's prefix, and -O in a cluster of short ones.
+  for (const command of [
+    "git grep --open='sh -c id' cart",
+    'git grep --open-files=vi cart',
+    'git diff --ou=src/cart.js main',
+    'git diff --ext main',
+    'git grep -iO cart',
+  ])
+    assert.match(
+      (await hook(command)) ?? '',
+      /^Refused: a git option that writes or runs a program/,
+      command,
+    )
+  // An option that only starts like one reads.
+  assert.equal(await hook('git log --oneline -5 && git grep --text -n total'), undefined)
 })

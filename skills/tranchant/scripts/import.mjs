@@ -8,7 +8,7 @@
 // --prepare: finds the source and makes the import's folder:
 //   `IMPORT <json>`, `{ id, dir, recipe, source, file, folder, version?, to,
 //   target, project }`, `recipe` the only file the agent may write.
-// --check: the agent ended: its recipe checked, `IMPORTED <lenses>`.
+// --check: the agent ended: its recipe checked, `IMPORTED <target>`.
 // Any refusal prints `IMPORT_REFUSED <reason>` and exits 2.
 import { execFileSync } from 'node:child_process'
 import { readdir } from 'node:fs/promises'

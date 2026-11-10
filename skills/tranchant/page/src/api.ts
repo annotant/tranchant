@@ -316,19 +316,23 @@ export function useSettings() {
   }, [])
   const dismiss = useCallback(() => setError(undefined), [])
   /** Use this recipe: an imported recipe put in force at its location. */
-  const applyRecipe = useCallback(async (id: string) => {
-    try {
-      const used = await request<{ settings: SettingsPayload }>(USE_RECIPE, {
-        method: 'POST',
-        body: JSON.stringify({ id }),
-      })
-      latest.current = used.settings
-      setPayload(used.settings)
-      setError(undefined)
-    } catch (refusal) {
-      setError(refusal instanceof Error ? refusal.message : 'The recipe was not used.')
-    }
-  }, [])
+  const applyRecipe = useCallback(
+    async (id: string) => {
+      try {
+        const used = await request<{ settings?: SettingsPayload }>(USE_RECIPE, {
+          method: 'POST',
+          body: JSON.stringify({ id }),
+        })
+        setError(undefined)
+        if (!used.settings) return await reload()
+        latest.current = used.settings
+        setPayload(used.settings)
+      } catch (refusal) {
+        setError(refusal instanceof Error ? refusal.message : 'The recipe was not used.')
+      }
+    },
+    [reload],
+  )
   return { payload, loaded, unavailable, error, save, dismiss, reload, applyRecipe }
 }
 

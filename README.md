@@ -149,7 +149,7 @@ run script.
 /tranchant review feature/cart        # another branch, against the default branch
 /tranchant review <merge request url> # someone else's MR, read with glab
 /tranchant review ../other-repo       # another repository, at its current branch
-/tranchant import [<skill or agent>]  # a team's review process as a recipe, shown before it is used
+/tranchant import [<source>] [--to project|local]  # a team's review process as a recipe, shown before it is used
 /tranchant comments                   # the unresolved review threads of the current branch's PR/MR
 /tranchant comments <PR or MR url>    # those of another one
 /tranchant <review.json>              # import a review and open its page

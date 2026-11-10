@@ -4,7 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { AgentOfferInput, CommandRunInput, EngineInterface, On } from 'claude-code'
 
-import type { Served } from '../types'
+import type { Importing, Served } from '../types'
 
 type AgentSpec = Parameters<EngineInterface['agent']['register']>[0]
 
@@ -70,6 +70,7 @@ function world(
     gitRoot,
     refused,
     seeded,
+    seededImports,
     refusing,
     preparing = PREPARED,
     building = BUILT,
@@ -89,6 +90,7 @@ function world(
     gitRoot?: string
     refused?: string
     seeded?: Record<string, Served>
+    seededImports?: Record<string, Importing>
     refusing?: string
     preparing?: string
     building?: string
@@ -309,10 +311,16 @@ function world(
   })
   // The state a reload finds: `serving` as the module left it before.
   let seed = seeded
+  let importSeed = seededImports
   on('state.get', (_$, e, next) =>
-    seed && e.key === 'serving' ? { value: { value: seed, version: 1 } } : next(e),
+    seed && e.key === 'serving'
+      ? { value: { value: seed, version: 1 } }
+      : importSeed && e.key === 'importing'
+        ? { value: { value: importSeed, version: 1 } }
+        : next(e),
   )
   on('state.set', (_$, e, next) => {
+    if (e.key === 'importing') importSeed = undefined
     if (e.key === 'serving') seed = undefined
     return next(e)
   })
@@ -887,6 +895,39 @@ test('a reload serves the reviews again, without opening the browser', async ($,
   await w.exit(0)
 })
 
+test('a reload gives a running import agent its hook back, held to its recipe', async ($, on) => {
+  const w = world(on, {
+    seededImports: {
+      '/state/imports/imp-1': {
+        agent: 'a9',
+        name: 'im-imp00001',
+        dir: '/state/imports/imp-1',
+        recipe: '/state/imports/imp-1/recipe.json',
+        source: 'workflow:code-review',
+        target: `${ROOT}/.tranchant/recipe.json`,
+        project: ROOT,
+        running: true,
+      },
+    },
+  })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.registered.get('tranchant:im-imp00001')?.hooks?.PreToolUse).toEqual([
+    {
+      matcher: '*',
+      hooks: [
+        {
+          type: 'command',
+          command: expect.stringMatching(
+            /'--importer' 'im-imp00001' '--recipe' '\/state\/imports\/imp-1\/recipe\.json'$/,
+          ),
+        },
+      ],
+    },
+  ])
+})
+
 test('/tranchant status tells the server, the agents at work and the queue in order', async ($, on) => {
   const w = world(on)
   expect((await $.command.run(command('status'))).text).toMatch(
@@ -1046,6 +1087,20 @@ test('a lens that cannot be built refuses the review on the page and in one line
   )
   expect(w.spawned).toEqual([])
   expect(w.completed).toEqual([])
+  await w.exit(0)
+})
+
+test('a Lenses step that prints no lens is abandoned: the review is refused, not left preparing', async ($, on) => {
+  const w = world(on, { building: '' })
+  const text = await review($, w)
+  expect(text).toMatch(/^Tranchant could not build the lenses/)
+  expect(w.built.at(-1)).toEqual([
+    '--review',
+    DIR,
+    '--abandon',
+    expect.stringMatching(/^lenses\.mjs printed no lens/),
+  ])
+  expect(w.spawned).toEqual([])
   await w.exit(0)
 })
 

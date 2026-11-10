@@ -25,14 +25,14 @@
 // and takes no lock; its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
-// `--importer`: the import agent's (`im-<name>`, `/tranchant import`): it
+// `--importer`: the import agent's (its name, `im-…`, `/tranchant import`): it
 // writes the recipe file it was given and nothing else, and runs reading
 // commands only (importerRefusal). Unlike the others, its hook fails closed:
 // on any error, the tool is refused.
 //
 // `--lock-root`: the git repository the project is in, which the hooks module
-// found; the locks are tabled per repository. A hook never fails the agent:
-// on any error, it lets the tool run.
+// found; the locks are tabled per repository. A hook but the importer's never
+// fails the agent: on any error, it lets the tool run.
 import { realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -103,8 +103,21 @@ const GIT_READS = new Set([
   'merge-base',
   'rev-list',
 ])
-// git options that write a file or run a program.
-const GIT_RISKY = /^(?:--output|--ext-diff|-O|--open-files-in-pager)/
+// git options that write a file or run a program; git takes any unambiguous
+// prefix of a long one (`--open=sh` is `--open-files-in-pager`), and `-O`
+// within a cluster of short ones.
+const GIT_RISKY = ['--output', '--open-files-in-pager', '--ext-diff']
+
+/** @param {string} arg */
+function riskyGitOption(arg) {
+  if (/^-[^-]*O/.test(arg)) return true
+  const name = arg.split('=')[0] ?? ''
+  return (
+    name.startsWith('--') &&
+    name.length > 2 &&
+    GIT_RISKY.some((one) => one.startsWith(name))
+  )
+}
 const REVIEW_SCRIPT = /^(add|verify|remove|reply|summarize)\.mjs$/
 /** This folder, its real path: a review agent's `node` runs one of its scripts, by path, and nothing else. */
 const SCRIPTS_DIR = realOrUndefined(path.dirname(new URL(import.meta.url).pathname))
@@ -297,8 +310,7 @@ function argumentRefusal(program, args) {
   if (program !== 'git') return undefined
   const sub = args[0] === '-C' ? args[2] : args[0]
   if (!sub || !GIT_READS.has(sub)) return `git ${sub ?? ''} is not a reading command`
-  if (args.some((arg) => GIT_RISKY.test(arg)))
-    return 'a git option that writes or runs a program'
+  if (args.some(riskyGitOption)) return 'a git option that writes or runs a program'
   return undefined
 }
 
@@ -391,8 +403,9 @@ function reachedAs(/** @type {string} */ file) {
 
 /**
  * Why the import agent may not run `tool` with `input`, or undefined when it
- * may: it writes `recipe` alone, with Write or Edit, and runs reading
- * commands only; it asks nothing, the hooks started it in the background.
+ * may: it writes `recipe` alone, and runs reading commands only, git none
+ * (a source's folder may hold a repository whose config runs programs); it
+ * asks nothing, the hooks started it in the background.
  * @param {string} tool
  * @param {Record<string, unknown>} input
  * @param {string} recipe
@@ -411,6 +424,8 @@ function importerRefusal(tool, input, recipe) {
   if ('refusal' in parsed) return parsed.refusal
   for (const [program, ...args] of parsed.segments) {
     if (!program) continue
+    if (program === 'git')
+      return 'the import agent reads with Read, Grep and Glob, not git'
     if (!READERS.has(program)) return `${program} is not a reading command`
     const refused = argumentRefusal(program, args)
     if (refused) return refused
@@ -810,7 +825,7 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
   }
 }
 
-/** Answers Claude Code's PreToolUse: the tool refused, and why. */
+/** In the shape Claude Code reads from a PreToolUse hook's stdout. */
 const refuseTool = (/** @type {string} */ reason) =>
   console.log(
     JSON.stringify({
@@ -831,6 +846,8 @@ async function importer() {
   const event = text.trim() ? JSON.parse(text) : {}
   if (!recipe)
     return refuseTool('Refused: the import agent was started without its recipe file.')
+  if (!event.tool_name)
+    return refuseTool('Refused: Tranchant could not read this tool call.')
   const refused = importerRefusal(event.tool_name ?? '', event.tool_input ?? {}, recipe)
   if (refused)
     refuseTool(`Refused: ${refused}. Use Read, Grep and Glob, and Write on ${recipe}.`)

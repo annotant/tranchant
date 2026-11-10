@@ -112,9 +112,14 @@ test('a review may have no finding only while it is not complete', async () => {
   assert.equal(statusOf(review), 'complete')
   for (const status of ['preparing', 'reviewing', 'refused']) {
     review.status = status
+    if (status === 'refused')
+      assert.deepEqual(validateReview(review), ['refusal: a refused review says why'])
+    review.refusal =
+      status === 'refused' ? { lens: 'a', source: 'x:y', reason: 'gone' } : undefined
     assert.deepEqual(validateReview(review), [], status)
     assert.equal(statusOf(review), status)
   }
+  delete review.refusal
   review.status = 'done'
   assert.equal(statusOf(review), 'complete')
   assert.deepEqual(validateReview(review), [

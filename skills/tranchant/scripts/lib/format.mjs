@@ -123,7 +123,7 @@ export const AGENT_ENDED_REASON = 'the agent ended without done.mjs or ask.mjs'
 /** @typedef {'Bugs' | 'Security & Permissions' | 'Breaking Changes' | 'Tests' | 'Conventions' | 'Code Quality' | 'Deprecation & Feature Flags'} Topic */
 
 /** @type {readonly Topic[]} */
-const TOPICS = [
+export const TOPICS = [
   'Bugs',
   'Security & Permissions',
   'Breaking Changes',
@@ -861,6 +861,9 @@ export function validateEnvelope(review) {
   ) {
     problems.push('refusal: { lens, source, reason, fix? }')
   }
+  if (review.status === 'refused' && review.refusal === undefined) {
+    problems.push('refusal: a refused review says why')
+  }
   if (!isText(review.title, 300)) problems.push('title: a text is required')
   if (typeof review.summary !== 'string')
     problems.push('summary: a Markdown text is required')
@@ -971,12 +974,18 @@ export function envelopeOf(review) {
 
 /**
  * What tells a review from another with the same id, as JSON: its envelope,
- * status and `verify` left out. A review that grew, or completed, is still the
- * same one, opened again without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown }} review
+ * status, `verify` and what its Lenses step recorded left out. A review that
+ * grew, or completed, is still the same one, opened again without `--verify` too.
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, refusal?: unknown }} review
  */
 export function identityOf(review) {
-  const { status: _status, verify: _verify, ...identity } = envelopeOf(review)
+  const {
+    status: _status,
+    verify: _verify,
+    lenses: _lenses,
+    refusal: _refusal,
+    ...identity
+  } = envelopeOf(review)
   return JSON.stringify(canonical(identity))
 }
 

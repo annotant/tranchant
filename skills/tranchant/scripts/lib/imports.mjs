@@ -13,9 +13,12 @@ import {
   RecipeRefusal,
   buildLens,
   checkRecipe,
+  expandRecipe,
+  isPluginName,
   localRecipe,
   resolveSource,
 } from './lens.mjs'
+import { expandHome } from './settings.mjs'
 import { STATE_ROOT, hashOf } from './project.mjs'
 
 const MAX_LEFT_OUT = 20
@@ -67,7 +70,7 @@ async function writeJson(/** @type {string} */ file, /** @type {unknown} */ valu
   }
 }
 
-/** An import's folder, from its id: a UUID, nothing else. */
+/** An import's folder, from its id: a name, never a path. */
 function importDir(/** @type {string} */ project, /** @type {string} */ id) {
   if (!/^[\w-]{1,64}$/.test(id)) throw new ImportRefusal(`no import ${id}`)
   return path.join(importsDir(project), id)
@@ -140,9 +143,26 @@ function leftOutOf(imported) {
 }
 
 /**
- * The import agent ended: its recipe checked as prepare.mjs reads one, each
- * lens built from where the recipe goes. `ready`, or `failed` with why; one
- * in use already stays so.
+ * Why a project recipe's path `label`, from `folder`, would be refused at
+ * BASE: absolute, or outside the repository at `project`.
+ * @param {string} label
+ * @param {string} folder
+ * @param {string} project
+ */
+function outsideRefusal(label, folder, project) {
+  if (isPluginName(label)) return undefined
+  if (path.isAbsolute(expandHome(label)))
+    return `${label}: a project recipe names its sources inside the repository`
+  if (path.relative(project, path.resolve(folder, label)).startsWith('..'))
+    return `${label} lies outside the repository`
+  return undefined
+}
+
+/**
+ * The import agent ended: its recipe checked as a review reads one (its
+ * lenses with Tranchant's when it extends them, a project recipe's paths
+ * inside the repository), with no whole `prompt`, each lens built from where
+ * the recipe goes. `ready`, or `failed` with why; one in use already stays so.
  * @param {string} dir
  * @returns {Promise<Import>}
  */
@@ -158,14 +178,26 @@ export async function checkImport(dir) {
     } catch (error) {
       throw new RecipeRefusal(`the agent wrote no recipe that reads: ${message(error)}`)
     }
-    const lenses = checkRecipe(raw)
+    // A whole prompt runs without the contract: an import references sources only.
+    for (const [i, lens] of (Array.isArray(raw?.lenses) ? raw.lenses : []).entries())
+      if (lens?.prompt !== undefined)
+        throw new RecipeRefusal(
+          `lenses[${i}].prompt: an import names a source, not a prompt`,
+        )
+    const lenses = await expandRecipe(raw)
     leftOutOf(raw.imported)
+    const folder = path.dirname(record.target)
     const where = {
       origin: /** @type {const} */ ({ kind: 'fs' }),
-      folder: path.dirname(record.target),
+      folder,
       project: record.project,
     }
     for (const lens of lenses) {
+      if (record.to === 'project')
+        for (const label of [lens.source, lens.add, ...(lens.skills ?? [])]) {
+          const outside = label && outsideRefusal(label, folder, record.project)
+          if (outside) throw new RecipeRefusal(`lens ${lens.name}: ${outside}`)
+        }
       try {
         await buildLens(lens, where)
       } catch (error) {
@@ -199,10 +231,17 @@ export async function listImports(project) {
       .catch(() => undefined)
     let lenses = []
     let leftOut = []
+    // Unreadable once found ready: said, rather than shown as a recipe of no lens.
+    let broken =
+      raw === undefined && record.state === 'ready'
+        ? 'its recipe.json cannot be read'
+        : undefined
     try {
       lenses = raw ? checkRecipe(raw) : []
       leftOut = raw ? leftOutOf(raw.imported) : []
-    } catch {}
+    } catch (error) {
+      broken = message(error)
+    }
     all.push({
       id: record.id,
       createdAt: record.createdAt,
@@ -210,8 +249,8 @@ export async function listImports(project) {
       ...(record.version && { version: record.version }),
       to: record.to,
       target: record.target,
-      state: record.state,
-      ...(record.reason && { reason: record.reason }),
+      state: broken ? 'failed' : record.state,
+      ...((broken ?? record.reason) && { reason: broken ?? record.reason }),
       extends: raw?.extends === 'tranchant',
       lenses: lenses.map((lens) => ({
         name: lens.name,
@@ -237,14 +276,10 @@ export async function useImport(project, id) {
   const record = await readImport(dir).catch(() => {
     throw new ImportRefusal(`no import ${id}`)
   })
-  if (record.state !== 'ready')
-    throw new ImportRefusal(
-      record.state === 'used'
-        ? 'this recipe is in use already'
-        : record.state === 'failed'
-          ? `this recipe cannot be used: ${record.reason ?? 'its check failed'}`
-          : 'the import agent is still writing it',
-    )
+  // A failed one is checked again: what failed it (a plugin off, a file locked) may be gone.
+  if (record.state === 'used') throw new ImportRefusal('this recipe is in use already')
+  if (record.state === 'importing')
+    throw new ImportRefusal('the import agent is still writing it')
   const checked = await checkImport(dir)
   if (checked.state !== 'ready')
     throw new ImportRefusal(`this recipe cannot be used: ${checked.reason ?? ''}`)

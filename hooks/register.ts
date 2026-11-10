@@ -1244,9 +1244,10 @@ async function reviewNote(
 
 /**
  * The agent type of one review agent: its instructions, `prompt` (a lens's
- * file, or the verifier's), on the model its lens asks for, else the one the
- * settings choose for its kind (a discusser reads as a reviewer does; none,
- * the session's), read-only tools, and hook.mjs around them, recording its steps.
+ * file, or the verifier's), on TRANCHANT_MODEL, else the model its lens asks
+ * for, else the one the settings choose for its kind (a discusser reads as a
+ * reviewer does; none, the session's), read-only tools, and hook.mjs around
+ * them, recording its steps.
  */
 async function registerReviewAgent(
   $: $,
@@ -1728,7 +1729,6 @@ function reviewArgs(words: string[]) {
   return { target: rest[0], recipe }
 }
 
-/** A script's stdout, one trimmed line each, the blank ones left out. */
 const linesOf = (stdout: string) =>
   stdout
     .split('\n')
@@ -1777,11 +1777,21 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   const { dir } = found
   const served = await startServing($, dir)
   const watched = watches.get(dir)
+  const lensesScript = `${skillDir($)}/scripts/lenses.mjs`
+  // Left `preparing`, the review would show its lenses building for ever.
+  const abandon = (why: string) =>
+    $.process
+      .run(['node', lensesScript, '--review', dir, '--abandon', why])
+      .catch((error: unknown) =>
+        debug($, `${dir}: lenses.mjs --abandon failed: ${message(error)}`),
+      )
   // A server that could not start, its watch gone already: no page to stream to.
-  if (!watched || (watched.first !== undefined && !watched.first.startsWith('READY')))
+  if (!watched || (watched.first !== undefined && !watched.first.startsWith('READY'))) {
+    await abandon("Tranchant's server did not start")
     return served
+  }
   const built = await $.process
-    .run(['node', `${skillDir($)}/scripts/lenses.mjs`, '--review', dir, '--plan', plan])
+    .run(['node', lensesScript, '--review', dir, '--plan', plan])
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
   const said = linesOf(built.stdout)
   const notBuilt = said.find((line) => line.startsWith('REVIEW_REFUSED '))
@@ -1802,11 +1812,11 @@ async function startReview($: $, target: string | undefined, recipe: string | un
       return []
     }
   })
-  if (!lenses.length)
-    return [
-      `Tranchant could not build the lenses: ${short(built.stderr.trim() || `lenses.mjs exited ${built.exitCode}`, 300)}`,
-      served,
-    ].join('\n')
+  if (!lenses.length) {
+    const why = short(built.stderr.trim() || `lenses.mjs exited ${built.exitCode}`, 300)
+    await abandon(`lenses.mjs printed no lens: ${why}`)
+    return [`Tranchant could not build the lenses: ${why}`, served].join('\n')
+  }
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
@@ -1983,8 +1993,11 @@ async function startImport($: $, source: string | undefined, to: string | undefi
           (listed) => listed.name === spawnName(name, made.dir),
         )?.id
       : undefined)
-  if (!agent)
+  if (!agent) {
+    // Else the page lists it as being written, for ever: its check fails it.
+    await $.process.run(['node', script, '--check', made.dir]).catch(ignore)
     return `Tranchant could not start the import agent: ${started.deny ?? 'no agent started'}`
+  }
   await update($, importing, (all) => ({ ...all, [made.dir]: { ...one, agent } }))
   const page = pageOf(made.project)
   return [

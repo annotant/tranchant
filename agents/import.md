@@ -52,12 +52,15 @@ the process; you do none of it. Your task is this prompt's alone.
      "tranchant:<lens>", "add": "<source>" }`. Tranchant's lenses are
      `correctness`, `types`, `accessibility`, `performance`, `security`,
      `tests`, `conventions`, `bugs`, `silent-failures` and `docs`. A
-     checklist improves the lens; it does not add an agent.
+     checklist improves the lens; it does not add an agent. Leave out its
+     `paths` and `topics`: it keeps the lens's own.
 4. Name each source so Tranchant can find it again at every review:
    - a plugin's skill or agent by its name, `plugin:name` (`plugin:folder:name`
      for an agent in a subfolder of `agents/`);
    - a file of the project by its path relative to TARGET's folder when TO
      is `project` (`../.claude/agents/x.md`), absolute when TO is `local`.
+     A project recipe names nothing outside the repository: a file there
+     goes to `imported.leftOut`, with the reason.
 5. List what cannot become a lens, with the reason, in `imported.leftOut`:
    orchestration (planning, slicing, merging the reviewers' reports),
    scripts, MCP calls, posting or commenting, questions to the user, and

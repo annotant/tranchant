@@ -152,10 +152,12 @@ test('the import agent may write its recipe file and read, nothing else', async 
   )
   assert.equal(await importerHook(args, 'Read', { file_path: '/etc/hosts' }), undefined)
   assert.equal(
-    await importerHook(args, 'Bash', { command: 'git log -1 && ls' }),
+    await importerHook(args, 'Bash', { command: 'ls && grep -n review SKILL.md' }),
     undefined,
   )
   for (const command of [
+    // A source's folder may hold a repository whose config runs programs.
+    'git log -1',
     `echo '{}' > ${recipe}`,
     'node -e "1"',
     'rm -rf .',
@@ -245,4 +247,60 @@ test('the recipe the agent wrote is checked, listed before it is used, then put 
   await assert.rejects(useImport(made.project, made.id), /in use already/)
   // Checked again, a recipe in use stays so.
   assert.equal((await checkImport(made.dir)).state, 'used')
+})
+
+test('an import is checked as a review reads it, and checked again when used', async (t) => {
+  const dir = await project(t)
+  process.env.TRANCHANT_STATE_DIR = stateDir
+  const { useImport } = await import('../skills/tranchant/scripts/lib/imports.mjs')
+  const prepare = async (/** @type {string} */ to) =>
+    JSON.parse(
+      (
+        await importScript(dir, ['--prepare', '.claude/skills/team-review', '--to', to])
+      ).stdout.replace(/^IMPORT /, ''),
+    )
+  const check = async (/** @type {any} */ made, /** @type {object} */ recipe) => {
+    await writeFile(made.recipe, JSON.stringify({ version: 1, ...recipe }))
+    return (await importScript(dir, ['--check', made.dir])).stdout
+  }
+  const made = await prepare('project')
+  // A whole prompt runs without the contract: an import names sources only.
+  assert.match(
+    await check(made, {
+      lenses: [{ name: 'x', prompt: '../.claude/agents/sql-reviewer.md' }],
+    }),
+    /lenses\[0\]\.prompt: an import names a source/,
+  )
+  // Tranchant's lenses count, when it extends them.
+  assert.match(
+    await check(made, {
+      extends: 'tranchant',
+      lenses: ['a', 'b', 'c'].map((name) => ({
+        name,
+        source: '../.claude/agents/sql-reviewer.md',
+      })),
+    }),
+    /12 lenses at most, the plugin's included/,
+  )
+  // A project recipe is read at BASE: nothing outside the repository.
+  const outside = path.join(await tempDir(t), 'team.md')
+  await writeFile(outside, 'Review.\n')
+  assert.match(
+    await check(made, { lenses: [{ name: 'x', source: outside }] }),
+    /inside the repository/,
+  )
+  // Failed, then mended: Use checks it again rather than refusing for good.
+  await writeFile(made.recipe, '{')
+  await importScript(dir, ['--check', made.dir])
+  await writeFile(
+    made.recipe,
+    JSON.stringify({
+      version: 1,
+      lenses: [{ name: 'sql', source: '../.claude/agents/sql-reviewer.md' }],
+    }),
+  )
+  assert.equal((await useImport(made.project, made.id)).to, 'project')
+  // One still being written is refused.
+  const writing = await prepare('local')
+  await assert.rejects(useImport(writing.project, writing.id), /still writing it/)
 })

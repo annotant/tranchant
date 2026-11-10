@@ -7,7 +7,6 @@ const CHANGE_WORDS: Record<NonNullable<LensRow['change']>, string> = {
   new: 'new in this project',
 }
 
-/** What a row says of its lens, by state. */
 function rowWords(row: LensRow) {
   if (row.state === 'resolving') return 'resolving'
   if (row.state === 'failed') return 'failed'

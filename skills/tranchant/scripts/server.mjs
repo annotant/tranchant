@@ -1059,7 +1059,9 @@ async function handle(req, res) {
     try {
       const used = await useImport(project, input.id)
       void importsChanged()
-      return send(res, 200, { ...used, settings: await settingsPayload() })
+      // In force already: a settings payload that fails now is the page's to ask again.
+      const settings = await settingsPayload().catch(() => undefined)
+      return send(res, 200, { ...used, ...(settings && { settings }) })
     } catch (error) {
       if (error instanceof ImportRefusal) return send(res, 409, { error: error.message })
       throw error

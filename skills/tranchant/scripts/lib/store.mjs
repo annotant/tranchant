@@ -502,6 +502,17 @@ export function createStore(dir) {
     }
   }
 
+  /**
+   * Writes an envelope the next read accepts: one it would refuse would
+   * leave the page, and every script, unable to read the review.
+   * @param {any} envelope
+   */
+  async function writeChecked(envelope) {
+    const problems = validateEnvelope(envelope)
+    if (problems.length) throw new StoreRefusal(problemsText(problems))
+    await writeEnvelope(envelope)
+  }
+
   return {
     readReview,
     readDecisions,
@@ -646,6 +657,9 @@ export function createStore(dir) {
         if (statusOf(envelope) === 'refused') {
           throw new StoreRefusal('the review was refused: it never ran')
         }
+        if (statusOf(envelope) === 'preparing') {
+          throw new StoreRefusal('the review is still building its lenses')
+        }
         await writeEnvelope({ ...envelope, status: 'complete' })
       })
     },
@@ -661,7 +675,7 @@ export function createStore(dir) {
         const envelope = await readEnvelope()
         if (statusOf(envelope) !== 'preparing')
           throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
-        await writeEnvelope({ ...envelope, status: 'reviewing', lenses })
+        await writeChecked({ ...envelope, status: 'reviewing', lenses })
       })
     },
 
@@ -676,7 +690,7 @@ export function createStore(dir) {
         const envelope = await readEnvelope()
         if (statusOf(envelope) !== 'preparing')
           throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
-        await writeEnvelope({ ...envelope, status: 'refused', refusal })
+        await writeChecked({ ...envelope, status: 'refused', refusal })
       })
     },
 

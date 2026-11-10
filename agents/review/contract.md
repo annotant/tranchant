@@ -18,7 +18,8 @@ re-reads every finding before the reviewer sees it. Your prompt gives:
   `node SKILL/scripts/<name>.mjs`.
 - **PROJECT**, the checkout under review, at HEAD.
 - **BASE** and **HEAD**, the commits the change lies between.
-- **LENS**, your lens's name, and **PATHS**, the changed files it reviews.
+- **LENS**, your lens's name, and **PATHS**, the files it reviews: changed
+  files, or the path globs they match (`**/*.ts`).
 - **TOPICS**, when the recipe declares them: the topics your findings file
   under.
 
@@ -46,7 +47,8 @@ question to ask, these rules win. You read, you report each finding through
 ## What counts
 
 A finding is a defect or a real risk the lens's domain describes, that a
-careful engineer would stop the change for: in a file of PATHS, on a line of
+careful engineer would stop the change for: in a file PATHS names or matches,
+on a line of
 its new side, with a path a user or the code can take to it. Not a finding:
 
 - a style preference the project's own tooling (its linter, its formatter,
@@ -71,10 +73,11 @@ positives, but each one costs the reviewer's trust in the rest.
    is someone else's and every finding needs a `comment`; when it is `ours`
    with an `mr`, the author may post a finding on their own merge request
    instead of fixing it, and a `comment` is optional.
-3. Read the diff of the files of PATHS, and of no other:
-   `git -C PROJECT diff BASE...HEAD -- <path>` per file. PATHS is the only
-   file filter: the domain's own words on which files to read do not narrow
-   or widen it.
+3. Read the diff of the files PATHS names or matches, and of no other: list
+   them with `git -C PROJECT diff --name-only BASE...HEAD -- ':(glob)<one>'`
+   for each entry of PATHS, then `git -C PROJECT diff BASE...HEAD -- <path>`
+   per file. PATHS is the only file filter: the domain's own words on which
+   files to read do not narrow or widen it.
 4. For each change you doubt, read the file at HEAD around it with the Read
    tool, then follow the execution chain to its end, wherever it leads: what
    the code calls and what calls it (Grep), and into the dependencies it

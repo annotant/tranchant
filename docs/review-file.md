@@ -616,14 +616,18 @@ finding's id on its first line, then the same but `LENS`, `PATHS` and
 
 ### Where the recipe comes from
 
-The first that exists: `--recipe <path>` on the run; the local recipe,
+The first given: `--recipe <path>` on the run; the local recipe, when its
+file exists,
 `$XDG_CONFIG_HOME/tranchant/projects/<project hash>/recipe.json` (else
-`~/.config/…`), the user's alone, outside the repository; the project's
+`~/.config/…`), the user's alone, outside the repository, its paths read
+from the working tree; the project's, when it exists at BASE,
 `.tranchant/recipe.json`, **read at BASE** (`git show BASE:.tranchant/recipe.json`)
 with every source it names inside the repository, so the change under review
 cannot rewrite the lenses that review it, on someone else's merge request
-included; the settings' `recipe`; the plugin's. `/tranchant import` writes
-the first two. The page's Settings show the recipe in force: where it comes
+included; the settings' `recipe`; the plugin's. A recipe given whose file is
+missing refuses the review: nothing falls through to the next. `/tranchant
+import` writes the local and the project's. An add-on (`use`) with no
+`paths` or `topics` keeps those of its lens of Tranchant's. The page's Settings show the recipe in force: where it comes
 from, its lenses, each lens's source and whether it builds now.
 
 ### The lenses, built at every review
@@ -680,13 +684,16 @@ into a recipe that **references** it:
    (`tranchant:im-<import>`, [`agents/import.md`](../agents/import.md)),
    started by the hooks in the background, reads it and writes the recipe:
    each reviewer a lens of its own or an add-on to a lens of Tranchant's, by
-   name or path, never a copy of its text; what cannot become a lens
+   name or path (a project recipe's inside the repository), never a copy of
+   its text nor a whole `prompt`; what cannot become a lens
    (orchestration, scripts, MCP calls, posting, questions to the user) in
    `imported.leftOut`, with the reason. `hook.mjs --importer` lets it write
-   that one file and run reading commands only; its hook refuses on any
-   error.
-4. When it ends, `import.mjs --check` checks the recipe, each lens built
-   from its location. The page's Settings show it whole (its lenses, their
+   that one file and run reading commands only, git none; its hook refuses
+   on any error.
+4. When it ends, `import.mjs --check` checks the recipe as a review reads
+   it (12 lenses at most, Tranchant's included; a project recipe's paths
+   inside the repository; no `prompt`), each lens built from its location;
+   one that fails is checked again when used. The page's Settings show it whole (its lenses, their
    sources, what was left out); **Use this recipe** puts it in force at its
    location. The import alone never does. A project recipe is read at the
    base of each review: it reviews the changes made after it is committed.

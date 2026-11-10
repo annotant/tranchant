@@ -22,6 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './errors.mjs'
+import { TOPICS } from './format.mjs'
 import { PLUGIN_ROOT, STATE_ROOT, hashOf } from './project.mjs'
 import { SETTINGS_DIR, expandHome } from './settings.mjs'
 
@@ -42,17 +43,12 @@ const MAX_SKILLS = 6
 const MAX_SOURCE_BYTES = 64 * 1024
 const MAX_RECIPE_BYTES = 1024 * 1024
 /** `plugin:skill`, `plugin:agent`, `plugin:folder:agent`. */
-const PLUGIN_NAME = /^[\w.-]+(?::[\w.-]+)+$/
+// No segment starts with a dot: `..` would walk out of the plugin's folder.
+const PLUGIN_NAME = /^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/
+
+/** Whether `label` names a skill or agent (`plugin:name`), not a path. */
+export const isPluginName = (/** @type {string} */ label) => PLUGIN_NAME.test(label)
 const MODEL = /^[\w.:-]{1,80}$/
-const TOPICS = [
-  'Bugs',
-  'Security & Permissions',
-  'Breaking Changes',
-  'Tests',
-  'Conventions',
-  'Code Quality',
-  'Deprecation & Feature Flags',
-]
 const LENS_KEYS = new Set([
   'name',
   'prompt',
@@ -136,7 +132,7 @@ async function readBounded(/** @type {string} */ file, /** @type {number} */ max
   }
 }
 
-/** git in `project`, its stdout; undefined when it fails. */
+/** git in `project`, its stdout; undefined when it fails, as for an object that is not there. */
 async function gitOut(/** @type {string} */ project, /** @type {string[]} */ args) {
   try {
     const { stdout } = await run('git', ['-C', project, ...args], {
@@ -161,11 +157,25 @@ async function lookAt(origin, file, max) {
     const spec = `${origin.base}:${file}`
     const type = (await gitOut(origin.project, ['cat-file', '-t', spec]))?.trim()
     if (type === 'tree') return { kind: 'folder' }
-    if (type !== 'blob') return { kind: 'none' }
+    if (type !== 'blob') {
+      // git failing on BASE itself is not a missing file: the reason must not say re-import.
+      const base = await gitOut(origin.project, [
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `${origin.base}^{commit}`,
+      ])
+      if (base === undefined)
+        throw new Error(`git cannot read ${origin.base} in ${origin.project}`)
+      return { kind: 'none' }
+    }
     const size = Number((await gitOut(origin.project, ['cat-file', '-s', spec]))?.trim())
-    if (!(size <= max)) return { kind: 'large' }
-    const text = await gitOut(origin.project, ['cat-file', 'blob', spec])
-    return text === undefined ? { kind: 'none' } : { kind: 'file', text }
+    if (Number.isFinite(size) && size > max) return { kind: 'large' }
+    const text = Number.isFinite(size)
+      ? await gitOut(origin.project, ['cat-file', 'blob', spec])
+      : undefined
+    if (text === undefined) throw new Error(`git cannot read ${spec}`)
+    return { kind: 'file', text }
   }
   try {
     const info = await stat(file)
@@ -173,8 +183,15 @@ async function lookAt(origin, file, max) {
     if (info.size > max) return { kind: 'large' }
     return { kind: 'file', text: await readBounded(file, max) }
   } catch (error) {
-    if (errorCode(error) === 'E2BIG') return { kind: 'large' }
-    return { kind: 'none' }
+    const code = errorCode(error)
+    if (code === 'E2BIG') return { kind: 'large' }
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'none' }
+    throw new Error(
+      `${file} cannot be read (${typeof code === 'string' ? code : 'error'})`,
+      {
+        cause: error,
+      },
+    )
   }
 }
 
@@ -224,16 +241,39 @@ export async function readRecipe(ref) {
   } catch {
     throw new RecipeRefusal('not JSON')
   }
-  const own = checkRecipe(raw)
   if (ref.from === 'plugin' || ref.file === PLUGIN_RECIPE)
-    return { lenses: own.map(builtIn) }
-  if (raw.extends !== 'tranchant') return { lenses: own, imported: raw.imported }
+    return { lenses: checkRecipe(raw).map(builtIn) }
+  return { lenses: await expandRecipe(raw), imported: raw.imported }
+}
+
+/**
+ * A recipe's lenses as a review runs them: checked; an add-on with no
+ * `paths` or `topics` of its own keeps its lens of Tranchant's; with
+ * `extends`, the plugin's lenses first, one of the same name replaced, 12
+ * at most in all.
+ * @param {any} raw
+ * @returns {Promise<LensSpec[]>}
+ */
+export async function expandRecipe(raw) {
+  const own = checkRecipe(raw)
   const plugin = checkRecipe(JSON.parse(await readFile(PLUGIN_RECIPE, 'utf8')))
-  const mine = new Set(own.map((lens) => lens.name))
-  const lenses = [...plugin.filter((lens) => !mine.has(lens.name)).map(builtIn), ...own]
-  if (lenses.length > MAX_LENSES)
+  const byName = new Map(plugin.map((lens) => [lens.name, lens]))
+  const lenses = own.map((lens, i) => {
+    const basis = lens.use ? byName.get(lens.use.slice('tranchant:'.length)) : undefined
+    if (!basis) return lens
+    const given = raw.lenses[i]
+    return {
+      ...lens,
+      ...(given.paths === undefined && !lens.otherwise && { paths: basis.paths }),
+      ...(given.topics === undefined && basis.topics && { topics: basis.topics }),
+    }
+  })
+  if (raw.extends !== 'tranchant') return lenses
+  const mine = new Set(lenses.map((lens) => lens.name))
+  const all = [...plugin.filter((lens) => !mine.has(lens.name)).map(builtIn), ...lenses]
+  if (all.length > MAX_LENSES)
     throw new RecipeRefusal(`${MAX_LENSES} lenses at most, the plugin's included`)
-  return { lenses, imported: raw.imported }
+  return all
 }
 
 /**
@@ -297,7 +337,9 @@ export function checkRecipe(recipe) {
       lens.topics !== undefined &&
       (!Array.isArray(lens.topics) ||
         !lens.topics.length ||
-        !lens.topics.every((/** @type {unknown} */ one) => TOPICS.includes(String(one))))
+        !lens.topics.every((/** @type {unknown} */ one) =>
+          TOPICS.some((topic) => topic === one),
+        ))
     )
       refuse(`.topics: a list of ${TOPICS.join(', ')}`)
     /** @type {LensSpec} */
@@ -360,7 +402,7 @@ function splitFrontmatter(text) {
 const claudeDir = () =>
   process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
 
-/** A JSON file, or undefined when it is missing or is not JSON. */
+/** Undefined for a file missing and one that is not JSON alike: the caller tells them apart. */
 async function jsonOf(/** @type {string} */ file) {
   try {
     return JSON.parse(await readFile(file, 'utf8'))
@@ -377,9 +419,13 @@ async function jsonOf(/** @type {string} */ file) {
  * @param {string} project
  */
 async function installedPlugin(name, project) {
-  const register = await jsonOf(
-    path.join(claudeDir(), 'plugins', 'installed_plugins.json'),
-  )
+  const file = path.join(claudeDir(), 'plugins', 'installed_plugins.json')
+  const register = await jsonOf(file)
+  if (register === undefined && existsSync(file))
+    throw new LensRefusal(
+      `${file} cannot be read`,
+      "check Claude Code's plugins (/plugin), then review again",
+    )
   const plugins = register?.plugins
   if (!plugins || typeof plugins !== 'object') return undefined
   for (const [key, entries] of Object.entries(plugins)) {
@@ -393,19 +439,21 @@ async function installedPlugin(name, project) {
       ) ?? entries.find((one) => one?.scope === 'user')
     if (!entry || typeof entry.installPath !== 'string') continue
     let enabled = true
-    for (const file of [
+    for (const settings of [
       path.join(claudeDir(), 'settings.json'),
       path.join(project, '.claude', 'settings.json'),
       path.join(project, '.claude', 'settings.local.json'),
     ]) {
-      const set = (await jsonOf(file))?.enabledPlugins?.[key]
+      const set = (await jsonOf(settings))?.enabledPlugins?.[key]
       if (typeof set === 'boolean') enabled = set
     }
+    const version = typeof entry.version === 'string' ? entry.version.trim() : ''
     return {
       key,
       root: entry.installPath,
       enabled,
-      ...(typeof entry.version === 'string' && { version: entry.version }),
+      // A manifest's own words: review.json takes a short one only.
+      ...(version && version.length <= 100 && { version }),
     }
   }
   return undefined
@@ -441,7 +489,7 @@ export async function resolveSource(label, { origin, folder, project }) {
       'shorten the source, or edit the recipe',
     )
   // A name has a colon and no slash; anything else is a path.
-  const isPath = !PLUGIN_NAME.test(label)
+  const isPath = !isPluginName(label)
   if (!isPath && label.startsWith('tranchant:')) {
     const name = label.slice('tranchant:'.length)
     const file = (await builtInLenses()).get(name)
@@ -475,6 +523,7 @@ export async function resolveSource(label, { origin, folder, project }) {
       path.join(installed.root, 'agents', `${inside}.md`),
     ]
     for (const file of candidates) {
+      if (path.relative(installed.root, file).startsWith('..')) continue
       const found = await lookAt({ kind: 'fs' }, file, MAX_SOURCE_BYTES)
       if (found.kind === 'large') throw tooLarge()
       if (found.kind === 'file')

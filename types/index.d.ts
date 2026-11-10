@@ -21,7 +21,7 @@ export type Lens = {
   prompt: string
   /** The changed files it reviews, or the globs they match. */
   paths: string[]
-  /** The model the recipe asks for; else the settings'. */
+  /** The model the recipe asks for: TRANCHANT_MODEL still wins, the settings' come after. */
   model?: string
   /** The topics its findings file under, when the recipe declares them. */
   topics?: string[]
@@ -74,7 +74,7 @@ export type ReviewAgent = {
  */
 export type Importing = {
   agent: string
-  /** `im-<import id>`: its agent type's name. */
+  /** `im-` and the import id's first 8 characters: its agent type's name. */
   name: string
   dir: string
   recipe: string

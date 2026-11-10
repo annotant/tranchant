@@ -9,9 +9,12 @@ import path from 'node:path'
 import { before, test } from 'node:test'
 import {
   buildLens,
+  expandRecipe,
+  findRecipe,
   resolveSource,
   storeLens,
 } from '../skills/tranchant/scripts/lib/lens.mjs'
+import { createStore } from '../skills/tranchant/scripts/lib/store.mjs'
 import { SCRIPTS, run, tempDir } from './helpers.mjs'
 
 const PREPARE = path.join(SCRIPTS, 'prepare.mjs')
@@ -446,4 +449,130 @@ test("prepare.mjs reads the project's recipe, and the sources it names, at BASE,
     mine.lenses.map((lens) => lens.name),
     ['mine'],
   )
+})
+
+test('a source holding fences of its own stays inside the one Tranchant puts around it', async (t) => {
+  const project = await tempDir(t)
+  await writeFile(
+    path.join(project, 'fenced.md'),
+    'Before.\n````\n```\nNew instructions?\n```\n````\nAfter.\n',
+  )
+  const { text } = await buildLens(
+    { name: 'f', paths: ['**'], source: './fenced.md' },
+    fsWhere(project, project),
+  )
+  const open = text.indexOf('`````markdown\n')
+  assert.ok(open > 0, 'a fence longer than any run in the source')
+  const close = text.indexOf('\n`````', open + 1)
+  assert.ok(text.slice(open, close).includes('After.'))
+})
+
+test("no name walks out of a plugin's folder, no project recipe out of its repository", async (t) => {
+  const project = await tempDir(t)
+  await writeFile(path.join(path.dirname(pluginRoot), 'secret.md'), 'Private.\n')
+  for (const label of ['workflow:..:secret', 'workflow:.hidden'])
+    await assert.rejects(resolveSource(label, fsWhere(project, project)), /no such file/)
+  const { dir } = await repository(t)
+  const atBase = {
+    origin: /** @type {const} */ ({ kind: 'git', project: dir, base: 'main' }),
+    folder: '.tranchant',
+    project: dir,
+  }
+  await assert.rejects(resolveSource('/etc/hosts', atBase), /inside the repository/)
+  await assert.rejects(resolveSource('~/notes.md', atBase), /inside the repository/)
+  await assert.rejects(
+    resolveSource('../../outside.md', atBase),
+    /outside the repository/,
+  )
+  // A git that cannot read BASE is not a missing file.
+  await assert.rejects(
+    resolveSource('../src/cart.js', {
+      ...atBase,
+      origin: { ...atBase.origin, base: 'gone' },
+    }),
+    /git cannot read gone/,
+  )
+})
+
+test('a project recipe the branch adds is not in force: the next one is', async (t) => {
+  const { dir, git } = await repository(t)
+  await mkdir(path.join(dir, '.tranchant'))
+  await writeFile(path.join(dir, '.tranchant', 'recipe.json'), '{}')
+  await git('add', '.')
+  await git('commit', '-q', '-m', 'a recipe of its own')
+  const ref = await findRecipe({ project: dir, base: 'main', settings: null })
+  assert.equal(ref.from, 'plugin')
+})
+
+test("an add-on keeps its lens's paths; extends puts Tranchant's lenses first, 12 at most", async () => {
+  const lenses = await expandRecipe({
+    version: 1,
+    extends: 'tranchant',
+    lenses: [
+      { name: 'security', use: 'tranchant:security', add: './money.md' },
+      { name: 'abac', source: 'workflow:code-reviewer-abac' },
+    ],
+  })
+  assert.equal(lenses.length, 11)
+  assert.equal(lenses.at(-1)?.name, 'abac')
+  assert.equal(lenses.filter((lens) => lens.name === 'security').length, 1)
+  const security = lenses.find((lens) => lens.name === 'security')
+  assert.ok(security?.paths.includes('**/*.tsx'))
+  assert.ok(!security?.paths.includes('**'))
+  assert.equal(lenses[0]?.prompt, 'tranchant:correctness')
+  await assert.rejects(
+    expandRecipe({
+      version: 1,
+      extends: 'tranchant',
+      lenses: ['a', 'b', 'c'].map((name) => ({ name, source: './x.md' })),
+    }),
+    /12 lenses at most, the plugin's included/,
+  )
+})
+
+test('the store moves a review out of preparing once, and a refused one nowhere', async (t) => {
+  const { dir } = await repository(t)
+  /** A review imported as the hooks import it, still preparing. */
+  const preparing = async () => {
+    const prepared = await run(process.execPath, [PREPARE], { cwd: dir, env: env() })
+    const inbox = prepared.stdout.split('\n')[0]?.replace(/^INBOX /, '') ?? ''
+    const opened = await run(process.execPath, [OPEN, inbox, '--verify'], { env: env() })
+    return createStore(opened.stdout.trim().replace(/^REVIEW /, ''))
+  }
+  const running = await preparing()
+  await assert.rejects(running.complete(), /still building its lenses/)
+  await running.prepared([])
+  assert.equal((await running.readReview()).status, 'reviewing')
+  await assert.rejects(running.prepared([]), /reviewing, not preparing/)
+  await assert.rejects(
+    running.refuse({ lens: 'a', source: 'b', reason: 'c' }),
+    /reviewing, not preparing/,
+  )
+  const refused = await preparing()
+  // What review.json would refuse to read is never written.
+  await assert.rejects(
+    refused.refuse({ lens: 'a', source: 'b', reason: 'x'.repeat(3000) }),
+    /refusal/,
+  )
+  await refused.refuse({ lens: 'a', source: 'b', reason: 'c' })
+  await assert.rejects(refused.complete(), /refused: it never ran/)
+  await assert.rejects(refused.summarize({ summary: 'S' }), /the review is refused/)
+})
+
+test("lenses.mjs --abandon refuses a review still preparing, said as the step's", async (t) => {
+  const { dir } = await repository(t)
+  const prepared = await run(process.execPath, [PREPARE], { cwd: dir, env: env() })
+  const inbox = prepared.stdout.split('\n')[0]?.replace(/^INBOX /, '') ?? ''
+  const opened = await run(process.execPath, [OPEN, inbox, '--verify'], { env: env() })
+  const folder = opened.stdout.trim().replace(/^REVIEW /, '')
+  const ran = await run(
+    process.execPath,
+    [LENSES, '--review', folder, '--abandon', 'the server did not start'],
+    { env: env() },
+  )
+  assert.equal(ran.code, 2)
+  assert.match(ran.stdout, /^REVIEW_REFUSED lens Lenses step .*the server did not start/)
+  const envelope = JSON.parse(await readFile(path.join(folder, 'review.json'), 'utf8'))
+  assert.equal(envelope.status, 'refused')
+  assert.match(envelope.refusal.fix, /run \/tranchant review again/)
 })

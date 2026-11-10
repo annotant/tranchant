@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // lenses.mjs --review <dir> --plan <file>
+// lenses.mjs --review <dir> --abandon <reason>
 // The Lenses step of `/tranchant review`, run once the page is open: for each
 // lens of the plan prepare.mjs wrote, resolves its source, builds the prompt
 // its reviewer runs and stores it under <state>/lenses/<sha256>.md
@@ -10,7 +11,9 @@
 // `{ name, prompt, paths, model?, topics? }`, `prompt` the built file. One
 // lens that cannot be built refuses the review: it becomes `refused`, with
 // the lens, its source and why; `REVIEW_REFUSED <reason>` is printed, no
-// LENS line, and it exits 2.
+// LENS line, and it exits 2. So does any other failure of the step, and
+// `--abandon`, which the hooks run when the step could not run: a review
+// never stays `preparing` with nothing at work on it.
 import { randomBytes } from 'node:crypto'
 import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -55,21 +58,54 @@ const flag = (/** @type {string} */ name) => {
 const sourceOf = (lens) =>
   lens.prompt ?? lens.source ?? `${lens.use ?? ''}+${lens.add ?? ''}`
 
+/** `text` cut to `max` characters: review.json takes a refusal's words that short. */
+const clip = (/** @type {string} */ text, max = 1000) =>
+  text.length > max ? `${text.slice(0, max - 1)}…` : text
+
+/** What fixes a failure that is not the recipe's. */
+const RETRY = 'not the recipe: run /tranchant review again, and report it if it persists'
+
 const found = findReview()
 const planFile = flag('--plan')
-if (!found || !planFile) {
-  console.error('usage: lenses.mjs --review <dir> --plan <file>')
+const abandoned = flag('--abandon')
+if (!found || (!planFile && abandoned === undefined)) {
+  console.error('usage: lenses.mjs --review <dir> --plan <file> | --abandon <reason>')
   process.exit(2)
 }
 const dir = found
 const store = createStore(dir)
-const review = await store.readReview().catch((error) => refuse(message(error)))
+
+/**
+ * Refuses the review, when it still prepares, then says so.
+ * @param {{ lens: string, source: string, reason: string, fix: string }} refusal
+ * @returns {Promise<never>}
+ */
+async function giveUp({ lens, source, reason, fix }) {
+  await store
+    .refuse({
+      lens: clip(lens, 100),
+      source: clip(source),
+      reason: clip(reason),
+      fix: clip(fix),
+    })
+    .catch((error) =>
+      console.error(`the review was not marked refused: ${oneLine(message(error))}`),
+    )
+  return refuse(`lens ${lens} (${source}): ${reason}; ${fix}`)
+}
+
+/** The whole step's failure, not one lens's. */
+const stepFailed = (/** @type {string} */ reason) =>
+  giveUp({ lens: 'Lenses step', source: planFile ?? '-', reason, fix: RETRY })
+
+if (abandoned !== undefined) await stepFailed(abandoned || 'the step did not run')
+const review = await store.readReview().catch((error) => stepFailed(message(error)))
 /** @type {{ recipe: RecipeRef, lenses: LensSpec[] }} */
-const plan = await readFile(planFile, 'utf8')
+const plan = await readFile(String(planFile), 'utf8')
   .then((text) => JSON.parse(text))
-  .catch((error) => refuse(`plan ${planFile}: ${message(error)}`))
+  .catch((error) => stepFailed(`plan ${planFile}: ${message(error)}`))
 if (!plan?.recipe?.file || !Array.isArray(plan.lenses) || !plan.lenses.length)
-  refuse(`plan ${planFile}: a recipe and its lenses are required`)
+  await stepFailed(`plan ${planFile}: a recipe and its lenses are required`)
 
 const progressFile = path.join(dir, 'lenses.json')
 
@@ -160,8 +196,8 @@ for (const [i, lens] of plan.lenses.entries()) {
   } catch (error) {
     Object.assign(row, {
       state: 'failed',
-      reason: message(error),
-      fix: error instanceof LensRefusal ? error.fix : 'edit the recipe',
+      reason: clip(message(error)),
+      fix: error instanceof LensRefusal ? error.fix : RETRY,
     })
   }
   await writeProgress('resolving', rows)
@@ -170,24 +206,17 @@ for (const [i, lens] of plan.lenses.entries()) {
 const failed = rows.find((row) => row.state === 'failed')
 if (failed) {
   await writeProgress('refused', rows)
-  try {
-    await store.refuse({
-      lens: failed.name,
-      source: failed.source,
-      reason: failed.reason ?? 'it cannot be built',
-      ...(failed.fix && { fix: failed.fix }),
-    })
-  } catch (error) {
-    if (!(error instanceof StoreRefusal)) throw error
-    refuse(error.message)
-  }
-  refuse(`lens ${failed.name} (${failed.source}): ${failed.reason}; ${failed.fix ?? ''}`)
+  await giveUp({
+    lens: failed.name,
+    source: failed.source,
+    reason: failed.reason ?? 'it cannot be built',
+    fix: failed.fix ?? RETRY,
+  })
 }
-try {
-  await store.prepared(records)
-} catch (error) {
-  if (!(error instanceof StoreRefusal)) throw error
-  refuse(error.message)
-}
+await store
+  .prepared(records)
+  .catch((error) =>
+    error instanceof StoreRefusal ? refuse(error.message) : stepFailed(message(error)),
+  )
 await writeProgress('ready', rows)
 for (const lens of built) console.log(`LENS ${JSON.stringify(lens)}`)

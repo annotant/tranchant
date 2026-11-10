@@ -17,9 +17,12 @@ the same rules, on their own.
 ## Precedence
 
 A run's flag (`--recipe` on `/tranchant review`), then an environment
-variable, then the settings file, then the default. The recipe has two more
-places, between the flag and the settings' `recipe`: the local recipe, then
-the project's (see [where the recipe comes from](review-file.md#where-the-recipe-comes-from)).
+variable, then the settings file, then the default. When an environment
+variable wins, the page shows the option read-only and names the variable:
+`TRANCHANT_MODEL` sets the three models, and wins over a lens's own `model`.
+The recipe has two more places, between the flag and the settings' `recipe`:
+the local recipe, then the project's (see
+[where the recipe comes from](review-file.md#where-the-recipe-comes-from)).
 
 ## The recipe's two locations
 
@@ -30,9 +33,8 @@ the project's (see [where the recipe comes from](review-file.md#where-the-recipe
 - **local**: `$XDG_CONFIG_HOME/tranchant/projects/<project hash>/recipe.json`
   (else `~/.config/…`), `<project hash>` the first 12 hex digits of the SHA-1
   of the project's root: the user's alone, outside the repository, and first
-  of the two. When an environment
-variable wins, the page shows the option read-only and names the variable:
-`TRANCHANT_MODEL` sets the three models.
+  of the two. Its paths are read from the working tree, not at BASE: on a
+  branch someone else wrote, prefer the project recipe.
 
 A change applies to the next agent started, the next review, the next post:
 never to an agent already running.

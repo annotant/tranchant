@@ -3,7 +3,8 @@
 // and read by prepare.mjs, issue.mjs, hook.mjs and the hooks (hooks/register.ts
 // reads it on its own, no Node module there). Described in docs/settings.md.
 // Precedence: a run's flag (--recipe), then an environment variable, then
-// this file, then the default.
+// this file, then the default; the recipe has the local and the project's
+// between the flag and this file (lib/lens.mjs).
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'

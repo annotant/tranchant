@@ -10,7 +10,9 @@
 // it is refused: the producer mints a new id. `verify` and the findings'
 // `verified` are the hooks' alone: dropped, unless `--verify`, which
 // `/tranchant review` passes for the envelope prepare.mjs wrote, keeps
-// `verify`. `--refresh`, which `/tranchant comments` passes, takes an id
+// `verify`; any other file with the status `preparing` or `refused` is
+// refused, and `lenses` and `refusal`, lenses.mjs's, are dropped from all.
+// `--refresh`, which `/tranchant comments` passes, takes an id
 // imported already as the same PR/MR imported again: its envelope replaced,
 // its findings new or changed written, its decisions kept. Any refusal prints
 // `REVIEW_REFUSED <reason>` and exits 2.
@@ -72,11 +74,19 @@ if (!file) {
 }
 
 const text = await read(file)
-// Only a run of /tranchant review has verifiers: whatever a file claims, its findings are not dimmed.
-const { verify: _claimed, ...parsed } = parse(file, text)
+// Only a run of /tranchant review has verifiers and lenses: whatever a file claims, its findings are not dimmed.
+const {
+  verify: _claimed,
+  lenses: _lenses,
+  refusal: _refusal,
+  ...parsed
+} = parse(file, text)
+const ours = process.argv.includes('--verify')
+if (!ours && (parsed.status === 'preparing' || parsed.status === 'refused'))
+  refuse(`${file}: status: ${parsed.status} is /tranchant review's own`)
 const review = {
   ...parsed,
-  ...(process.argv.includes('--verify') ? { verify: true } : {}),
+  ...(ours ? { verify: true } : {}),
   findings: parsed.findings.map(({ verified: _verified, ...finding }) => finding),
 }
 const { id, project } = review
