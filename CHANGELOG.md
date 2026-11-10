@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.4.0 - 2026-11-10
+
 ### Added
 
 - **Your reviewers' comments in the page.** `/tranchant comments [<url>]`
@@ -20,14 +22,13 @@ released to the `stable` branch.
   Your own comments are marked in the thread, your replies show in it as
   soon as you send them, and an agent can discuss a comment with you,
   drafting a reply you edit and send.
-
 - **Unfold the diff's context.** Above, between and below the hunks, a bar
   says how many lines the diff hides (below the last one, that there are
   more, until the file's length is known) and shows them: all of them, or
-  for a long gap 20 more next to either hunk. Unfolded lines read as context, numbered and
-  highlighted, and a finding on one moves from the file's header to its
-  line. The server reads them at the diff's head, only for a file of the
-  diff (`GET /api/lines`).
+  for a long gap 20 more next to either hunk. Unfolded lines read as
+  context, numbered and highlighted, and a finding on one moves from the
+  file's header to its line. The server reads them at the diff's head,
+  only for a file of the diff (`GET /api/lines`).
 
 ### Changed
 
