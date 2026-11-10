@@ -225,6 +225,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {number} iid The MR's iid; the PR's number on GitHub.
  * @property {string} url
  * @property {string} author
+ * @property {string} [viewer] Who imported its threads (`/tranchant comments`): the page marks their comments as theirs.
  * @property {DiffRefs} [diffRefs]
  */
 
@@ -301,6 +302,16 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  */
 
 /**
+ * A reply posted on a finding's thread from the page, kept for the page to
+ * show in the thread until the thread is imported again with it.
+ * @typedef {object} SentReply
+ * @property {string} text
+ * @property {string} url
+ * @property {string} at
+ * @property {boolean} [resolved]
+ */
+
+/**
  * The issue a finding moves to: what the reviewer wrote, then where it landed.
  * @typedef {object} Issue
  * @property {string} title
@@ -355,6 +366,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} [reason] `dropped`: the reviewer's words; `failed`: the error.
  * @property {Posted} [posted]
  * @property {Reply} [reply] A reply on a settled finding's thread, on its way or failed.
+ * @property {SentReply[]} [replies] The replies posted on its thread, oldest first.
  * @property {Issue} [issue] An issue decision: its title and body, then its `url` once created.
  * @property {Run[]} runs
  * @property {Event[]} events
@@ -760,6 +772,8 @@ function checkMr(mr, problems) {
   if (!isUrl(mr.url) || hasUserInfo(mr.url))
     problems.push('mr.url: an http(s) url, with no user or password, is required')
   if (!isText(mr.author, 300)) problems.push('mr.author: a user name is required')
+  if (mr.viewer !== undefined && !isText(mr.viewer, 300))
+    problems.push('mr.viewer: a user name')
   if (mr.diffRefs !== undefined && mr.forge === 'github') {
     problems.push('mr.diffRefs: GitLab only')
   } else if (mr.diffRefs !== undefined) {

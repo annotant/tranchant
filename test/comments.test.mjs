@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
+import { say } from '../skills/tranchant/scripts/lib/discussion.mjs'
 import { createStore } from '../skills/tranchant/scripts/lib/store.mjs'
 import { SCRIPTS, run, tempDir } from './helpers.mjs'
 
@@ -166,6 +167,7 @@ const github = ({ base, head }, threads) =>
       'api graphql',
       {
         data: {
+          viewer: { login: 'me' },
           repository: {
             pullRequest: {
               reviewThreads: { pageInfo: { hasNextPage: false }, nodes: threads },
@@ -240,6 +242,8 @@ test('reads the unresolved threads of a pull request, one finding each, on their
     iid: 7,
     url: PR_URL,
     author: 'me',
+    // The one who imports: the page marks their comments.
+    viewer: 'me',
   })
   // The resolved thread stays on the PR.
   assert.equal(review.findings.length, 6)
@@ -360,6 +364,7 @@ test('reads the unresolved discussions of a merge request; one on no file goes t
         diff_refs: { base_sha: repo.base, head_sha: repo.head, start_sha: repo.base },
       },
     ],
+    ['api user', { username: 'me' }],
     [
       'discussions?per_page=100&page=1',
       [
@@ -383,6 +388,7 @@ test('reads the unresolved discussions of a merge request; one on no file goes t
     iid: 12,
     url: MR_URL,
     author: 'me',
+    viewer: 'me',
     diffRefs: { baseSha: repo.base, headSha: repo.head, startSha: repo.base },
   })
   assert.deepEqual(
@@ -582,12 +588,12 @@ async function replying(t, answers, forge) {
     run(process.execPath, [POST, finding?.id ?? '', '--review', dir], {
       env: { ...env, [tool]: poster.file },
     })
-  return { store, id: finding?.id ?? '', post, calls: poster.calls }
+  return { store, dir, id: finding?.id ?? '', post, calls: poster.calls }
 }
 
 test('a post on a thread replies there with gh, then resolves it when asked', async (t) => {
   const reply = 'https://github.com/acme/shop/pull/7#discussion_r99'
-  const { store, id, post, calls } = await replying(
+  const { store, dir, id, post, calls } = await replying(
     t,
     [
       [
@@ -620,6 +626,14 @@ test('a post on a thread replies there with gh, then resolves it when asked', as
   assert.equal(entry?.state, 'posted')
   assert.equal(entry?.posted?.url, reply)
   assert.equal(entry?.posted?.resolved, true)
+  // Kept for the page to show in the thread, until a refresh reads it from GitHub.
+  assert.deepEqual(
+    entry?.replies?.map(({ text, url, resolved }) => ({ text, url, resolved })),
+    [{ text: 'Done in the next push', url: reply, resolved: true }],
+  )
+  // Replied on, the thread lives on: its reviewer may answer back, so it may be discussed.
+  const discussed = await say(dir, id, 'What would she answer?')
+  assert.equal(discussed.messages.at(-1)?.text, 'What would she answer?')
 })
 
 test('a fixed thread is replied on with glab; a resolve that fails leaves the reply posted', async (t) => {
@@ -655,6 +669,10 @@ test('a fixed thread is replied on with glab; a resolve that fails leaves the re
   assert.equal(entry?.posted?.resolved, undefined)
   assert.equal(entry?.posted?.unresolved, 'ERROR: 403 Forbidden')
   assert.equal(entry?.runs.at(-1)?.outcome, 'fixed')
+  assert.deepEqual(
+    entry?.replies?.map(({ text, url, resolved }) => ({ text, url, resolved })),
+    [{ text: 'Fixed', url: `${MR_URL}#note_4242`, resolved: undefined }],
+  )
 })
 
 test('a reply that fails on a fixed thread keeps it fixed; one on its way holds the next', async (t) => {

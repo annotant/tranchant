@@ -55,6 +55,8 @@ const MAX_REVIEW_SUMMARY = 12_000
 const MAX_STRENGTHS = 10
 const MAX_STRENGTH = 500
 const MAX_TEXT = 4000
+/** The replies a finding's thread keeps: the page shows them until a refresh reads them. */
+const MAX_REPLIES = 50
 /** An issue's title and body: GitLab caps a title at 255 characters, GitHub a body at 65,536. */
 export const MAX_ISSUE_TITLE = 255
 export const MAX_ISSUE_BODY = 60_000
@@ -924,12 +926,20 @@ export function createStore(dir) {
      * @returns {Promise<Entry>}
      */
     posted(id, { discussionId, url, resolved, unresolved }) {
-      return changeOne(id, (entry) => {
+      return changeOne(id, (entry, finding) => {
         const settled = replyPending(entry)
+        const text = settled ? entry.reply?.text : entry.comment
         const at = settled
           ? new Date().toISOString()
           : apply(id, entry, 'posted', { by: 'server' })
         if (settled) delete entry.reply
+        // The thread shows it at once; a refresh brings it from the forge too.
+        if (finding.thread && text) {
+          entry.replies = [
+            ...(entry.replies ?? []),
+            { text, url, at, ...(resolved ? { resolved: true } : {}) },
+          ].slice(-MAX_REPLIES)
+        }
         entry.posted = {
           discussionId,
           url,

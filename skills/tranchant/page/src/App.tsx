@@ -426,8 +426,8 @@ export default function App() {
       const applied = await decide([decision])
       const now = latest.current
       if (!applied.includes(decision.id) || now.openId !== decision.id) return
-      // An issue was written, not triaged in a keystroke: the reviewer watches it open.
-      if (decision.action === 'issue') return
+      // An issue or a comment was written, not triaged in a keystroke: the reviewer watches it land.
+      if (decision.action === 'issue' || decision.action === 'post') return
       const next = nextOpen(now.ordered, now.records, decision.id)
       if (next) open(next)
       else setSettled(true)

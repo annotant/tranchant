@@ -25,6 +25,9 @@ import {
   stateOf,
   tagOf,
   type Thread as ReviewThread,
+  type ThreadItem,
+  threadItems,
+  threadResolved,
   type Tracker,
 } from './domain'
 import { Excerpt } from './Excerpt'
@@ -59,36 +62,73 @@ const when = (at: string) => {
   return Number.isNaN(date.getTime()) ? at : date.toLocaleString()
 }
 
-/** The PR/MR thread the finding comes from: the reviewer's comment and its replies, data to read. */
-function ThreadView({ thread, change }: { thread: ReviewThread; change: string }) {
+/** The PR/MR thread the finding comes from: its comments, data to read, and the replies sent from here. */
+function ThreadView({
+  thread,
+  change,
+  items,
+  resolved,
+}: {
+  thread: ReviewThread
+  change: string
+  items: ThreadItem[]
+  resolved: boolean
+}) {
   return (
     <section className="tr-section tr-thread" aria-label="Review thread">
-      <p className="tr-muted">
-        Unresolved on the {change}:{' '}
+      <p
+        className={
+          resolved ? 'tr-thread-head tr-thread-head--resolved' : 'tr-thread-head tr-muted'
+        }
+      >
+        {resolved ? 'Resolved' : 'Unresolved'} on the {change}:{' '}
         <a href={thread.url} target="_blank" rel="noreferrer">
           open the thread
         </a>
       </p>
       <ol className="tr-thread-comments">
-        {thread.comments.map((comment) => (
+        {items.map((item, index) => (
           <li
-            key={comment.url ?? `${comment.author} ${comment.at}`}
-            className="tr-thread-comment"
+            key={item.url ?? `${index} ${item.author} ${item.at ?? ''}`}
+            className={[
+              'tr-thread-comment',
+              item.mine && 'tr-thread-comment--mine',
+              item.sent === 'sending' && 'tr-thread-comment--sending',
+              item.sent === 'failed' && 'tr-thread-comment--failed',
+            ]
+              .filter(Boolean)
+              .join(' ')}
           >
             <p className="tr-thread-meta">
-              <strong>@{comment.author}</strong>{' '}
-              {comment.url ? (
-                <a href={comment.url} target="_blank" rel="noreferrer">
-                  {when(comment.at)}
-                </a>
-              ) : (
-                <span className="tr-muted">{when(comment.at)}</span>
-              )}
+              <strong>@{item.author}</strong>
+              {item.mine && <span className="tr-chip tr-chip--you">you</span>}
+              {item.at &&
+                (item.url ? (
+                  <a href={item.url} target="_blank" rel="noreferrer">
+                    {when(item.at)}
+                  </a>
+                ) : (
+                  <span className="tr-muted">{when(item.at)}</span>
+                ))}
             </p>
-            {comment.body.trim() ? (
-              <Markdown source={comment.body} headings={false} />
+            {item.body.trim() ? (
+              <Markdown source={item.body} headings={false} />
             ) : (
               <p className="tr-muted">No text.</p>
+            )}
+            {item.sent === 'sending' && (
+              <p className="tr-thread-foot tr-muted" role="status">
+                <span className="tr-spinner" aria-hidden="true" />
+                Replying on the thread…
+              </p>
+            )}
+            {item.sent === 'sent' && (
+              <p className="tr-thread-foot tr-muted">
+                Sent from Tranchant{item.resolved ? ' · thread resolved' : ''}
+              </p>
+            )}
+            {item.sent === 'failed' && (
+              <p className="tr-thread-foot tr-error">Did not post: {item.failed}</p>
             )}
           </li>
         ))}
@@ -231,10 +271,11 @@ export function FindingDetail({
   // Undefined: shown when the finding has a thread; the Discuss button opens or folds it.
   const [folded, setFolded] = useState<boolean>()
 
-  // The tool is opening it: nothing else is offered until it lands or fails.
+  // The tool is opening it, or posting it: nothing else is offered until it lands or fails.
   const opening = state === 'queued' && record?.decision?.action === 'issue'
+  const posting = state === 'queued' && record?.decision?.action === 'post'
   const can = (move: Parameters<typeof allows>[0]) =>
-    !disabled && !opening && allows(move, state, review, finding)
+    !disabled && !opening && !posting && allows(move, state, review, finding)
   const theirs = review.ownership === 'theirs'
   // Ours with an MR: fixing comes first, posting is the secondary choice.
   const oursWithMr = !theirs && !reply && !!review.mr?.diffRefs
@@ -245,7 +286,7 @@ export function FindingDetail({
   const replying = replyPending(record)
   const thread = finding.thread
   const tag = tagOf(finding)
-  const writable = discussable(state)
+  const writable = discussable(state, finding)
   const hasThread = !!discussion?.messages.length
   const threadShown = folded === undefined ? hasThread : !folded
   const proposal = discussion?.messages.findLast((one) => one.by === 'agent')?.proposal
@@ -260,9 +301,11 @@ export function FindingDetail({
         : undefined
   const closed = writable
     ? undefined
-    : ['queued', 'working', 'asking'].includes(state)
-      ? 'An agent is on the finding: the thread reads as it stands.'
-      : 'The finding is settled: the thread reads as it stands.'
+    : posting
+      ? 'The comment is on its way: the thread reads as it stands.'
+      : ['queued', 'working', 'asking'].includes(state)
+        ? 'An agent is on the finding: the thread reads as it stands.'
+        : 'The finding is settled: the thread reads as it stands.'
   const lastRun = record?.runs.at(-1)
 
   const decide = (input: Omit<DecisionInput, 'id'>) => {
@@ -274,7 +317,7 @@ export function FindingDetail({
       context.trim() ? { action: 'fix', context: context.trim() } : { action: 'fix' },
     )
   const postAsWritten = () => decide({ action: 'post' })
-  const editAndPost = () =>
+  const editAndPost = () => {
     decide(
       reply
         ? { action: 'post', comment: comment.trim(), ...(resolve && { resolve: true }) }
@@ -282,6 +325,18 @@ export function FindingDetail({
           ? { action: 'post', comment: comment.trim() }
           : { action: 'post' },
     )
+    // The page stays on the finding: the next reply starts afresh, a failed one comes back.
+    if (reply) {
+      setComment('')
+      setResolve(false)
+    }
+  }
+  /** The agent's proposed reply, in the editor for the reviewer to read, change and send. */
+  const replyWith = (proposed: string) => {
+    setComment(proposed)
+    setResolve(false)
+    setMode('editing')
+  }
   const startReply = () => {
     // After a fix, the empty editor opens with what changed.
     setComment((text) => (text.trim() ? text : draftReply(record)))
@@ -350,7 +405,12 @@ export function FindingDetail({
       />
 
       {thread ? (
-        <ThreadView thread={thread} change={change} />
+        <ThreadView
+          thread={thread}
+          change={change}
+          items={threadItems(thread, record, review.mr?.viewer)}
+          resolved={threadResolved(record)}
+        />
       ) : (
         <dl className="tr-pwf">
           <dt>Problem</dt>
@@ -391,24 +451,13 @@ export function FindingDetail({
       {finding.diagram && <Diagram diagram={finding.diagram} />}
 
       <section className="tr-section" aria-label="Outcome">
-        {(state === 'posted' || (reply && state === 'fixed')) && record?.posted && (
+        {/* A reply on a thread shows in the thread itself: sent, on its way or failed. */}
+        {state === 'posted' && !reply && record?.posted && (
           <p className="tr-outcome">
-            {reply ? 'Replied on the thread' : 'Posted'}:{' '}
+            Posted:{' '}
             <a href={record.posted.url} target="_blank" rel="noreferrer">
               {record.posted.url}
             </a>
-            {record.posted.resolved && ' · resolved'}
-          </p>
-        )}
-        {replying && (
-          <p className="tr-outcome tr-pending" role="status">
-            <span className="tr-spinner" aria-hidden="true" />
-            Replying on the thread…
-          </p>
-        )}
-        {record?.reply?.failed && (
-          <p className="tr-outcome tr-error">
-            The reply did not post: {record.reply.failed}
           </p>
         )}
         {record?.posted?.unresolved && (state === 'posted' || reply) && (
@@ -440,7 +489,7 @@ export function FindingDetail({
             <FixChanges id={finding.id} disabled={disabled} />
           </div>
         )}
-        {state === 'failed' && (
+        {state === 'failed' && !(reply && record?.decision?.action === 'post') && (
           <p className="tr-outcome tr-error">
             Failed: {record?.reason ?? 'no reason given'}
           </p>
@@ -475,6 +524,14 @@ export function FindingDetail({
             <span className="tr-spinner" aria-hidden="true" />
             Opening the issue{tracker?.kind ? ` on ${tracker.web}` : ''}…
           </p>
+        ) : posting ? (
+          // A reply shows on its way in the thread itself.
+          !reply && (
+            <p className="tr-outcome tr-pending" role="status">
+              <span className="tr-spinner" aria-hidden="true" />
+              Posting on the {change}…
+            </p>
+          )
         ) : (
           can('stop') && (
             <div className="tr-actions">
@@ -741,11 +798,14 @@ export function FindingDetail({
           taken={taken}
           disabled={disabled}
           canFix={can('fix')}
-          canPost={can('post')}
+          canPost={can('post') && !replying}
           canDrop={can('drop')}
+          replyOn={reply}
           onSend={(text) => onDiscuss(finding.id, text)}
           onFix={(proposed) => decide({ action: 'fix', context: proposed })}
-          onPost={(proposed) => decide({ action: 'post', comment: proposed })}
+          onPost={(proposed) =>
+            reply ? replyWith(proposed) : decide({ action: 'post', comment: proposed })
+          }
           onDrop={(proposed) => decide({ action: 'drop', reason: proposed })}
         />
       )}

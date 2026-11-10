@@ -80,6 +80,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `ownership`   | `ours` or `theirs`        | Decides the default action: `ours`, fix first; `theirs`, post first. Either may post with `mr.diffRefs`. |
 | `status`      | `reviewing` or `complete` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`.  |
 | `mr.forge`    | `github` or `gitlab`, optional | `gitlab` when absent. On GitHub (`/tranchant comments`), `mr.project` is `owner/repo` and `mr.iid` the pull request's number; it has no `diffRefs` (refused there): its findings are replied on, never posted as comments of their own. `mr.url` names no user or password before its host, the host a reply's token goes to. |
+| `mr.viewer`   | string, optional          | Who imported its threads (`/tranchant comments`: GitHub's `viewer`, `glab api user`): the page marks their comments in a thread as theirs. |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
 | `summary`     | string                    | Markdown, shown above the findings. May be blank: with no `strengths` either, the page hides the section. While the review is `reviewing`, `summarize.mjs` writes it and `strengths`; the page shows them as they land. |
 | `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
@@ -187,6 +188,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       "reason": "…", // dropped: the reviewer's words; failed: the error
       "posted": { "discussionId": "…", "url": "…", "at": "…", "resolved": true }, // `unresolved`: why resolving the thread failed
       "reply": { "text": "…", "resolve": true, "at": "…", "failed": "…" }, // a reply on a settled finding's thread: on its way, or why it failed
+      "replies": [{ "text": "…", "url": "…", "at": "…", "resolved": true }], // the replies posted on its thread, shown in it until an import holds them
       "issue": { "title": "…", "body": "…", "url": "…", "ref": "#12", "at": "…" }, // an issue: url, ref, at once created
       "runs": [/* Run */],
       "events": [/* Event */],
@@ -308,8 +310,11 @@ it.
 | `messages[].failed`   | `true`: its agent ended, was stopped or could not start before it answered, or `/tranchant stop` ended the wait.                                                                  |
 
 The reviewer may write while the finding is `open`, `skipped`, `failed` or
-`stopped`: nothing settled, no agent on it. In any other state the discussion
-reads as it stands. A discussion holds 60 messages at most.
+`stopped`: nothing settled, no agent on it; on a finding with a `thread`,
+also once `fixed` or `posted`, the thread living on until it is resolved.
+In any other state the discussion reads as it stands. On a thread, the
+agent's `comment` is a reply: **Reply with this** opens the reply editor
+with it, for the reviewer to change and send. A discussion holds 60 messages at most.
 
 Each question starts one agent (`tranchant:ds-<id>-<review>`,
 `agents/discuss.md`), which reads the whole discussion again: one agent per
@@ -455,7 +460,12 @@ on any thread not settled otherwise, again once it is answered back;
 reviewer. `post.mjs` replies (`addPullRequestReviewThreadReply`, or a note
 on the GitLab discussion), then resolves when asked (`resolveReviewThread`,
 or the discussion `resolved`), and records the thread resolved only when
-the forge's answer says so. Nothing is pushed: name the commit in the reply
+the forge's answer says so. The page stays on the finding: the reply shows
+in the thread at once, on its way, then sent (kept in the entry's
+`replies` until an import holds it), or failed with why, and the thread's
+head turns resolved. The importer's own comments (`mr.viewer`) read as
+theirs. **Discuss** asks an agent about the comment, the thread's words
+data to it, before or after a fix or a reply. Nothing is pushed: name the commit in the reply
 once you pushed it.
 
 ## The server

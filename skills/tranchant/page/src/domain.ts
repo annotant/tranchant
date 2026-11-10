@@ -110,6 +110,8 @@ interface MergeRequest {
   iid: number
   url: string
   author?: string
+  /** Who imported its threads: their comments read as theirs. */
+  viewer?: string
   /** Required to post: a positioned comment needs all three. */
   diffRefs?: DiffRefs
 }
@@ -207,6 +209,13 @@ interface Question {
 }
 
 /** A finding's entry in decisions.json; a finding without one is `open`. */
+interface SentReply {
+  text: string
+  url: string
+  at: string
+  resolved?: boolean
+}
+
 export interface FindingRecord {
   state: State
   decision?: { action: Action; context?: string; at: string }
@@ -225,6 +234,8 @@ export interface FindingRecord {
   }
   /** A reply on a settled finding's thread: on its way, or `failed` and why; the state stays. */
   reply?: { text: string; resolve?: boolean; at: string; failed?: string }
+  /** The replies posted on its thread from the page, oldest first. */
+  replies?: SentReply[]
   /** `issue`: its title and body; `url` and `ref` (`#12`) once created. */
   issue?: { title: string; body: string; url?: string; ref?: string; at?: string }
   runs: Run[]
@@ -427,6 +438,81 @@ export function draftReply(record: FindingRecord | undefined): string {
   return record?.state === 'fixed' && fixed?.summary ? `Fixed: ${fixed.summary}` : ''
 }
 
+/** One comment as the thread view shows it: the forge's, or a reply sent from the page. */
+export interface ThreadItem {
+  author: string
+  body: string
+  at?: string
+  url?: string
+  /** Written by the one who imported the threads. */
+  mine: boolean
+  /** A reply from the page: `sending` on its way, `failed` with why, `sent` posted. */
+  sent?: 'sending' | 'failed' | 'sent'
+  failed?: string
+  resolved?: boolean
+}
+
+/**
+ * A thread's comments, then the replies sent from the page that its import
+ * does not hold yet, then the one on its way or failed.
+ */
+export function threadItems(
+  thread: Thread,
+  record: FindingRecord | undefined,
+  viewer: string | undefined,
+): ThreadItem[] {
+  const items: ThreadItem[] = thread.comments.map((one) => ({
+    ...one,
+    mine: !!viewer && one.author === viewer,
+  }))
+  const me = viewer ?? 'you'
+  const known = (reply: SentReply) =>
+    thread.comments.some(
+      (one) =>
+        one.url === reply.url ||
+        (one.author === viewer && one.body.trim() === reply.text.trim()),
+    )
+  for (const reply of record?.replies ?? []) {
+    if (known(reply)) continue
+    items.push({
+      author: me,
+      body: reply.text,
+      at: reply.at,
+      url: reply.url,
+      mine: true,
+      sent: 'sent',
+      ...(reply.resolved && { resolved: true }),
+    })
+  }
+  const first =
+    record?.decision?.action === 'post' && record.comment ? record.comment : undefined
+  if (record?.reply) {
+    items.push({
+      author: me,
+      body: record.reply.text,
+      mine: true,
+      ...(record.reply.failed
+        ? { sent: 'failed' as const, failed: record.reply.failed }
+        : { sent: 'sending' as const }),
+    })
+  } else if (first && record?.state === 'queued') {
+    items.push({ author: me, body: first, mine: true, sent: 'sending' })
+  } else if (first && record?.state === 'failed') {
+    items.push({
+      author: me,
+      body: first,
+      mine: true,
+      sent: 'failed',
+      failed: record.reason ?? 'no reason given',
+    })
+  }
+  return items
+}
+
+/** A reply from the page resolved the thread. */
+export const threadResolved = (record: FindingRecord | undefined) =>
+  !!record?.replies?.some((one) => one.resolved) || !!record?.posted?.resolved
+
 /** A finding a batch or a shortcut may post as is: it has its text. */
 export const hasComment = (finding: Pick<Finding, 'comment'> | undefined) =>
   !!finding?.comment?.trim()
@@ -552,11 +638,14 @@ const UNDECIDED: readonly State[] = ['open', 'queued', 'asking', 'failed', 'stop
 const DROP_FROM = new Set<State>([...UNDECIDED, 'skipped'])
 const SKIP_FROM = new Set<State>([...UNDECIDED, 'dropped'])
 
-// As lib/discussion.mjs: nothing settled, and no agent on the finding.
+// As lib/discussion.mjs: nothing settled, and no agent on the finding; a
+// PR/MR thread lives on once fixed or replied on.
 const DISCUSS_IN = new Set<State>(['open', 'skipped', 'failed', 'stopped'])
+const THREAD_DISCUSS_IN = new Set<State>([...DISCUSS_IN, ...REPLY_IN])
 
 /** Whether the reviewer may write in the finding's discussion: else it reads as it stands. */
-export const discussable = (state: State) => DISCUSS_IN.has(state)
+export const discussable = (state: State, finding?: Pick<Finding, 'thread'>) =>
+  (finding?.thread ? THREAD_DISCUSS_IN : DISCUSS_IN).has(state)
 
 /** The reviewer's last message waits for the agent's answer. */
 export const isWaiting = (discussion: Discussion | undefined) =>

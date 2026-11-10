@@ -255,9 +255,36 @@ const commentOf = ({ author, body, at, url }) => ({
   ...(typeof url === 'string' && /^https?:\/\//.test(url) && { url }),
 })
 
+/**
+ * Who runs the import, the page's "you": a forge user name, or nothing.
+ * @param {unknown} login
+ */
+const viewerOf = (login) =>
+  typeof login === 'string' && /^[\w.-]{1,255}$/.test(login) ? { viewer: login } : {}
+
+/**
+ * The GitLab user glab speaks for, on the origin's host; undefined, with a note, when glab cannot say.
+ * @param {string} project
+ */
+async function gitlabViewer(project) {
+  try {
+    const { stdout } = await run(glab(), ['api', 'user'], {
+      cwd: project,
+      maxBuffer: BUFFER,
+    })
+    return JSON.parse(stdout)?.username
+  } catch (error) {
+    note(
+      `glab cannot tell who you are, your own comments are not marked: ${words(error)}`,
+    )
+    return undefined
+  }
+}
+
 // GitHub: the pull request through `gh pr view`, its threads through GraphQL.
 
 const THREADS = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $after) {
@@ -303,6 +330,8 @@ async function github(project, url) {
   const [, host = 'github.com', owner = '', name = ''] = where
   /** @type {any[]} */
   const nodes = []
+  /** @type {unknown} */
+  let viewer
   let after = null
   for (let page = 0; page < MAX_PAGES; page++) {
     const ran = await runWithInput(
@@ -324,6 +353,7 @@ async function github(project, url) {
     } catch {
       return refuse(`gh answered the threads of ${pr.url} with something other than JSON`)
     }
+    viewer ??= answer?.data?.viewer?.login
     const threads = answer?.data?.repository?.pullRequest?.reviewThreads
     if (!threads) return refuse(`gh read ${pr.url} without its review threads`)
     nodes.push(...(threads.nodes ?? []))
@@ -382,6 +412,7 @@ async function github(project, url) {
       iid: pr.number,
       url: pr.url,
       author: String(pr.author?.login || 'unknown'),
+      ...viewerOf(viewer),
     },
     found,
     general: /** @type {{ author: string, body: string, url: string }[]} */ ([]),
@@ -537,6 +568,7 @@ async function gitlab(project, url) {
       iid: mr.iid,
       url: mr.web_url,
       author: String(mr.author?.username || 'unknown'),
+      ...viewerOf(await gitlabViewer(project)),
       diffRefs: {
         baseSha: refs.base_sha,
         headSha: refs.head_sha,

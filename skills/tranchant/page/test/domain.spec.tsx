@@ -6,6 +6,7 @@ import {
   applicable,
   commentedIds,
   counts,
+  discussable,
   draftIssue,
   draftReply,
   groupFindings,
@@ -16,6 +17,8 @@ import {
   type State,
   stateLabel,
   staleMrReason,
+  threadItems,
+  threadResolved,
 } from '../src/domain'
 import {
   FINDINGS,
@@ -270,4 +273,47 @@ test('a settled thread is replied on again, one reply at a time', () => {
     replyPending(record('fixed', { reply: { text: 'x', at: '', failed: 'no' } })),
   ).toBe(false)
   expect(replyPending(record('open', { reply: { text: 'x', at: '' } }))).toBe(false)
+})
+
+test("a thread's items: yours marked, a first reply on its way or failed after them", () => {
+  const thread = THREADED.thread!
+  const queued = {
+    ...record('queued'),
+    decision: { action: 'post' as const, at: '' },
+    comment: 'On it',
+  }
+  expect(
+    threadItems(thread, queued, 'me').map(({ author, mine, sent }) => [
+      author,
+      mine,
+      sent,
+    ]),
+  ).toEqual([
+    ['alice', false, undefined],
+    ['me', true, undefined],
+    ['me', true, 'sending'],
+  ])
+  const failed = { ...queued, state: 'failed' as const, reason: 'token expired' }
+  expect(threadItems(thread, failed, undefined).at(-1)).toMatchObject({
+    author: 'you',
+    body: 'On it',
+    sent: 'failed',
+    failed: 'token expired',
+  })
+  // Nobody known as the viewer: nobody's comment reads as theirs.
+  expect(threadItems(thread, undefined, undefined).some((one) => one.mine)).toBe(false)
+  expect(
+    threadResolved({
+      ...record('posted'),
+      replies: [{ text: 'x', url: 'u', at: '', resolved: true }],
+    }),
+  ).toBe(true)
+  expect(threadResolved(record('posted'))).toBe(false)
+})
+
+test('a thread is discussed once fixed or replied on; another finding is not', () => {
+  expect(discussable('posted', THREADED)).toBe(true)
+  expect(discussable('fixed', THREADED)).toBe(true)
+  expect(discussable('fixed', FINDINGS[0])).toBe(false)
+  expect(discussable('queued', THREADED)).toBe(false)
 })

@@ -17,6 +17,9 @@ released to the `stable` branch.
   (the comment its fenced brief), reply on the thread from the page,
   prefilled after a fix, and resolve it if you choose, move it to an issue
   or skip it. Run it again to pull new comments in, your decisions kept.
+  Your own comments are marked in the thread, your replies show in it as
+  soon as you send them, and an agent can discuss a comment with you,
+  drafting a reply you edit and send.
 
 - **Unfold the diff's context.** Above, between and below the hunks, a bar
   says how many lines the diff hides (below the last one, that there are
@@ -25,6 +28,12 @@ released to the `stable` branch.
   highlighted, and a finding on one moves from the file's header to its
   line. The server reads them at the diff's head, only for a file of the
   diff (`GET /api/lines`).
+
+### Changed
+
+- **Posting stays on the finding.** After a comment or a reply, the page no
+  longer moves to the next finding: you watch it land, as with an issue.
+  Fix, Drop and Skip still move on.
 
 ## 0.3.1 - 2026-11-08
 

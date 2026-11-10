@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
 import { withFileLock } from './filelock.mjs'
-import { stateWords } from './format.mjs'
+import { REPLY_IN, stateWords } from './format.mjs'
 import { StoreRefusal, createStore } from './store.mjs'
 
 /** @typedef {import('./format.mjs').State} State */
@@ -27,6 +27,8 @@ const DISCUSSION_VERSION = 1
  */
 const DISCUSS_IN = ['open', 'skipped', 'failed', 'stopped']
 const DISCUSSABLE = new Set(DISCUSS_IN)
+/** A PR/MR thread lives on once fixed or replied on: its reviewer may answer back. */
+const THREAD_DISCUSSABLE = new Set([...DISCUSS_IN, ...REPLY_IN])
 const MAX_MESSAGES = 60
 const MAX_QUESTION = 4000
 const MAX_ANSWER = 8000
@@ -158,12 +160,13 @@ export async function say(dir, id, text) {
   if (!question) throw new StoreRefusal('the message is empty')
   const store = createStore(dir)
   const review = await store.readReview()
-  if (!review.findings.some((one) => one.id === id))
-    throw new StoreRefusal(`no finding ${id} in the review`)
+  const finding = review.findings.find((one) => one.id === id)
+  if (!finding) throw new StoreRefusal(`no finding ${id} in the review`)
+  const discussable = finding.thread ? THREAD_DISCUSSABLE : DISCUSSABLE
   return changeDiscussion(dir, id, async (discussion) => {
     // Read under the discussion's lock: as close to the write as it gets.
     const state = (await store.readDecisions()).findings[id]?.state ?? 'open'
-    if (!DISCUSSABLE.has(state))
+    if (!discussable.has(state))
       throw new StoreRefusal(`finding ${id} is ${stateWords(state)}: no discussion now`)
     if (isWaiting(discussion))
       throw new StoreRefusal('the agent is still answering the last message')

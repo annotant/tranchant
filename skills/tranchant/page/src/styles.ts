@@ -567,7 +567,14 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-thread-comments { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .tr-thread-comment { padding: 8px 12px; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg-2); overflow-wrap: anywhere; }
 .tr-thread-comment + .tr-thread-comment { margin-left: 16px; }
-.tr-thread-meta { margin: 0 0 4px; font-size: 13px; }
+.tr-thread-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; }
+.tr-thread-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.tr-thread-head--resolved { color: var(--tr-auto); font-weight: 600; }
+.tr-thread-comment--mine { background: var(--tr-accent-weak); border-color: var(--tr-accent); box-shadow: inset 3px 0 0 var(--tr-accent); }
+.tr-thread-comment--sending { border-style: dashed; }
+.tr-thread-comment--failed { background: var(--tr-danger-bg); border-color: var(--tr-danger); box-shadow: inset 3px 0 0 var(--tr-danger); }
+.tr-thread-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 0; font-size: 12px; }
+.tr-chip--you { height: 18px; padding: 0 7px; font-size: 11px; background: var(--tr-accent); color: var(--tr-on-accent); }
 
 .tr-steps { max-height: 260px; overflow: auto; margin: 0; padding: 6px 10px; list-style: none; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg-2); font-size: 13px; }
 .tr-step { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
