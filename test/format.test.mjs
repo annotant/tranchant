@@ -105,17 +105,20 @@ test('postBlocker: posting needs the MR’s diff refs at the commit reviewed', a
   )
 })
 
-test('a review may have no finding only while it is reviewing', async () => {
+test('a review may have no finding only while it is not complete', async () => {
   const review = await fixture('ours')
   review.findings = []
   assert.deepEqual(validateReview(review), ['findings: at least one is required'])
   assert.equal(statusOf(review), 'complete')
-  review.status = 'reviewing'
-  assert.deepEqual(validateReview(review), [])
-  assert.equal(statusOf(review), 'reviewing')
+  for (const status of ['preparing', 'reviewing', 'refused']) {
+    review.status = status
+    assert.deepEqual(validateReview(review), [], status)
+    assert.equal(statusOf(review), status)
+  }
   review.status = 'done'
+  assert.equal(statusOf(review), 'complete')
   assert.deepEqual(validateReview(review), [
-    'status: reviewing or complete',
+    'status: preparing, reviewing, complete or refused',
     'findings: at least one is required',
   ])
   review.status = 'reviewing'

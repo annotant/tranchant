@@ -29,6 +29,7 @@ import {
   replyPending,
   repliesOn,
   stateWords,
+  isSettled,
   statusOf,
   validateEnvelope,
   validateFinding,
@@ -537,6 +538,9 @@ export function createStore(dir) {
         if (statusOf(review) === 'complete') {
           throw new StoreRefusal('the review is complete: nothing can be added')
         }
+        if (statusOf(review) === 'refused') {
+          throw new StoreRefusal('the review was refused: nothing can be added')
+        }
         // Only a verifier verifies: a finding lands unverified, whatever it says.
         const { verified: _verified, ...landed } = finding
         await writeFinding({ ...landed, addedAt: new Date().toISOString() })
@@ -617,8 +621,8 @@ export function createStore(dir) {
         throw new StoreRefusal(`strengths: ${MAX_STRENGTH} characters each at most`)
       return withFileLock(reviewFile, async () => {
         const envelope = await readEnvelope()
-        if (statusOf(envelope) === 'complete') {
-          throw new StoreRefusal('the review is complete: its summary stays')
+        if (isSettled(envelope)) {
+          throw new StoreRefusal(`the review is ${statusOf(envelope)}: its summary stays`)
         }
         await writeEnvelope({
           ...envelope,
@@ -639,7 +643,40 @@ export function createStore(dir) {
         if (statusOf(envelope) === 'complete') {
           throw new StoreRefusal('the review is complete already')
         }
+        if (statusOf(envelope) === 'refused') {
+          throw new StoreRefusal('the review was refused: it never ran')
+        }
         await writeEnvelope({ ...envelope, status: 'complete' })
+      })
+    },
+
+    /**
+     * The Lenses step built every lens: the review runs, `reviewing`, and
+     * records the lenses it runs. Refused unless it is `preparing`.
+     * @param {import('./format.mjs').LensRecord[]} lenses
+     * @returns {Promise<void>}
+     */
+    prepared(lenses) {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        if (statusOf(envelope) !== 'preparing')
+          throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
+        await writeEnvelope({ ...envelope, status: 'reviewing', lenses })
+      })
+    },
+
+    /**
+     * A lens could not be built: the review is `refused`, with why, and no
+     * reviewer starts. Refused unless it is `preparing`.
+     * @param {import('./format.mjs').Refusal} refusal
+     * @returns {Promise<void>}
+     */
+    refuse(refusal) {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        if (statusOf(envelope) !== 'preparing')
+          throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
+        await writeEnvelope({ ...envelope, status: 'refused', refusal })
       })
     },
 

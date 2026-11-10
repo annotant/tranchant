@@ -22,6 +22,7 @@ const CHANGES = '/api/changes/'
 const ACCOUNT = '/api/account'
 const TRACKER = '/api/tracker'
 const SETTINGS = '/api/settings'
+const USE_RECIPE = '/api/recipe/use'
 
 /** How often the page asks again once the server stopped answering. */
 export const RETRY_MS = 5000
@@ -314,7 +315,21 @@ export function useSettings() {
     return saving.current
   }, [])
   const dismiss = useCallback(() => setError(undefined), [])
-  return { payload, loaded, unavailable, error, save, dismiss, reload }
+  /** Use this recipe: an imported recipe put in force at its location. */
+  const applyRecipe = useCallback(async (id: string) => {
+    try {
+      const used = await request<{ settings: SettingsPayload }>(USE_RECIPE, {
+        method: 'POST',
+        body: JSON.stringify({ id }),
+      })
+      latest.current = used.settings
+      setPayload(used.settings)
+      setError(undefined)
+    } catch (refusal) {
+      setError(refusal instanceof Error ? refusal.message : 'The recipe was not used.')
+    }
+  }, [])
+  return { payload, loaded, unavailable, error, save, dismiss, reload, applyRecipe }
 }
 
 /**

@@ -13,7 +13,10 @@
 // It computes the change's diff (/api/diff) once, with git, for the page's main view,
 // and serves the text of its files at its head (/api/lines), for the lines its hunks hide.
 // It serves and writes the user's settings (/api/settings, lib/settings.mjs),
-// one write at a time, and pushes `settings` when the file changes.
+// one write at a time, with the recipe in force and the recipes imported for
+// the project (lib/imports.mjs), one of which /api/recipe/use puts in force;
+// it pushes `settings` when the file or the imports change. It serves the
+// Lenses step's progress (lenses.json) with the review.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -27,14 +30,14 @@ import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
 import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
+import { ImportRefusal, importsDir, listImports, useImport } from './lib/imports.mjs'
+import { describeRecipe } from './lib/lens.mjs'
 import {
   DEFAULTS,
   SETTINGS_DIR,
   SETTINGS_FILE,
   SettingsRefusal,
   loadSettings,
-  recipeInForce,
-  recipeLenses,
   writeSettings,
 } from './lib/settings.mjs'
 import { trackerOf } from './lib/tracker.mjs'
@@ -321,25 +324,40 @@ function trackerOnce(values) {
 
 /**
  * What `GET /api/settings` answers: the file as it stands, the values in
- * force, the keys an environment variable locks, and the lenses of the
- * recipe in force, which the page lists to turn off.
+ * force, the keys an environment variable locks, the recipe in force for
+ * this review's project (where it comes from, its lenses and their sources,
+ * which the page lists to turn off) and the recipes imported for it.
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
-  const recipe = recipeInForce(values)
-  const lenses = await recipeLenses(recipe)
+  const [recipe, imports] = await Promise.all([
+    describeRecipe({ project, base: review.base, settings: values.recipe }),
+    listImports(project).catch((error) => {
+      console.error(`tranchant server: imports unreadable: ${oneLine(String(error))}`)
+      return []
+    }),
+  ])
   return {
     path: SETTINGS_FILE,
     settings,
     values,
     defaults: DEFAULTS,
     locked,
-    recipe,
-    lenses: lenses.lenses,
-    ...(lenses.problem && { recipeProblem: lenses.problem }),
+    recipe: recipe.file,
+    recipeFrom: recipe.from,
+    recipeLenses: recipe.lenses,
+    lenses: recipe.lenses.map((lens) => lens.name),
+    imports,
+    ...(recipe.problem && { recipeProblem: recipe.problem }),
     ...(problem && { problem }),
   }
 }
+
+/** The Lenses step's progress, as lenses.mjs writes it; undefined before it starts. */
+const readLensesStep = () =>
+  readFile(path.join(dir, 'lenses.json'), 'utf8')
+    .then((json) => JSON.parse(json))
+    .catch(() => undefined)
 
 /** The most MiB of diff the server reads from git and hands the page. */
 const MAX_DIFF_MIB = Number(process.env.TRANCHANT_MAX_DIFF_MIB ?? 32)
@@ -862,16 +880,18 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
     // Read anew: findings land and the status flips while the review runs.
-    const [{ review: latest, decisions }, runs, agents, discussions, current] =
+    const [{ review: latest, decisions }, runs, agents, discussions, current, lenses] =
       await Promise.all([
         store.readAll(),
         store.runs(),
         readReviewAgents(dir),
         readDiscussions(dir),
         currentHead(),
+        readLensesStep(),
       ])
     return send(res, 200, {
       review: latest,
+      ...(lenses && { lenses }),
       findings: decisions.findings,
       runs,
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
@@ -1029,6 +1049,21 @@ async function handle(req, res) {
     const discussion = await say(dir, input.id, text(input.text) ?? '')
     print(`DISCUSS ${input.id}`)
     return send(res, 200, { discussion })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/recipe/use') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id)) {
+      return send(res, 400, { error: 'id is required' })
+    }
+    try {
+      const used = await useImport(project, input.id)
+      void importsChanged()
+      return send(res, 200, { ...used, settings: await settingsPayload() })
+    } catch (error) {
+      if (error instanceof ImportRefusal) return send(res, 409, { error: error.message })
+      throw error
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
@@ -1281,6 +1316,13 @@ async function changes() {
     )
     agents.push(`${name} ${file}`)
   }
+  // The Lenses step's rows, which change before any agent starts.
+  agents.push(
+    `lenses.json ${await stat(path.join(dir, 'lenses.json')).then(
+      (one) => `${one.size} ${one.mtimeMs}`,
+      () => '',
+    )}`,
+  )
   const agentsNow = agents.join('\n')
   const summary = latest
     ? JSON.stringify([latest.summary, latest.strengths])
@@ -1382,6 +1424,30 @@ function pageChanged(_event, file) {
     pageSeen = built
     for (const res of listeners) res.write('event: page\ndata: {}\n\n')
   }, BATCH_MS)
+}
+
+/** The imports' folders and their files' times at the last look: an import that ends changes the page's Settings. */
+let importsSeen = ''
+
+/** Tells the pages the imports changed, when they did since the last look. */
+async function importsChanged() {
+  const root = importsDir(project)
+  const marks = []
+  for (const id of (await readdir(root).catch(() => [])).toSorted((a, b) =>
+    a.localeCompare(b),
+  )) {
+    for (const name of ['import.json', 'recipe.json']) {
+      const mark = await stat(path.join(root, id, name)).then(
+        (one) => `${one.size} ${one.mtimeMs}`,
+        () => '',
+      )
+      marks.push(`${id}/${name} ${mark}`)
+    }
+  }
+  const now = marks.join('\n')
+  if (now === importsSeen) return
+  importsSeen = now
+  for (const res of listeners) res.write('event: settings\ndata: {}\n\n')
 }
 
 /** The settings file's size and time at the last look, or '' while it is missing. */
@@ -1550,9 +1616,11 @@ server.listen(port, '127.0.0.1', async () => {
   watchFolders()
   await resumeQueued()
   await refreshNext()
+  await importsChanged()
   setInterval(() => {
     watchFolders()
     settingsChanged()
+    void importsChanged()
     void refreshNext()
   }, pollMs)
 })

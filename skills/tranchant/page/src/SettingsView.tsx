@@ -1,9 +1,11 @@
 import { type ReactNode, useState } from 'react'
 import { type SettingsChange, useAccount } from './api'
 import {
+  type ImportedRecipe,
   isChanged,
   KNOWN_MODELS,
   MAX_AGENTS,
+  type RecipeFrom,
   type SettingKey,
   type SettingsPayload,
   type SettingsValues,
@@ -22,6 +24,140 @@ interface Props {
   onDismiss: () => void
   /** Saves the file as `change` makes it from the file as it stands. */
   onSave: (change: SettingsChange) => void
+  /** Use this recipe: puts an imported recipe in force. */
+  onUseRecipe?: (id: string) => void
+}
+
+const IGNORE = () => undefined
+
+const FROM_WORDS: Record<RecipeFrom, string> = {
+  run: 'this run',
+  local: 'your local recipe, outside the repository',
+  project: "the project's .tranchant/recipe.json, read at the review's base",
+  settings: 'the settings',
+  plugin: "the plugin's",
+}
+
+/** The recipe in force: where it comes from, and each lens with its source and its status. */
+function RecipeInForce({ settings }: { settings: SettingsPayload }) {
+  const lenses = settings.recipeLenses ?? []
+  return (
+    <div className="tr-setting">
+      <div>
+        <div className="tr-setting-label" id="tr-setting-in-force">
+          Recipe in force
+        </div>
+        <p className="tr-setting-help">
+          From {FROM_WORDS[settings.recipeFrom ?? 'plugin']}:{' '}
+          <code>{settings.recipe}</code>. Each lens is built from its source at every
+          review.
+        </p>
+      </div>
+      <div className="tr-setting-control">
+        {settings.recipeProblem ? (
+          <p className="tr-recipe-problem">{settings.recipeProblem}</p>
+        ) : (
+          <ul className="tr-recipe-lenses" aria-labelledby="tr-setting-in-force">
+            {lenses.map((lens) => (
+              <li key={lens.name}>
+                <strong>{lens.name}</strong>
+                <code>{lens.source}</code>
+                {lens.problem ? (
+                  <span className="tr-recipe-problem">
+                    cannot be built: {lens.problem}
+                    {lens.fix && ` (${lens.fix})`}
+                  </span>
+                ) : (
+                  <span className="tr-muted">ready</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const TO_WORDS = {
+  project: 'for the team, committed with the code',
+  local: 'for you alone, outside the repository',
+}
+
+/** A recipe `/tranchant import` wrote, shown whole before Use this recipe puts it in force. */
+function Imported({
+  one,
+  frozen,
+  onUse,
+}: {
+  one: ImportedRecipe
+  frozen: boolean
+  onUse: (id: string) => void
+}) {
+  return (
+    <li className="tr-import" aria-label={`Recipe imported from ${one.source}`}>
+      <div className="tr-import-head">
+        <strong>
+          From <code>{one.source}</code>
+          {one.version && ` ${one.version}`}
+        </strong>
+        <span className="tr-muted">
+          {one.state === 'importing'
+            ? 'the import agent is writing it…'
+            : `to ${one.target}, ${TO_WORDS[one.to]}`}
+        </span>
+        {one.state === 'ready' && (
+          <button
+            type="button"
+            className="tr-btn tr-btn--primary"
+            disabled={frozen}
+            onClick={() => onUse(one.id)}
+          >
+            Use this recipe
+          </button>
+        )}
+      </div>
+      {one.state === 'failed' && (
+        <p className="tr-recipe-problem">It cannot be used: {one.reason}</p>
+      )}
+      {one.lenses.length > 0 && (
+        <ul className="tr-recipe-lenses" aria-label="Its lenses">
+          {one.extends && (
+            <li className="tr-muted">Tranchant's own lenses, beside these:</li>
+          )}
+          {one.lenses.map((lens) => (
+            <li key={lens.name}>
+              <strong>{lens.name}</strong>
+              <code>{lens.source}</code>
+              {lens.skills?.length ? (
+                <span className="tr-muted">with {lens.skills.join(', ')}</span>
+              ) : null}
+              {lens.paths.length > 0 && lens.paths.join() !== '**' && (
+                <span className="tr-muted">on {lens.paths.join(', ')}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {one.leftOut.length > 0 && (
+        <ul className="tr-recipe-lenses" aria-label="Left out">
+          <li className="tr-muted">Left out, as no lens can do it:</li>
+          {one.leftOut.map((part) => (
+            <li key={part.what}>
+              <strong>{part.what}</strong>
+              <span className="tr-muted">{part.why}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {one.to === 'project' && one.state === 'ready' && (
+        <p className="tr-muted">
+          A project recipe is read at the base of each review: commit it, and it reviews
+          the changes made after it.
+        </p>
+      )}
+    </li>
+  )
 }
 
 /** A key whose value is a string the person types. */
@@ -188,6 +324,7 @@ export function SettingsView({
   error,
   onDismiss,
   onSave,
+  onUseRecipe = IGNORE,
 }: Props) {
   if (!settings) {
     return (
@@ -385,9 +522,24 @@ export function SettingsView({
       </section>
       <section className="tr-section" aria-labelledby="tr-settings-review">
         <h3 id="tr-settings-review">Review</h3>
+        <RecipeInForce settings={settings} />
         {text('recipe', PLUGIN_RECIPE)}
         {row('disabledLenses', lensesControl)}
       </section>
+      {(settings.imports ?? []).length > 0 && (
+        <section className="tr-section" aria-labelledby="tr-settings-imports">
+          <h3 id="tr-settings-imports">Imported recipes</h3>
+          <p className="tr-muted">
+            /tranchant import wrote these from a review process; none is used until you
+            say so.
+          </p>
+          <ul className="tr-recipe-lenses">
+            {(settings.imports ?? []).map((one) => (
+              <Imported key={one.id} one={one} frozen={offline} onUse={onUseRecipe} />
+            ))}
+          </ul>
+        </section>
+      )}
       <section className="tr-section" aria-labelledby="tr-settings-posting">
         <h3 id="tr-settings-posting">Posting</h3>
         {segment('postWith')}

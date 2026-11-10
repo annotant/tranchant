@@ -35,6 +35,7 @@ import {
 } from './domain'
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
+import { LensesStep } from './LensesStep'
 import { ReviewAgents } from './ReviewAgents'
 import type { View } from './settings'
 import { SettingsView } from './SettingsView'
@@ -142,7 +143,14 @@ function Header({
               aria-label="Review in progress"
             >
               <span className="tr-spinner" aria-hidden="true" />
-              review in progress · {plural(review.findings.length, 'finding')} so far
+              {review.status === 'preparing'
+                ? 'building the lenses'
+                : `review in progress · ${plural(review.findings.length, 'finding')} so far`}
+            </span>
+          )}
+          {review.status === 'refused' && (
+            <span className="tr-chip tr-chip--warn" role="status">
+              review refused
             </span>
           )}
         </div>
@@ -546,6 +554,7 @@ export default function App() {
           error={settings.error}
           onDismiss={settings.dismiss}
           onSave={(change) => void settings.save(change)}
+          onUseRecipe={(id) => void settings.applyRecipe(id)}
         />
       </div>
     )
@@ -571,6 +580,7 @@ export default function App() {
     />
   )
   const reviewing = isReviewing(review)
+  const refused = review?.status === 'refused'
   const detail = current ? (
     <FindingDetail
       key={current.id}
@@ -593,14 +603,22 @@ export default function App() {
     />
   ) : (
     <p className="tr-muted">
-      {reviewing ? 'Waiting for the first finding…' : 'No finding.'}
+      {refused
+        ? 'No reviewer ran: the review was refused.'
+        : reviewing
+          ? 'Waiting for the first finding…'
+          : 'No finding.'}
     </p>
   )
   const empty = (
     <p className="tr-empty tr-muted">
-      {reviewing
-        ? 'The review is running: findings appear here as they land.'
-        : 'No findings.'}
+      {refused
+        ? 'No reviewer ran: a lens could not be built. The Lenses step above says why.'
+        : review?.status === 'preparing'
+          ? 'Building the lenses: findings appear here once the reviewers start.'
+          : reviewing
+            ? 'The review is running: findings appear here as they land.'
+            : 'No findings.'}
     </p>
   )
 
@@ -612,8 +630,9 @@ export default function App() {
         </div>
       )}
       {header}
+      <LensesStep step={payload?.lenses} review={review} />
       <ReviewAgents
-        agents={(payload?.reviewers ?? []).map((agent) =>
+        agents={(refused ? [] : (payload?.reviewers ?? [])).map((agent) =>
           // An agent whose end step was never written ended with its review all the same.
           reviewing ? agent : { ...agent, running: false },
         )}

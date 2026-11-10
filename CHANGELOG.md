@@ -7,6 +7,28 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Your team's review process, as lenses.** `/tranchant import [<source>]`
+  reads a skill and the agents it starts, an agent or a file, and writes a
+  recipe that references them, in the project (`.tranchant/recipe.json`,
+  shared) or for you alone; the page's Settings show it, with what could not
+  become a lens, before **Use this recipe** puts it in force.
+- **Lenses rebuilt at every review.** `/tranchant review` builds each lens
+  from its source (a plugin's skill or agent, a path, or one of Tranchant's,
+  with an add-on), wrapped in a shared contract, before any reviewer starts:
+  the page shows the step, lens by lens, and what changed since the last
+  review. A source that cannot be found refuses the review, with the reason
+  and the fix, on the page and in the terminal. A recipe can set a lens's
+  model, its topics, the skills it reads, and extend Tranchant's own lenses.
+
+### Changed
+
+- The project's recipe is read at the review's base, never from the change
+  under review; the local recipe and the project's come before the
+  settings'. The Settings show the recipe in force, where it comes from, and
+  each lens's source and status.
+
 ## 0.4.0 - 2026-11-10
 
 ### Added
