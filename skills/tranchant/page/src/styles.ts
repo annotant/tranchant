@@ -226,7 +226,8 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-lens-row-reason { grid-column: 2 / -1; margin: 0; color: var(--tr-danger); font-size: 12.5px; }
 .tr-recipe-lenses { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; width: 100%; }
 .tr-recipe-lenses li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; }
-.tr-recipe-lenses code { color: var(--tr-muted); font-size: 12px; }
+.tr-recipe-lenses code { color: var(--tr-muted); font-size: 12px; overflow-wrap: anywhere; }
+.tr-setting-help code { overflow-wrap: anywhere; }
 .tr-recipe-problem { color: var(--tr-danger); font-size: 12.5px; }
 .tr-import { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 10px 12px; border: 1px solid var(--tr-border); border-radius: 8px; }
 .tr-import-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
