@@ -23,7 +23,11 @@ import {
   oneLine,
   parseDecisions,
   postBlocker,
+  forgeOf,
   problemsText,
+  REPLY_IN,
+  replyPending,
+  repliesOn,
   stateWords,
   statusOf,
   validateEnvelope,
@@ -51,6 +55,8 @@ const MAX_REVIEW_SUMMARY = 12_000
 const MAX_STRENGTHS = 10
 const MAX_STRENGTH = 500
 const MAX_TEXT = 4000
+/** The replies a finding's thread keeps: the page shows them until a refresh reads them. */
+const MAX_REPLIES = 50
 /** An issue's title and body: GitLab caps a title at 255 characters, GitHub a body at 65,536. */
 export const MAX_ISSUE_TITLE = 255
 export const MAX_ISSUE_BODY = 60_000
@@ -260,10 +266,11 @@ export function createStore(dir) {
    * @param {boolean} theirs
    * @param {string} where
    * @param {string} [id]
+   * @param {string} [forge] The review's PR/MR's.
    * @returns {Finding | undefined}
    */
-  function soundFinding(value, theirs, where, id) {
-    const problems = validateFinding(value, { theirs, where })
+  function soundFinding(value, theirs, where, id, forge) {
+    const problems = validateFinding(value, { theirs, where, forge })
     const sound = problems.length === 0 ? value : undefined
     if (sound && (id === undefined || sound.id === id)) return sound
     const why = sound
@@ -302,13 +309,25 @@ export function createStore(dir) {
         }
         continue
       }
-      const finding = soundFinding(value, theirs, `findings/${name}`, id)
+      const finding = soundFinding(
+        value,
+        theirs,
+        `findings/${name}`,
+        id,
+        forgeOf(envelope),
+      )
       if (finding) found.push(finding)
     }
     if (found.length || !Array.isArray(envelope.findings))
       return found.toSorted(byArrival)
     return envelope.findings.flatMap((finding, i) => {
-      const sound = soundFinding(finding, theirs, `review.json findings[${i}]`)
+      const sound = soundFinding(
+        finding,
+        theirs,
+        `review.json findings[${i}]`,
+        undefined,
+        forgeOf(envelope),
+      )
       return sound ? [sound] : []
     })
   }
@@ -333,7 +352,7 @@ export function createStore(dir) {
     await rename(temp, target)
   }
 
-  /** @param {Review} envelope */
+  /** @param {Omit<Review, 'findings'> & { findings?: Finding[] }} envelope */
   async function writeEnvelope(envelope) {
     const temp = `${reviewFile}.${process.pid}.tmp`
     await writeFile(temp, `${JSON.stringify(envelope, null, 2)}\n`)
@@ -505,6 +524,7 @@ export function createStore(dir) {
         const review = await readReview()
         const problems = validateFinding(finding, {
           theirs: review.ownership === 'theirs',
+          forge: forgeOf(review),
         })
         if (problems.length) throw new StoreRefusal(problemsText(problems))
         const known = review.findings.find((one) => one.id === finding.id)
@@ -521,6 +541,56 @@ export function createStore(dir) {
         const { verified: _verified, ...landed } = finding
         await writeFinding({ ...landed, addedAt: new Date().toISOString() })
         return { id: finding.id, added: true }
+      })
+    },
+
+    /**
+     * The producer imports its review again (`open.mjs --refresh`): the
+     * envelope is replaced, its `createdAt` kept; each finding new or changed
+     * is written, keeping its `addedAt`, unless an agent holds it (`queued`,
+     * `working`, `asking`): the reviewer decided on what they read; one the
+     * new import lacks stays, as do the decisions. Refused unless it is the
+     * same PR/MR of the same project.
+     * @param {Review} review
+     * @returns {Promise<{ added: number, updated: number, kept: number }>}
+     */
+    refresh(review) {
+      return withFileLock(reviewFile, async () => {
+        const known = await readReview()
+        if (
+          known.project !== review.project ||
+          !known.mr ||
+          known.mr.url !== review.mr?.url
+        )
+          throw new StoreRefusal(
+            `id ${review.id} exists for another change: refresh only the same PR/MR`,
+          )
+        const { findings, ...envelope } = review
+        const decided = (await readDecisions()).findings
+        await writeEnvelope({ ...envelope, createdAt: known.createdAt })
+        let added = 0
+        let updated = 0
+        let kept = 0
+        const base = Date.now()
+        for (const [i, finding] of findings.entries()) {
+          const there = known.findings.find((one) => one.id === finding.id)
+          if (there && contentOf(there) === contentOf(finding)) continue
+          const state = decided[finding.id]?.state
+          if (
+            there &&
+            (state === 'queued' || state === 'working' || state === 'asking')
+          ) {
+            kept++
+            continue
+          }
+          if (there) updated++
+          else added++
+          await writeFinding({
+            ...finding,
+            addedAt: there?.addedAt ?? new Date(base + i).toISOString(),
+          })
+        }
+        return { added, updated, kept }
       })
     },
 
@@ -595,6 +665,7 @@ export function createStore(dir) {
         }
         const problems = validateFinding(amended, {
           theirs: review.ownership === 'theirs',
+          forge: forgeOf(review),
         })
         if (problems.length) throw new StoreRefusal(problemsText(problems))
         // Under the decisions' lock: no decision lands between the check and the write.
@@ -650,14 +721,22 @@ export function createStore(dir) {
      * agent follows), a post (with the `comment` as they edited it), an issue
      * (with its `title` and `body`), a drop (with their `reason`) or a skip. A
      * post needs the MR's `diffRefs` at the commit reviewed, whatever the
-     * ownership; a question is answered with `answer`, not decided again.
+     * ownership; on a finding from a PR/MR thread, it is a reply on the
+     * thread instead, written by the reviewer (`comment`), `resolve` it once
+     * posted, and a `fixed` one may still be replied on. A question is
+     * answered with `answer`, not decided again.
      * @param {string} id
-     * @param {{ action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, reason?: string, title?: string, body?: string }} decision
+     * @param {{ action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, reason?: string, title?: string, body?: string }} decision
      * @returns {Promise<Entry>}
      */
-    decide(id, { action, context, comment, reason, title, body }) {
+    decide(id, { action, context, comment, resolve, reason, title, body }) {
       return changeOne(id, (entry, finding, known) => {
-        if (action === 'post') {
+        const reply = action === 'post' && repliesOn(finding)
+        if (reply && !known.mr) {
+          throw new StoreRefusal('post refused: the review has no PR/MR to reply on')
+        } else if (reply && !comment?.trim()) {
+          throw new StoreRefusal(`post refused: the reply on ${id}'s thread is empty`)
+        } else if (action === 'post' && !reply) {
           const blocker = postBlocker(known)
           if (blocker) throw new StoreRefusal(`post refused: ${blocker}`)
           if (!comment?.trim() && !finding.comment) {
@@ -667,12 +746,26 @@ export function createStore(dir) {
         if (action === 'issue' && (!title?.trim() || !body?.trim())) {
           throw new StoreRefusal(`issue refused: finding ${id} needs a title and a body`)
         }
+        if (reply && REPLY_IN.includes(entry.state)) {
+          // Settled already: the reply is a record of its own, the state stays.
+          if (replyPending(entry))
+            throw new StoreRefusal(
+              `post refused: a reply on ${id}'s thread is on its way`,
+            )
+          entry.reply = {
+            text: (comment?.trim() ?? '').slice(0, MAX_TEXT),
+            ...(resolve === true ? { resolve: true } : {}),
+            at: new Date().toISOString(),
+          }
+          return entry
+        }
         const at = apply(id, entry, action, { by: 'reviewer' })
         entry.decision = {
           action,
           ...(action === 'fix' && context?.trim()
             ? { context: context.trim().slice(0, MAX_TEXT) }
             : {}),
+          ...(reply && resolve === true ? { resolve: true } : {}),
           at,
         }
         delete entry.reason
@@ -826,15 +919,34 @@ export function createStore(dir) {
     },
 
     /**
-     * The comment is on the MR.
+     * The comment is on the MR, or the reply on its thread: `resolved` once
+     * the thread was resolved too, `unresolved` why it could not be.
      * @param {string} id
-     * @param {{ discussionId: string, url: string }} where
+     * @param {{ discussionId: string, url: string, resolved?: boolean, unresolved?: string }} where
      * @returns {Promise<Entry>}
      */
-    posted(id, { discussionId, url }) {
-      return changeOne(id, (entry) => {
-        const at = apply(id, entry, 'posted', { by: 'server' })
-        entry.posted = { discussionId, url, at }
+    posted(id, { discussionId, url, resolved, unresolved }) {
+      return changeOne(id, (entry, finding) => {
+        const settled = replyPending(entry)
+        const text = settled ? entry.reply?.text : entry.comment
+        const at = settled
+          ? new Date().toISOString()
+          : apply(id, entry, 'posted', { by: 'server' })
+        if (settled) delete entry.reply
+        // The thread shows it at once; a refresh brings it from the forge too.
+        if (finding.thread && text) {
+          entry.replies = [
+            ...(entry.replies ?? []),
+            { text, url, at, ...(resolved ? { resolved: true } : {}) },
+          ].slice(-MAX_REPLIES)
+        }
+        entry.posted = {
+          discussionId,
+          url,
+          at,
+          ...(resolved ? { resolved: true } : {}),
+          ...(unresolved ? { unresolved: unresolved.slice(0, MAX_TEXT) } : {}),
+        }
         delete entry.reason
         return entry
       })
@@ -866,6 +978,11 @@ export function createStore(dir) {
      */
     fail(id, reason, { by = 'server' } = {}) {
       return changeOne(id, async (entry) => {
+        // A reply on a settled finding fails on its own: the fix stays.
+        if (replyPending(entry) && entry.reply) {
+          entry.reply.failed = reason.trim().slice(0, MAX_TEXT)
+          return entry
+        }
         const run = currentRun(entry)
         const at = apply(id, entry, 'fail', { by, run: run?.id, agent: run?.agent })
         entry.reason = reason.trim().slice(0, MAX_TEXT)

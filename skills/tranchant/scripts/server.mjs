@@ -25,7 +25,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
-import { oneLine, postBlocker, statusOf } from './lib/format.mjs'
+import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
 import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
 import {
   DEFAULTS,
@@ -161,7 +161,7 @@ const text = (value, max = MAX_TEXT) =>
 /**
  * One decision of a batch, as the page sends it; undefined when it is not one.
  * @param {any} input
- * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, reason?: string, title?: string, body?: string } | undefined}
+ * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, reason?: string, title?: string, body?: string } | undefined}
  */
 function sanitiseDecision(input) {
   if (!input || typeof input !== 'object') return undefined
@@ -172,6 +172,7 @@ function sanitiseDecision(input) {
     action,
     context: text(input.context),
     comment: text(input.comment),
+    resolve: input.resolve === true,
     reason: text(input.reason),
     title: text(input.title, MAX_ISSUE_TITLE),
     body: text(input.body, MAX_ISSUE_BODY),
@@ -302,7 +303,10 @@ function trackerOnce(values) {
   const key = forge ?? 'auto'
   let tracker = trackers.get(key)
   if (tracker) return tracker
-  tracker = trackerOf(project, { gitlab: !!review.mr, forge }).then(
+  tracker = trackerOf(project, {
+    gitlab: !!review.mr && review.mr.forge !== 'github',
+    forge,
+  }).then(
     ({ kind, web, prefix }) => ({ kind, web, prefix }),
     (error) => {
       const reason = String(error?.message ?? error)
@@ -804,7 +808,7 @@ async function changesOf(id) {
 /** @type {Promise<ComputedDiff> | undefined} */
 let diff
 
-/** The diff, computed once: the review's head never changes. A failure is tried again. */
+/** The diff, computed once per head and base: a refresh that moves either computes it again. A failure is tried again. */
 function diffOnce() {
   diff ??= computeDiff().catch((error) => {
     diff = undefined
@@ -1171,7 +1175,11 @@ async function runScript(script, id) {
 async function fallBack(script, id, reason) {
   try {
     const entry = (await store.readDecisions()).findings[id]
-    if (entry?.state === 'queued' && entry.decision?.action === script.action)
+    const replying = script.action === 'post' && !!entry && replyPending(entry)
+    if (
+      replying ||
+      (entry?.state === 'queued' && entry.decision?.action === script.action)
+    )
       await store.fail(id, reason.slice(0, 300))
   } catch (error) {
     if (!(error instanceof StoreRefusal))
@@ -1310,8 +1318,15 @@ function announceLanded(latest) {
  */
 async function refresh(first) {
   const { ids, reviewChanged, latest } = await changes()
+  // `/tranchant comments` imported its PR/MR again, which moved: the diff is the new head's.
+  const moved =
+    !!latest && (latest.headSha !== review.headSha || latest.base !== review.base)
+  if (latest && moved) {
+    review = latest
+    diff = undefined
+  }
   announceLanded(latest)
-  if (first || (!ids.length && !reviewChanged)) return
+  if (first || (!ids.length && !reviewChanged && !moved)) return
   const event = `event: changed\ndata: ${JSON.stringify({ ids })}\n\n`
   for (const res of listeners) res.write(event)
 }
@@ -1501,6 +1516,8 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
+    // A reply on a settled finding's thread waits outside the states.
+    if (replyPending(entry)) decided(id, 'post')
     if (entry.state !== 'queued') continue
     const action = entry.decision?.action
     decided(id, action === 'post' || action === 'issue' ? action : 'fix')

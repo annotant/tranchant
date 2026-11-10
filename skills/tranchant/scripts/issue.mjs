@@ -62,7 +62,7 @@ if (!title || !body) await give(`finding ${id} has no issue title or body`)
 
 const { postWith } = (await loadSettings()).values
 const tracker = await trackerOf(review.project, {
-  gitlab: !!review.mr,
+  gitlab: !!review.mr && review.mr.forge !== 'github',
   ...(postWith !== 'auto' && { forge: postWith === 'gh' ? 'github' : 'gitlab' }),
 }).catch((error) => give(error instanceof Error ? error.message : String(error)))
 

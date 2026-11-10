@@ -296,7 +296,7 @@ export interface Section {
   path: string
   /** The diff's file; absent when the diff does not touch the path. */
   file?: DiffFile
-  /** The findings on the file's header: their line is not in the diff. */
+  /** The findings on the file's header: their line is not in the diff, or a thread's moved. */
   header: Finding[]
   /** By new-side line, the findings there, stacked in the list's order. */
   lines: Map<number, Finding[]>
@@ -333,7 +333,9 @@ export function placeFindings(
       section = { path: finding.path, header: [], lines: new Map() }
       sections.set(finding.path, section)
     }
-    if (shown.get(finding.path)?.has(finding.line)) {
+    // A thread whose line moved, or on a whole file, has no line to sit on.
+    const offLine = finding.thread?.outdated === true || finding.thread?.file === true
+    if (!offLine && shown.get(finding.path)?.has(finding.line)) {
       const stack = section.lines.get(finding.line) ?? []
       stack.push(finding)
       section.lines.set(finding.line, stack)

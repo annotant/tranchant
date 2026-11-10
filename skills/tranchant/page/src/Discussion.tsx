@@ -17,6 +17,8 @@ interface Props {
   canFix: boolean
   canPost: boolean
   canDrop: boolean
+  /** A PR/MR thread's finding: the proposed comment is a reply, opened in its editor. */
+  replyOn?: boolean
   /** Resolves to whether the server took the message: the draft stays until it does. */
   onSend: (text: string) => Promise<boolean>
   onFix: (context: string) => void
@@ -28,6 +30,11 @@ const SUGGESTIONS = [
   'Is this really reachable?',
   'Is there a better fix?',
   'Draft the comment to post',
+]
+const THREAD_SUGGESTIONS = [
+  'Is the comment right?',
+  'What would the fix take?',
+  'Draft my reply',
 ]
 
 const TAKEN_WORDS: Record<Taken, string> = {
@@ -136,12 +143,20 @@ function Proposals({
   canFix,
   canPost,
   canDrop,
+  replyOn = false,
   onFix,
   onPost,
   onDrop,
 }: Pick<
   Props,
-  'disabled' | 'canFix' | 'canPost' | 'canDrop' | 'onFix' | 'onPost' | 'onDrop'
+  | 'disabled'
+  | 'canFix'
+  | 'canPost'
+  | 'canDrop'
+  | 'replyOn'
+  | 'onFix'
+  | 'onPost'
+  | 'onDrop'
 > & {
   message: Message
 }) {
@@ -174,8 +189,27 @@ function Proposals({
           <Markdown source={fix} headings={false} />
         </Proposal>
       )}
+      {comment && canPost && replyOn && (
+        <Proposal
+          icon={BUBBLE}
+          label="Reply"
+          action={
+            <button
+              type="button"
+              className="tr-btn tr-btn--small"
+              disabled={disabled}
+              onClick={() => onPost(comment)}
+            >
+              Reply with this
+            </button>
+          }
+        >
+          <p className="tr-clamp">{comment}</p>
+        </Proposal>
+      )}
       {comment &&
         canPost &&
+        !replyOn &&
         (editing ? (
           <CommentEditor
             comment={comment}
@@ -300,7 +334,7 @@ function Composer({
 
 /** A finding's discussion with an agent: the reviewer asks, a read-only agent answers. */
 export function Discussion(props: Props) {
-  const { discussion, writable, closed, taken, disabled, onSend } = props
+  const { discussion, writable, closed, taken, disabled, replyOn, onSend } = props
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const messages = discussion?.messages ?? []
@@ -331,13 +365,16 @@ export function Discussion(props: Props) {
               <path d="M9 10h6M9 14h4" />
             </Icon>
           </span>
-          <p className="tr-dsc-empty-title">Not sure about this finding?</p>
+          <p className="tr-dsc-empty-title">
+            {replyOn ? 'Not sure what to answer?' : 'Not sure about this finding?'}
+          </p>
           <p className="tr-muted">
-            Ask an agent. It reads the code and never changes it; the finding stays as it
-            is until you decide.
+            {replyOn
+              ? 'Ask an agent. It reads the comment and the code, never changes them; nothing is posted until you reply.'
+              : 'Ask an agent. It reads the code and never changes it; the finding stays as it is until you decide.'}
           </p>
           <div className="tr-suggest">
-            {SUGGESTIONS.map((suggestion) => (
+            {(replyOn ? THREAD_SUGGESTIONS : SUGGESTIONS).map((suggestion) => (
               <button key={suggestion} type="button" onClick={() => setDraft(suggestion)}>
                 {suggestion}
               </button>

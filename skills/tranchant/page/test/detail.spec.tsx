@@ -22,8 +22,10 @@ import {
   FINDINGS,
   mergeRequest,
   payload,
+  pullRequest,
   record,
   review,
+  THREADED,
   withoutComment,
 } from './fixture'
 
@@ -675,4 +677,191 @@ test('while its issue opens, the finding shows a spinner and offers nothing else
   expect(document.querySelector('.tr-pending .tr-spinner')).not.toBeNull()
   for (const name of ['Stop', 'Drop', 'Skip', 'Fix now', 'Open an issue'])
     expect(button(name)).toBeNull()
+})
+
+test('a thread shows its comments, yours marked, and is replied on, resolved if asked', () => {
+  const { onDecide } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: { ...pullRequest(), viewer: 'me' } },
+  })
+  expect(screen.getByText('@alice')).toBeDefined()
+  expect(screen.getByText('missing', { selector: 'strong' })).toBeDefined()
+  expect(screen.queryByText('Problem')).toBeNull()
+  // Your own comment reads as yours; every choice stays.
+  const mine = screen.getByText('Looking into it').closest('li')
+  expect(mine?.className).toContain('tr-thread-comment--mine')
+  expect(within(mine!).getByText('you')).toBeDefined()
+  expect(screen.getByText('@alice').closest('li')?.className).not.toContain('--mine')
+  for (const name of ['Fix now', 'Open an issue', 'Drop', 'Skip', 'Discuss'])
+    expect(button(name)).not.toBeNull()
+  // Fixing comes first; posting is a reply, never a comment of its own.
+  expect(button('Fix now')?.className).toContain('tr-btn--primary')
+  expect(button('Post a comment')).toBeNull()
+  fireEvent.click(button('Reply on the thread')!)
+  const reply = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
+  expect(reply.value).toBe('')
+  expect(button('Reply')?.hasAttribute('disabled')).toBe(true)
+  fireEvent.change(reply, { target: { value: 'Done' } })
+  fireEvent.click(screen.getByLabelText('Resolve the thread once replied'))
+  fireEvent.click(button('Reply')!)
+  expect(onDecide).toHaveBeenCalledWith([
+    { id: THREADED.id, action: 'post', comment: 'Done', resolve: true },
+  ])
+  // The next reply starts afresh, unresolving.
+  fireEvent.click(button('Reply on the thread')!)
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe('')
+  expect(
+    screen.getByLabelText<HTMLInputElement>('Resolve the thread once replied').checked,
+  ).toBe(false)
+})
+
+test('a fixed thread offers its reply, drafted from what changed; a posted one shows it in the thread', () => {
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'fixed',
+    fields: {
+      runs: [{ id: 'r1', startedAt: '', outcome: 'fixed', summary: 'Skipped it.' }],
+    },
+  })
+  fireEvent.click(button('Reply on the thread')!)
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+    'Fixed: Skipped it.',
+  )
+  cleanup()
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'posted',
+    fields: {
+      posted: {
+        discussionId: 'PRRT_1',
+        url: 'https://x.example/r',
+        at: '',
+        unresolved: 'no right',
+      },
+      replies: [{ text: 'Done in the next push', url: 'https://x.example/r', at: '' }],
+    },
+  })
+  const sent = screen.getByText('Done in the next push').closest('li')
+  expect(sent?.className).toContain('tr-thread-comment--mine')
+  expect(within(sent!).getByText('Sent from Tranchant')).toBeDefined()
+  expect(screen.getByText(/Unresolved on the pull request/)).toBeDefined()
+  expect(screen.getByText('The thread is not resolved: no right')).toBeDefined()
+  cleanup()
+  // Resolved from here; a refresh that read the reply shows it once.
+  renderDetail({
+    finding: {
+      ...THREADED,
+      thread: {
+        ...THREADED.thread!,
+        comments: [
+          ...THREADED.thread!.comments,
+          {
+            author: 'me',
+            body: 'Done in the next push',
+            at: '',
+            url: 'https://x.example/r',
+          },
+        ],
+      },
+    },
+    reviewFields: { mr: { ...pullRequest(), viewer: 'me' } },
+    state: 'posted',
+    fields: {
+      posted: {
+        discussionId: 'PRRT_1',
+        url: 'https://x.example/r',
+        at: '',
+        resolved: true,
+      },
+      replies: [
+        {
+          text: 'Done in the next push',
+          url: 'https://x.example/r',
+          at: '',
+          resolved: true,
+        },
+      ],
+    },
+  })
+  expect(screen.getAllByText('Done in the next push')).toHaveLength(1)
+  expect(screen.getByText(/Resolved on the pull request/)).toBeDefined()
+})
+
+test('a reply on a fixed thread shows while on its way, and why it failed', () => {
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'fixed',
+    fields: { reply: { text: 'Fixed', at: '' } },
+  })
+  expect(screen.getByRole('status').textContent).toContain('Replying on the thread')
+  expect(screen.getByRole('status').closest('li')?.textContent).toContain('Fixed')
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'fixed',
+    fields: {
+      reply: { text: 'Fixed', at: '', failed: 'token expired' },
+      posted: { discussionId: 'PRRT_1', url: 'https://x.example/first', at: '' },
+    },
+  })
+  expect(
+    screen.getByText('Did not post: token expired').closest('li')?.className,
+  ).toContain('tr-thread-comment--failed')
+  fireEvent.click(button('Reply on the thread')!)
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+    'Fixed',
+  )
+})
+
+test("on a thread, the agent's comment is a reply, opened in the editor; a replied thread is still discussed", () => {
+  const discussion: Discussion = {
+    messages: [
+      asked('Is she right?'),
+      answered('Yes.', { fix: 'Show the reason.', comment: 'You are right, fixing it.' }),
+    ],
+  }
+  const { onDecide } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'posted',
+    fields: { posted: { discussionId: 'PRRT_1', url: 'https://x.example/r', at: '' } },
+    discussion,
+  })
+  // Replied on, the thread lives on: the composer is open, Fix is not offered any more.
+  expect(
+    within(thread()!).getByRole('textbox', { name: /message to the agent/i }),
+  ).toBeDefined()
+  expect(button('Fix with this')).toBeNull()
+  expect(button('Post this')).toBeNull()
+  fireEvent.click(button('Reply with this')!)
+  const editor = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
+  expect(editor.value).toBe('You are right, fixing it.')
+  expect(onDecide).not.toHaveBeenCalled()
+})
+
+test('a reply on its way is only in the thread: no agent to wait for, nothing else to decide', () => {
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'queued',
+    fields: { decision: { action: 'post', at: '' }, comment: 'On it' },
+  })
+  expect(screen.getByRole('status').closest('li')?.textContent).toContain('On it')
+  expect(screen.queryByText(/Waiting for an agent/)).toBeNull()
+  for (const name of ['Stop', 'Drop', 'Skip', 'Reply on the thread'])
+    expect(button(name)).toBeNull()
+  cleanup()
+  renderDetail({
+    ownership: 'theirs',
+    reviewFields: { mr: mergeRequest() },
+    state: 'queued',
+    fields: { decision: { action: 'post', at: '' } },
+  })
+  expect(screen.getByRole('status').textContent).toBe('Posting on the merge request…')
+  expect(button('Stop')).toBeNull()
 })

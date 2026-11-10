@@ -381,9 +381,13 @@ function FileSection({
           {...state}
           findings={section.header}
           note={(finding) =>
-            file
-              ? `line ${finding.line} is not in the diff`
-              : 'the diff does not touch this file'
+            finding.thread?.file
+              ? 'on the whole file'
+              : finding.thread?.outdated
+                ? 'outdated: the code it was on moved since'
+                : file
+                  ? `line ${finding.line} is not in the diff`
+                  : 'the diff does not touch this file'
           }
         />
       )}

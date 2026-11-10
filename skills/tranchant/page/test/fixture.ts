@@ -617,3 +617,35 @@ export function fakeEvents() {
     },
   }
 }
+
+/** A finding from a pull request's review thread (`/tranchant comments`). */
+export const THREADED: Finding = {
+  ...withoutComment(FINDINGS[0]!),
+  id: 't-0a1b2c3d4e',
+  topic: 'Code Quality',
+  title: 'Should this skip a missing tenant?',
+  problem: 'Should this skip a missing tenant?',
+  thread: {
+    forge: 'github',
+    id: 'PRRT_1',
+    url: 'https://github.com/acme/app/pull/7#discussion_r1',
+    comments: [
+      {
+        author: 'alice',
+        body: 'Should this skip a **missing** tenant?',
+        at: '2026-11-01T10:00:00Z',
+        url: 'https://github.com/acme/app/pull/7#discussion_r1',
+      },
+      { author: 'me', body: 'Looking into it', at: '2026-11-02T10:00:00Z' },
+    ],
+  },
+}
+
+/** The pull request a comments review reads: GitHub, no diff refs. */
+export const pullRequest = (): NonNullable<Review['mr']> => ({
+  forge: 'github',
+  project: 'acme/app',
+  iid: 7,
+  url: 'https://github.com/acme/app/pull/7',
+  author: 'me',
+})

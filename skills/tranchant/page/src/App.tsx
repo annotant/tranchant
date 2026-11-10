@@ -17,6 +17,7 @@ import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView
 import {
   allows,
   canPost,
+  changeRef,
   commentedIds,
   counts,
   type DecisionInput,
@@ -99,7 +100,7 @@ function Header({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  !{review.mr.iid}
+                  {changeRef(review.mr)}
                 </a>
               )}
             </>
@@ -425,8 +426,8 @@ export default function App() {
       const applied = await decide([decision])
       const now = latest.current
       if (!applied.includes(decision.id) || now.openId !== decision.id) return
-      // An issue was written, not triaged in a keystroke: the reviewer watches it open.
-      if (decision.action === 'issue') return
+      // An issue or a comment was written, not triaged in a keystroke: the reviewer watches it land.
+      if (decision.action === 'issue' || decision.action === 'post') return
       const next = nextOpen(now.ordered, now.records, decision.id)
       if (next) open(next)
       else setSettled(true)
@@ -468,7 +469,8 @@ export default function App() {
         const blind =
           action === 'post' &&
           !hasComment(ordered.find((finding) => finding.id === cursor))
-        if (!blind && allows(action, stateOf(records, cursor), review)) {
+        const finding = ordered.find((one) => one.id === cursor)
+        if (!blind && allows(action, stateOf(records, cursor), review, finding)) {
           if (cursor === openId) void decideShown({ id: cursor, action })
           else void decide([{ id: cursor, action }])
         }
