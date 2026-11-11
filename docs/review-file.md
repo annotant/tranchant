@@ -226,20 +226,21 @@ and `events` is optional.
 
 Moves the store accepts:
 
-- `fix`: from `open`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. An `asking` finding leaves only through `answer`.
+- `fix`: from `open`, `posted`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. From `posted`, the comment or the reply stays where it is (`posted`, `replies`): commenting never rules out the fix. An `asking` finding leaves only through `answer`.
 - `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs. On a `fixed` or `posted` thread finding, or one whose `fix` decision is under way (`queued`, `working`, `asking`, `stopped`), a reply is no move: it is kept in `reply` while `post.mjs` runs, the state and the fix (its run, its Stop) stay, `posted` records it once on the thread and `reply` goes, a failure leaves `reply.failed` (`store.fail` with `reply`); one at a time, refused while a post is `queued` or a reply on its way, again as often as the thread is answered back. On GitHub, `postBlocker` refuses any post but a reply.
 - `issue`: from `open`, `dropped`, `skipped`, `failed` → `queued`, with `issue.title` and `issue.body` (the title cut to one line of 255 characters, the body to 60,000); refused when either is empty. Any ownership, with or without an MR.
 - `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed`, `posted` or `moved`.
 - `posted`, `moved`: the server's, from `queued` → `posted`, `moved`.
 - `answer`: from `asking` → `queued`, with `answer` set; the server prints `FIX <id>` again.
 - `stop`: from `queued`, `working` → `stopped`.
-- `change`: from `open`, `skipped`, `failed`, `stopped`, `fixed` → `queued`, a `fix` decision whose `context` is the reviewer's request and `change` the `at` of their message, asked in the discussion of a finding with a `thread` only (see [a discussion](#a-discussion)); a `question` and `answer` an earlier run left go. The one move that leaves `fixed`: a follow-up change.
+- `change`: from `open`, `posted`, `skipped`, `failed`, `stopped`, `fixed` → `queued`, a `fix` decision whose `context` is the reviewer's request and `change` the `at` of their message, asked in the discussion of a finding with a `thread` only (see [a discussion](#a-discussion)); a `question` and `answer` an earlier run left go. The one move that leaves `fixed`: a follow-up change.
 - `claim`: from `queued` → `working`, starting a run; refused on a finding queued for a post or an issue.
 - `done`: from `working` → `fixed`. `ask`: from `working` → `asking`. `hook.mjs ended` moves a `working` finding whose agent ended without either to `failed` (`reason`: `the agent ended without done.mjs or ask.mjs`).
 
-A `fixed`, `posted` or `moved` finding is final: no move leaves it (the
-reviewer reverts by hand, or asks for a follow-up in a new review), but a
-`change` its thread's discussion asks for; a reply on its thread is no move.
+A `fixed` or `moved` finding is final: no move leaves it (the reviewer
+reverts by hand, or asks for a follow-up in a new review), but a `change`
+its thread's discussion asks for; a reply on its thread is no move. A
+`posted` one is final but for a fix (`fix`, or a `change` on a thread).
 
 The page's one-shot button (Post all to do) acts on the `open` findings (To do
 on the page) only, in list order; a selection may apply any move the table

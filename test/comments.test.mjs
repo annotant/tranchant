@@ -650,6 +650,41 @@ test('a post on a thread replies there with gh, then resolves it when asked', as
   assert.equal(discussed.messages.at(-1)?.text, 'What would she answer?')
 })
 
+test('a thread replied on may be fixed after all: its reply stays in the thread', async (t) => {
+  const reply = 'https://github.com/acme/shop/pull/7#discussion_r99'
+  const { store, id, post } = await replying(
+    t,
+    [
+      [
+        'api graphql',
+        { data: { addPullRequestReviewThreadReply: { comment: { url: reply } } } },
+      ],
+    ],
+    'github',
+  )
+  await store.decide(id, { action: 'post', comment: 'I will skip it' })
+  assert.equal((await post()).code, 0)
+  const fixing = await store.decide(id, {
+    action: 'fix',
+    context: 'Skip a missing tenant',
+  })
+  assert.equal(fixing.state, 'queued')
+  assert.deepEqual(fixing.decision, {
+    action: 'fix',
+    context: 'Skip a missing tenant',
+    at: fixing.events.at(-1)?.at,
+  })
+  assert.equal(fixing.posted?.url, reply)
+  assert.deepEqual(
+    fixing.replies?.map(({ text }) => text),
+    ['I will skip it'],
+  )
+  // The fix under way, a further reply is a record of its own.
+  const aside = await store.decide(id, { action: 'post', comment: 'Pushed' })
+  assert.equal(aside.state, 'queued')
+  assert.equal(aside.reply?.text, 'Pushed')
+})
+
 test('a fixed thread is replied on with glab; a resolve that fails leaves the reply posted', async (t) => {
   const { store, id, post, calls } = await replying(
     t,

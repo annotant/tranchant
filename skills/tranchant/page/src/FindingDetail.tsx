@@ -495,8 +495,8 @@ export function FindingDetail({
       {finding.diagram && <Diagram diagram={finding.diagram} />}
 
       <section className="tr-section" aria-label="Outcome">
-        {/* A reply on a thread shows in the thread itself: sent, on its way or failed. */}
-        {state === 'posted' && !reply && record?.posted && (
+        {/* A reply on a thread shows in the thread itself; a comment, still once fixed after. */}
+        {!reply && record?.posted && (
           <p className="tr-outcome">
             Posted:{' '}
             <a href={record.posted.url} target="_blank" rel="noreferrer">

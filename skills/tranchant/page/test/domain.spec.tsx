@@ -78,8 +78,15 @@ const STATES: State[] = [
 const from = (action: Action, ownership: 'ours' | 'theirs') =>
   STATES.filter((state) => allows(action, state, review(ownership)))
 
-test('fix is allowed from open, dropped, skipped, failed and stopped; never again once fixed', () => {
-  expect(from('fix', 'ours')).toEqual(['open', 'dropped', 'skipped', 'failed', 'stopped'])
+test('fix is allowed from open, posted, dropped, skipped, failed and stopped; never again once fixed', () => {
+  expect(from('fix', 'ours')).toEqual([
+    'open',
+    'posted',
+    'dropped',
+    'skipped',
+    'failed',
+    'stopped',
+  ])
   expect(from('fix', 'theirs')).toEqual(from('fix', 'ours'))
 })
 

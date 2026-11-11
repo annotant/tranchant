@@ -318,6 +318,7 @@ const ALLOWED = [
   ['fix', 'skipped', 'queued'],
   ['fix', 'failed', 'queued'],
   ['fix', 'stopped', 'queued'],
+  ['fix', 'posted', 'queued'],
   ['post', 'open', 'queued'],
   ['post', 'dropped', 'queued'],
   ['post', 'skipped', 'queued'],
@@ -334,6 +335,7 @@ const ALLOWED = [
   ['change', 'failed', 'queued'],
   ['change', 'stopped', 'queued'],
   ['change', 'fixed', 'queued'],
+  ['change', 'posted', 'queued'],
   ['claim', 'queued', 'working'],
   ['done', 'working', 'fixed'],
   ['ask', 'working', 'asking'],
@@ -361,9 +363,9 @@ test('allows every move of the table, and no other', () => {
       assert.equal(canMove(move, from), allowed, `${move} from ${from}`)
     }
   }
-  // The ones an agent or the page could try: a fixed finding stays fixed, a
-  // question is answered rather than fixed again, nothing moves a working one
-  // but its agent, a stop or a failure.
+  // The ones an agent or the page could try: a fixed finding stays fixed (a
+  // posted one may still be fixed), a question is answered rather than fixed
+  // again, nothing moves a working one but its agent, a stop or a failure.
   assert.equal(canMove('fix', 'fixed'), false)
   assert.equal(canMove('post', 'fixed'), false)
   assert.equal(canMove('drop', 'fixed'), false)

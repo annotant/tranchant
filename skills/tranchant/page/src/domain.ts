@@ -674,7 +674,15 @@ export const issueInput = (
   ...draftIssue(finding, review, tracker),
 })
 
-const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stopped'])
+// A comment posted never rules out the change: posted is no end for a fix.
+const FIX_FROM = new Set<State>([
+  'open',
+  'posted',
+  'dropped',
+  'skipped',
+  'failed',
+  'stopped',
+])
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
 // Settled already, a thread still gets its replies: no move, a record of their own.
 const REPLY_IN = new Set<State>(['fixed', 'posted'])
@@ -704,8 +712,15 @@ export const isWaiting = (discussion: Discussion | undefined) =>
 export const waitsForChange = (discussion: Discussion | undefined) =>
   isWaiting(discussion) && !!discussion?.messages.at(-1)?.change
 
-// As lib/format.mjs's `change`: a thread's discussion asks for a change, again once fixed.
-const CHANGE_FROM = new Set<State>(['open', 'skipped', 'failed', 'stopped', 'fixed'])
+// As lib/format.mjs's `change`: a thread's discussion asks for a change, once replied on or again once fixed.
+const CHANGE_FROM = new Set<State>([
+  'open',
+  'posted',
+  'skipped',
+  'failed',
+  'stopped',
+  'fixed',
+])
 
 /** Whether the reviewer may ask, in the finding's discussion, for a change to the code. */
 export const changeable = (state: State, finding?: Pick<Finding, 'thread'>) =>
