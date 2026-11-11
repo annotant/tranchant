@@ -4,7 +4,14 @@
 // review, refusing the review when a source cannot be resolved; prepare.mjs
 // reads the project's recipe at BASE.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  open as openFile,
+  readFile,
+  readdir,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import {
@@ -238,9 +245,12 @@ test('a build run twice gives the same hash, and writes nothing the second time'
     again.map((one) => one.written),
     [false, false],
   )
-  assert.equal((await stat(stored.file)).mtimeMs, written)
   assert.deepEqual(await readdir(lenses), [`${first.hash}.md`])
-  assert.equal(await readFile(stored.file, 'utf8'), first.text)
+  // One handle for both checks: the file stat-ed is the file read.
+  const handle = await openFile(stored.file)
+  t.after(() => handle.close())
+  assert.equal((await handle.stat()).mtimeMs, written)
+  assert.equal(await handle.readFile('utf8'), first.text)
 })
 
 test('lenses.mjs builds every lens, records them, and prints one LENS line each', async (t) => {
