@@ -15,6 +15,7 @@ import {
   type FindingRecord,
   postsFrom,
   replyPending,
+  replyTaken,
   repliesOn,
   staleMrReason,
   type Review,
@@ -270,6 +271,8 @@ export function FindingDetail({
   const noTracker = tracker?.kind === null
   // Undefined: shown when the finding has a thread; the Discuss button opens or folds it.
   const [folded, setFolded] = useState<boolean>()
+  // The `at` of the agent's answer whose proposed reply the editor opened with.
+  const [replyFrom, setReplyFrom] = useState<string>()
 
   // The tool is opening it, or posting it: nothing else is offered until it lands or fails.
   const opening = state === 'queued' && record?.decision?.action === 'issue'
@@ -289,16 +292,28 @@ export function FindingDetail({
   const writable = discussable(state, finding)
   const hasThread = !!discussion?.messages.length
   const threadShown = folded === undefined ? hasThread : !folded
-  const proposal = discussion?.messages.findLast((one) => one.by === 'agent')?.proposal
-  const taken: Taken | undefined =
+  const answer = discussion?.messages.findLast((one) => one.by === 'agent')
+  const proposal = answer?.proposal
+  const proposedReply =
+    thread && answer && proposal?.comment
+      ? { at: answer.at, text: proposal.comment }
+      : undefined
+  const replied =
+    !!thread &&
+    !!proposedReply &&
+    replyTaken(thread, record, review.mr?.viewer, proposedReply)
+  const taken: Taken[] = []
+  if (
     state !== 'open' &&
     record?.decision?.action === 'fix' &&
     !!proposal?.fix &&
     record.decision.context === proposal.fix
-      ? 'fix'
-      : state === 'dropped' && !!proposal?.drop && record?.reason === proposal.drop
-        ? 'drop'
-        : undefined
+  )
+    taken.push('fix')
+  if (state === 'dropped' && !!proposal?.drop && record?.reason === proposal.drop)
+    taken.push('drop')
+  if (replied) taken.push('reply')
+  const editingProposal = mode === 'editing' && !!replyFrom && replyFrom === answer?.at
   const closed = writable
     ? undefined
     : posting
@@ -320,7 +335,12 @@ export function FindingDetail({
   const editAndPost = () => {
     decide(
       reply
-        ? { action: 'post', comment: comment.trim(), ...(resolve && { resolve: true }) }
+        ? {
+            action: 'post',
+            comment: comment.trim(),
+            ...(resolve && { resolve: true }),
+            ...(replyFrom && { proposal: replyFrom }),
+          }
         : comment.trim() && comment.trim() !== finding.comment
           ? { action: 'post', comment: comment.trim() }
           : { action: 'post' },
@@ -329,15 +349,19 @@ export function FindingDetail({
     if (reply) {
       setComment('')
       setResolve(false)
+      setReplyFrom(undefined)
     }
   }
   /** The agent's proposed reply, in the editor for the reviewer to read, change and send. */
   const replyWith = (proposed: string) => {
+    setReplyFrom(answer?.at)
     setComment(proposed)
     setResolve(false)
     setMode('editing')
   }
   const startReply = () => {
+    // Opened by hand, the reply is the reviewer's own, whatever the editor still holds.
+    setReplyFrom(undefined)
     // After a fix, the empty editor opens with what changed.
     setComment((text) => (text.trim() ? text : draftReply(record)))
     setMode('editing')
@@ -645,7 +669,14 @@ export function FindingDetail({
               >
                 {reply ? 'Reply' : 'Post'}
               </button>
-              <button type="button" className="tr-btn" onClick={() => setMode('idle')}>
+              <button
+                type="button"
+                className="tr-btn"
+                onClick={() => {
+                  setReplyFrom(undefined)
+                  setMode('idle')
+                }}
+              >
                 Cancel
               </button>
             </div>
@@ -798,7 +829,7 @@ export function FindingDetail({
           taken={taken}
           disabled={disabled}
           canFix={can('fix')}
-          canPost={can('post') && !replying}
+          canPost={can('post') && !replying && !replied && !editingProposal}
           canDrop={can('drop')}
           replyOn={reply}
           onSend={(text) => onDiscuss(finding.id, text)}

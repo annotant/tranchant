@@ -3,8 +3,8 @@ import { activityOf } from './activity'
 import { type Discussion as Thread, isWaiting, type Message } from './domain'
 import { Markdown } from './markdown'
 
-/** What the reviewer did with the agent's last proposal, said under it once the finding moved. */
-export type Taken = 'fix' | 'drop'
+/** What the reviewer did with the agent's last proposal, said under it once taken. */
+export type Taken = 'fix' | 'drop' | 'reply'
 
 interface Props {
   discussion: Thread | undefined
@@ -12,7 +12,7 @@ interface Props {
   writable: boolean
   /** Why it reads as it stands, when it does. */
   closed?: string | undefined
-  taken?: Taken | undefined
+  taken?: Taken[] | undefined
   disabled: boolean
   canFix: boolean
   canPost: boolean
@@ -40,6 +40,7 @@ const THREAD_SUGGESTIONS = [
 const TAKEN_WORDS: Record<Taken, string> = {
   fix: "You sent it to fix with the agent's proposal",
   drop: "You dropped it with the agent's reason",
+  reply: "You replied with the agent's proposal",
 }
 
 function Icon({ children, size = 16 }: { children: ReactNode; size?: number }) {
@@ -428,14 +429,16 @@ export function Discussion(props: Props) {
                   {writable && message === last && !message.failed && (
                     <Proposals message={message} {...props} />
                   )}
-                  {taken && message === last && !message.failed && (
-                    <div className="tr-taken">
-                      <Icon>
-                        <path d="M20 6 9 17l-5-5" />
-                      </Icon>
-                      <span>{TAKEN_WORDS[taken]}</span>
-                    </div>
-                  )}
+                  {message === last &&
+                    !message.failed &&
+                    taken?.map((one) => (
+                      <div key={one} className="tr-taken">
+                        <Icon>
+                          <path d="M20 6 9 17l-5-5" />
+                        </Icon>
+                        <span>{TAKEN_WORDS[one]}</span>
+                      </div>
+                    ))}
                 </>
               )}
             </li>

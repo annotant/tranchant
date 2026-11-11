@@ -844,6 +844,114 @@ test("on a thread, the agent's comment is a reply, opened in the editor; a repli
   expect(onDecide).not.toHaveBeenCalled()
 })
 
+test("on a thread, the agent's reply is taken once: a note after it is sent, offered again by a later answer", () => {
+  const proposed = 'You are right, fixing it.'
+  const edited = `${proposed} Thanks!`
+  const from = '2026-11-06T10:01:00Z'
+  const first: Discussion = {
+    messages: [asked('Is she right?'), answered('Yes.', { comment: proposed })],
+  }
+  const posted = { discussionId: 'PRRT_1', url: 'https://x.example/r', at: '' }
+  const sent = [{ text: edited, url: 'https://x.example/2', at: '', proposal: from }]
+  const replied = "You replied with the agent's proposal"
+  const onDecide = vi.fn()
+  const detail = (fields: Partial<FindingRecord>, discussion = first) => (
+    <FindingDetail
+      review={review('ours', { mr: pullRequest() })}
+      finding={THREADED}
+      record={record('posted', { posted, ...fields })}
+      steps={[]}
+      disabled={false}
+      onDecide={onDecide}
+      onAnswer={vi.fn()}
+      onStop={vi.fn()}
+      discussion={discussion}
+      onDiscuss={vi.fn(async () => true)}
+    />
+  )
+  const { rerender } = render(detail({}))
+  fireEvent.click(button('Reply with this')!)
+  // The editor holds the proposal: the card is gone from under it.
+  expect(button('Reply with this')).toBeNull()
+  const editor = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
+  fireEvent.change(editor, { target: { value: edited } })
+  fireEvent.click(button('Reply')!)
+  expect(onDecide).toHaveBeenCalledWith([
+    { id: THREADED.id, action: 'post', comment: edited, proposal: from },
+  ])
+  // Changed before it was sent, it is still the proposal taken: on its way, then posted.
+  rerender(detail({ reply: { text: edited, proposal: from, at: '' } }))
+  expect(button('Reply with this')).toBeNull()
+  expect(screen.getByText(replied)).toBeDefined()
+  rerender(detail({ replies: sent }))
+  expect(button('Reply with this')).toBeNull()
+  expect(screen.getByText(replied)).toBeDefined()
+  // Failed, it is offered again.
+  rerender(
+    detail({ reply: { text: edited, proposal: from, at: '', failed: 'token expired' } }),
+  )
+  expect(button('Reply with this')).not.toBeNull()
+  expect(screen.queryByText(replied)).toBeNull()
+  // A later answer proposes another reply: it is offered again.
+  rerender(
+    detail(
+      { replies: sent },
+      {
+        messages: [
+          ...first.messages,
+          asked('And the tests?'),
+          {
+            ...answered('Missing.', { comment: 'Adding a test.' }),
+            at: '2026-11-06T10:03:00Z',
+          },
+        ],
+      },
+    ),
+  )
+  expect(button('Reply with this')).not.toBeNull()
+  expect(screen.queryByText(replied)).toBeNull()
+  cleanup()
+  // Mounted again, from the files: by the proposal it carries, or by its text.
+  for (const replies of [
+    sent,
+    [{ text: proposed, url: 'https://x.example/2', at: '' }],
+  ]) {
+    renderDetail({
+      finding: THREADED,
+      reviewFields: { mr: pullRequest() },
+      state: 'posted',
+      fields: { posted, replies },
+      discussion: first,
+    })
+    expect(button('Reply with this')).toBeNull()
+    expect(screen.getByText(replied)).toBeDefined()
+    cleanup()
+  }
+})
+
+test("on a thread, a reply written by hand after the proposal was cancelled is the reviewer's own", () => {
+  const { onDecide } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'posted',
+    fields: { posted: { discussionId: 'PRRT_1', url: 'https://x.example/r', at: '' } },
+    discussion: {
+      messages: [asked('Is she right?'), answered('Yes.', { comment: 'You are right.' })],
+    },
+  })
+  fireEvent.click(button('Reply with this')!)
+  fireEvent.click(button('Cancel')!)
+  fireEvent.click(button('Reply on the thread')!)
+  // Opened by hand, the proposal is still offered beside the editor.
+  expect(button('Reply with this')).not.toBeNull()
+  const editor = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
+  fireEvent.change(editor, { target: { value: 'My own words.' } })
+  fireEvent.click(button('Reply')!)
+  expect(onDecide).toHaveBeenCalledWith([
+    { id: THREADED.id, action: 'post', comment: 'My own words.' },
+  ])
+})
+
 test('a reply on its way is only in the thread: no agent to wait for, nothing else to decide', () => {
   renderDetail({
     finding: THREADED,

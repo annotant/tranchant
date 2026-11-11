@@ -723,13 +723,14 @@ export function createStore(dir) {
      * post needs the MR's `diffRefs` at the commit reviewed, whatever the
      * ownership; on a finding from a PR/MR thread, it is a reply on the
      * thread instead, written by the reviewer (`comment`), `resolve` it once
-     * posted, and a `fixed` one may still be replied on. A question is
+     * posted, and a `fixed` one may still be replied on; `proposal`, the
+     * `at` of the agent's message whose proposed reply the editor opened with. A question is
      * answered with `answer`, not decided again.
      * @param {string} id
-     * @param {{ action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, reason?: string, title?: string, body?: string }} decision
+     * @param {{ action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, proposal?: string, reason?: string, title?: string, body?: string }} decision
      * @returns {Promise<Entry>}
      */
-    decide(id, { action, context, comment, resolve, reason, title, body }) {
+    decide(id, { action, context, comment, resolve, proposal, reason, title, body }) {
       return changeOne(id, (entry, finding, known) => {
         const reply = action === 'post' && repliesOn(finding)
         if (reply && !known.mr) {
@@ -755,6 +756,7 @@ export function createStore(dir) {
           entry.reply = {
             text: (comment?.trim() ?? '').slice(0, MAX_TEXT),
             ...(resolve === true ? { resolve: true } : {}),
+            ...(proposal ? { proposal } : {}),
             at: new Date().toISOString(),
           }
           return entry
@@ -766,6 +768,7 @@ export function createStore(dir) {
             ? { context: context.trim().slice(0, MAX_TEXT) }
             : {}),
           ...(reply && resolve === true ? { resolve: true } : {}),
+          ...(reply && proposal ? { proposal } : {}),
           at,
         }
         delete entry.reason
@@ -929,6 +932,7 @@ export function createStore(dir) {
       return changeOne(id, (entry, finding) => {
         const settled = replyPending(entry)
         const text = settled ? entry.reply?.text : entry.comment
+        const proposal = settled ? entry.reply?.proposal : entry.decision?.proposal
         const at = settled
           ? new Date().toISOString()
           : apply(id, entry, 'posted', { by: 'server' })
@@ -937,7 +941,13 @@ export function createStore(dir) {
         if (finding.thread && text) {
           entry.replies = [
             ...(entry.replies ?? []),
-            { text, url, at, ...(resolved ? { resolved: true } : {}) },
+            {
+              text,
+              url,
+              at,
+              ...(resolved ? { resolved: true } : {}),
+              ...(proposal ? { proposal } : {}),
+            },
           ].slice(-MAX_REPLIES)
         }
         entry.posted = {
