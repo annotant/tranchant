@@ -25,8 +25,8 @@ import {
   postBlocker,
   forgeOf,
   problemsText,
-  REPLY_IN,
   replyPending,
+  repliesAside,
   repliesOn,
   stateWords,
   statusOf,
@@ -723,7 +723,8 @@ export function createStore(dir) {
      * post needs the MR's `diffRefs` at the commit reviewed, whatever the
      * ownership; on a finding from a PR/MR thread, it is a reply on the
      * thread instead, written by the reviewer (`comment`), `resolve` it once
-     * posted, and a `fixed` one may still be replied on; `proposal`, the
+     * posted, and replied on aside once `fixed` or `posted`, or while its
+     * fix is under way (`repliesAside`); `proposal`, the
      * `at` of the agent's message whose proposed reply the editor opened with. A question is
      * answered with `answer`, not decided again.
      * @param {string} id
@@ -747,12 +748,11 @@ export function createStore(dir) {
         if (action === 'issue' && (!title?.trim() || !body?.trim())) {
           throw new StoreRefusal(`issue refused: finding ${id} needs a title and a body`)
         }
-        if (reply && REPLY_IN.includes(entry.state)) {
-          // Settled already: the reply is a record of its own, the state stays.
-          if (replyPending(entry))
-            throw new StoreRefusal(
-              `post refused: a reply on ${id}'s thread is on its way`,
-            )
+        // One reply at a time, whatever the finding went through since it was sent.
+        if (reply && replyPending(entry))
+          throw new StoreRefusal(`post refused: a reply on ${id}'s thread is on its way`)
+        if (reply && repliesAside(entry)) {
+          // Settled already, or its fix under way: the reply is a record of its own, the state and the run stay.
           entry.reply = {
             text: (comment?.trim() ?? '').slice(0, MAX_TEXT),
             ...(resolve === true ? { resolve: true } : {}),
@@ -762,6 +762,8 @@ export function createStore(dir) {
           return entry
         }
         const at = apply(id, entry, action, { by: 'reviewer' })
+        // A reply that failed aside is replaced by this one: the thread shows the post's own fate.
+        if (reply) delete entry.reply
         entry.decision = {
           action,
           ...(action === 'fix' && context?.trim()
@@ -923,20 +925,26 @@ export function createStore(dir) {
 
     /**
      * The comment is on the MR, or the reply on its thread: `resolved` once
-     * the thread was resolved too, `unresolved` why it could not be.
+     * the thread was resolved too, `unresolved` why it could not be. With
+     * `reply`, the reply on its way aside from the moves landed: the state
+     * and the fix stay.
      * @param {string} id
      * @param {{ discussionId: string, url: string, resolved?: boolean, unresolved?: string }} where
+     * @param {{ reply?: boolean }} [options]
      * @returns {Promise<Entry>}
      */
-    posted(id, { discussionId, url, resolved, unresolved }) {
+    posted(id, { discussionId, url, resolved, unresolved }, { reply = false } = {}) {
       return changeOne(id, (entry, finding) => {
-        const settled = replyPending(entry)
-        const text = settled ? entry.reply?.text : entry.comment
-        const proposal = settled ? entry.reply?.proposal : entry.decision?.proposal
-        const at = settled
+        if (reply && !replyPending(entry))
+          throw new StoreRefusal(
+            `posted refused: no reply on ${id}'s thread is on its way`,
+          )
+        const text = reply ? entry.reply?.text : entry.comment
+        const proposal = reply ? entry.reply?.proposal : entry.decision?.proposal
+        const at = reply
           ? new Date().toISOString()
           : apply(id, entry, 'posted', { by: 'server' })
-        if (settled) delete entry.reply
+        if (reply) delete entry.reply
         // The thread shows it at once; a refresh brings it from the forge too.
         if (finding.thread && text) {
           entry.replies = [
@@ -980,16 +988,21 @@ export function createStore(dir) {
     },
 
     /**
-     * The fix, the post or the issue failed: `reason` says why, and the run, if any, ends.
+     * The fix, the post or the issue failed: `reason` says why, and the run,
+     * if any, ends. With `reply`, the reply on its way on the finding's thread
+     * failed instead, on its own: the state and the fix stay.
      * @param {string} id
      * @param {string} reason
-     * @param {{ by?: Actor }} [options]
+     * @param {{ by?: Actor, reply?: boolean }} [options]
      * @returns {Promise<Entry>}
      */
-    fail(id, reason, { by = 'server' } = {}) {
+    fail(id, reason, { by = 'server', reply = false } = {}) {
       return changeOne(id, async (entry) => {
-        // A reply on a settled finding fails on its own: the fix stays.
-        if (replyPending(entry) && entry.reply) {
+        if (reply) {
+          if (!replyPending(entry) || !entry.reply)
+            throw new StoreRefusal(
+              `fail refused: no reply on ${id}'s thread is on its way`,
+            )
           entry.reply.failed = reason.trim().slice(0, MAX_TEXT)
           return entry
         }

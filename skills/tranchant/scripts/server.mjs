@@ -1183,7 +1183,7 @@ async function fallBack(script, id, reason) {
       replying ||
       (entry?.state === 'queued' && entry.decision?.action === script.action)
     )
-      await store.fail(id, reason.slice(0, 300))
+      await store.fail(id, reason.slice(0, 300), { reply: replying })
   } catch (error) {
     if (!(error instanceof StoreRefusal))
       console.error(`tranchant server: ${script.action} ${id}: ${oneLine(String(error))}`)
@@ -1519,7 +1519,7 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
-    // A reply on a settled finding's thread waits outside the states.
+    // A reply on a thread, settled or its fix under way, waits outside the states.
     if (replyPending(entry)) decided(id, 'post')
     if (entry.state !== 'queued') continue
     const action = entry.decision?.action

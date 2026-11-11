@@ -188,7 +188,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       "answer": { "text": "…", "choices": ["…"], "at": "…" },
       "reason": "…", // dropped: the reviewer's words; failed: the error
       "posted": { "discussionId": "…", "url": "…", "at": "…", "resolved": true }, // `unresolved`: why resolving the thread failed
-      "reply": { "text": "…", "resolve": true, "proposal": "…", "at": "…", "failed": "…" }, // a reply on a settled finding's thread: on its way, or why it failed
+      "reply": { "text": "…", "resolve": true, "proposal": "…", "at": "…", "failed": "…" }, // a reply on its thread aside from the moves (settled, or its fix under way): on its way, or why it failed
       "replies": [{ "text": "…", "url": "…", "at": "…", "resolved": true, "proposal": "…" }], // the replies posted on its thread, shown in it until an import holds them
       "issue": { "title": "…", "body": "…", "url": "…", "ref": "#12", "at": "…" }, // an issue: url, ref, at once created
       "runs": [/* Run */],
@@ -226,7 +226,7 @@ and `events` is optional.
 Moves the store accepts:
 
 - `fix`: from `open`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. An `asking` finding leaves only through `answer`.
-- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs. On a `fixed` or `posted` thread finding, a reply is no move: it is kept in `reply` while `post.mjs` runs, the state stays, `posted` records it once on the thread and `reply` goes, a failure leaves `reply.failed`; one at a time, again as often as the thread is answered back. On GitHub, `postBlocker` refuses any post but a reply.
+- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs. On a `fixed` or `posted` thread finding, or one whose `fix` decision is under way (`queued`, `working`, `asking`, `stopped`), a reply is no move: it is kept in `reply` while `post.mjs` runs, the state and the fix (its run, its Stop) stay, `posted` records it once on the thread and `reply` goes, a failure leaves `reply.failed` (`store.fail` with `reply`); one at a time, refused while a post is `queued` or a reply on its way, again as often as the thread is answered back. On GitHub, `postBlocker` refuses any post but a reply.
 - `issue`: from `open`, `dropped`, `skipped`, `failed` → `queued`, with `issue.title` and `issue.body` (the title cut to one line of 255 characters, the body to 60,000); refused when either is empty. Any ownership, with or without an MR.
 - `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed`, `posted` or `moved`.
 - `posted`, `moved`: the server's, from `queued` → `posted`, `moved`.
@@ -316,7 +316,9 @@ also once `fixed` or `posted`, the thread living on until it is resolved.
 In any other state the discussion reads as it stands. On a thread, the
 agent's `comment` is a reply: **Reply with this** opens the reply editor
 with it, for the reviewer to change and send, and the `post` carries the
-answer's `at` as its `proposal`. A reply on its way or sent with that
+answer's `at` as its `proposal`. While the finding's fix is under way
+(`queued`, `working`, `asking`), the discussion reads as it stands but the
+last answer's reply is still offered. A reply on its way or sent with that
 `proposal`, or with the proposal's text, takes it: the page says so under the
 answer instead of offering it again; a failed one offers it again. A
 discussion holds 60 messages at most.
@@ -460,7 +462,8 @@ reviewers' comments of your own change into the page:
 Each finding is then settled like any other. **Fix now** starts its agent,
 the comment its brief, fenced as data as every finding is. **Reply on the
 thread** opens an editor, empty, or after a fix prefilled with what changed,
-on any thread not settled otherwise, again once it is answered back;
+on any thread not settled otherwise, beside its fix while that runs or
+once stopped (the fix carries on), again once it is answered back;
 **Resolve the thread once replied** is a separate choice, never made for the
 reviewer. `post.mjs` replies (`addPullRequestReviewThreadReply`, or a note
 on the GitLab discussion), then resolves when asked (`resolveReviewThread`,

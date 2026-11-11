@@ -818,6 +818,111 @@ test('a reply on a fixed thread shows while on its way, and why it failed', () =
   )
 })
 
+test('a thread is replied on while its fix runs and after a Stop, the fix left be', () => {
+  const fix = { decision: { action: 'fix' as const, at: 'now' } }
+  for (const state of ['queued', 'working', 'asking', 'stopped'] as const) {
+    const { onDecide, onStop } = renderDetail({
+      finding: THREADED,
+      reviewFields: { mr: pullRequest() },
+      state,
+      fields:
+        state === 'asking' ? { ...fix, question: { text: 'Which one?', at: '' } } : fix,
+    })
+    fireEvent.click(button('Reply on the thread')!)
+    fireEvent.change(screen.getByLabelText('Reply on the thread'), {
+      target: { value: 'On it' },
+    })
+    fireEvent.click(button('Reply')!)
+    expect(onDecide).toHaveBeenCalledWith([
+      { id: THREADED.id, action: 'post', comment: 'On it' },
+    ])
+    expect(onStop).not.toHaveBeenCalled()
+    // Beside the fix: its Stop stays while it runs.
+    if (state === 'queued' || state === 'working') expect(button('Stop')).not.toBeNull()
+    cleanup()
+  }
+  // On its way, the reply holds the next one back; the fix runs on.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'working',
+    fields: { ...fix, reply: { text: 'On it', at: '' } },
+  })
+  expect(screen.getByRole('status').closest('li')?.textContent).toContain('On it')
+  expect(button('Reply on the thread')).toBeNull()
+  expect(button('Stop')).not.toBeNull()
+  cleanup()
+  // A post on its way is no fix: nothing beside it.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'queued',
+    fields: { decision: { action: 'post', at: 'now' }, comment: 'Done' },
+  })
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  // A page that sends nothing offers no reply.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'working',
+    fields: fix,
+    disabled: true,
+  })
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  // Without its pull request, there is nothing to reply on.
+  renderDetail({ finding: THREADED, state: 'working', fields: fix })
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  // Failed beside the fix, the reply is offered again, as written.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'working',
+    fields: { ...fix, reply: { text: 'On it', at: '', failed: 'token expired' } },
+  })
+  fireEvent.click(button('Reply on the thread')!)
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+    'On it',
+  )
+})
+
+test("while a thread's fix runs, the agent's earlier reply is still offered, and only it", () => {
+  const discussion: Discussion = {
+    messages: [
+      asked('Is she right?'),
+      answered('Yes.', { fix: 'Show it.', comment: 'On it.', drop: 'Wrong.' }),
+    ],
+  }
+  for (const state of ['queued', 'working', 'asking'] as const) {
+    const { onDecide } = renderDetail({
+      finding: THREADED,
+      reviewFields: { mr: pullRequest() },
+      state,
+      fields: { decision: { action: 'fix', at: 'now' } },
+      discussion,
+    })
+    expect(button('Fix with this')).toBeNull()
+    expect(button('Drop with this reason')).toBeNull()
+    fireEvent.click(button('Reply with this')!)
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+      'On it.',
+    )
+    expect(onDecide).not.toHaveBeenCalled()
+    cleanup()
+  }
+  // Dropped, the thread reads as it stands: no reply is carried over from it.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'dropped',
+    fields: { decision: { action: 'drop', at: 'now' } },
+    discussion,
+  })
+  expect(button('Reply with this')).toBeNull()
+})
+
 test("on a thread, the agent's comment is a reply, opened in the editor; a replied thread is still discussed", () => {
   const discussion: Discussion = {
     messages: [
