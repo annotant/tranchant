@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // hook.mjs <pre|post|stop|note|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]
 // hook.mjs <pre|post|note> --reviewer <name> --review <dir> --project <root> [--agent <id>]
+// hook.mjs pre --importer <name> --recipe <file>
 // The hooks of one finding's agent: Claude Code runs them around each of its
 // tools with the event as JSON on stdin. Claude Code runs no plugin mod hook
 // for an agent a plugin starts, so the plugin's hooks module registers each
@@ -16,7 +17,8 @@
 // note: the hooks module's steps (what the agent says), as JSON lines on stdin.
 // ended: the hooks module, once the agent's turn ended: a finding it left
 //      working, neither done nor asked about, fails, so the reviewer can
-//      send it again. Prints `AGENT_ENDED <id>` when it did.
+//      send it again, and a change asked in its discussion gets its result
+//      there. Prints `AGENT_ENDED <id>` when it failed.
 //
 // `--reviewer`: a review agent's (the summary agent, `sm-summary`, a lens's
 // reviewer, `rv-<lens>`, a finding's verifier, `vf-<id>`, or the agent
@@ -24,12 +26,18 @@
 // and takes no lock; its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
+// `--importer`: the import agent's (its name, `im-…`, `/tranchant import`): it
+// writes the recipe file it was given and nothing else, and runs reading
+// commands only (importerRefusal). Unlike the others, its hook fails closed:
+// on any error, the tool is refused.
+//
 // `--lock-root`: the git repository the project is in, which the hooks module
-// found; the locks are tabled per repository. A hook never fails the agent:
-// on any error, it lets the tool run.
+// found; the locks are tabled per repository. A hook but the importer's never
+// fails the agent: on any error, it lets the tool run.
 import { realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { syncChange } from './lib/discussion.mjs'
 import { withFileLock } from './lib/filelock.mjs'
 import { currentRun, parseDecisions } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
@@ -97,8 +105,21 @@ const GIT_READS = new Set([
   'merge-base',
   'rev-list',
 ])
-// git options that write a file or run a program.
-const GIT_RISKY = /^(?:--output|--ext-diff|-O|--open-files-in-pager)/
+// git options that write a file or run a program; git takes any unambiguous
+// prefix of a long one (`--open=sh` is `--open-files-in-pager`), and `-O`
+// within a cluster of short ones.
+const GIT_RISKY = ['--output', '--open-files-in-pager', '--ext-diff']
+
+/** @param {string} arg */
+function riskyGitOption(arg) {
+  if (/^-[^-]*O/.test(arg)) return true
+  const name = arg.split('=')[0] ?? ''
+  return (
+    name.startsWith('--') &&
+    name.length > 2 &&
+    GIT_RISKY.some((one) => one.startsWith(name))
+  )
+}
 const REVIEW_SCRIPT = /^(add|verify|remove|reply|summarize)\.mjs$/
 /** This folder, its real path: a review agent's `node` runs one of its scripts, by path, and nothing else. */
 const SCRIPTS_DIR = realOrUndefined(path.dirname(new URL(import.meta.url).pathname))
@@ -291,8 +312,7 @@ function argumentRefusal(program, args) {
   if (program !== 'git') return undefined
   const sub = args[0] === '-C' ? args[2] : args[0]
   if (!sub || !GIT_READS.has(sub)) return `git ${sub ?? ''} is not a reading command`
-  if (args.some((arg) => GIT_RISKY.test(arg)))
-    return 'a git option that writes or runs a program'
+  if (args.some(riskyGitOption)) return 'a git option that writes or runs a program'
   return undefined
 }
 
@@ -364,6 +384,50 @@ function reviewerRefusal(name, command, review) {
       if (outside) return outside
       continue
     }
+    if (!READERS.has(program)) return `${program} is not a reading command`
+    const refused = argumentRefusal(program, args)
+    if (refused) return refused
+  }
+  return undefined
+}
+
+/** The tools that write a file, by name: the import agent's only writes. */
+const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+/** A path as the file system reaches it: its folder's real path, then its name. */
+function reachedAs(/** @type {string} */ file) {
+  const resolved = path.resolve(file)
+  return path.join(
+    realOrUndefined(path.dirname(resolved)) ?? path.dirname(resolved),
+    path.basename(resolved),
+  )
+}
+
+/**
+ * Why the import agent may not run `tool` with `input`, or undefined when it
+ * may: it writes `recipe` alone, and runs reading commands only, git none
+ * (a source's folder may hold a repository whose config runs programs); it
+ * asks nothing, the hooks started it in the background.
+ * @param {string} tool
+ * @param {Record<string, unknown>} input
+ * @param {string} recipe
+ */
+function importerRefusal(tool, input, recipe) {
+  if (tool === 'AskUserQuestion')
+    return 'the import agent asks nothing: list what it cannot decide in imported.leftOut'
+  const target = writeTarget(tool, input)
+  if (target !== undefined || EDITS.has(tool)) {
+    if (!target || reachedAs(target) !== reachedAs(recipe))
+      return `the import agent writes ${recipe} only`
+    return undefined
+  }
+  if (tool !== 'Bash') return undefined
+  const parsed = shellWords(textOf(input, 'command') ?? '')
+  if ('refusal' in parsed) return parsed.refusal
+  for (const [program, ...args] of parsed.segments) {
+    if (!program) continue
+    if (program === 'git')
+      return 'the import agent reads with Read, Grep and Glob, not git'
     if (!READERS.has(program)) return `${program} is not a reading command`
     const refused = argumentRefusal(program, args)
     if (refused) return refused
@@ -734,6 +798,10 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     /** Whether the finding, left working by the agent, failed. */
     async ended() {
       const failed = await createStore(review).abandon(finding, agent)
+      // A change asked in the discussion gets its result there, failed or not.
+      await syncChange(review, finding).catch((error) =>
+        log(`the discussion is left waiting: ${String(error)}`),
+      )
       if (!failed) return false
       const released = await releaseAll()
       await log(
@@ -761,6 +829,34 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     await rm(progressPath(review, finding), { force: true })
     await log(`run ended (done or asked): released ${released.length} lock(s)`)
   }
+}
+
+/** In the shape Claude Code reads from a PreToolUse hook's stdout. */
+const refuseTool = (/** @type {string} */ reason) =>
+  console.log(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: reason,
+      },
+    }),
+  )
+
+/** The import agent's hook: it may write its recipe, and read. */
+async function importer() {
+  const recipe = flag('--recipe')
+  let text = ''
+  for await (const chunk of process.stdin) text += chunk
+  /** @type {HookInput} */
+  const event = text.trim() ? JSON.parse(text) : {}
+  if (!recipe)
+    return refuseTool('Refused: the import agent was started without its recipe file.')
+  if (!event.tool_name)
+    return refuseTool('Refused: Tranchant could not read this tool call.')
+  const refused = importerRefusal(event.tool_name ?? '', event.tool_input ?? {}, recipe)
+  if (refused)
+    refuseTool(`Refused: ${refused}. Use Read, Grep and Glob, and Write on ${recipe}.`)
 }
 
 async function main() {
@@ -822,9 +918,15 @@ async function main() {
     )
 }
 
-try {
-  await main()
-} catch (error) {
-  // Never in the agent's way: its tool runs, unlocked and unrecorded.
-  await debug('-', flag('--finding') ?? '-', `hook.mjs failed: ${String(error)}`)
-}
+if (flag('--importer') !== undefined) {
+  // Fails closed: an import agent reads another team's text, and writes one file.
+  await importer().catch((error) =>
+    refuseTool(`Refused: Tranchant could not check this tool (${String(error)}).`),
+  )
+} else
+  try {
+    await main()
+  } catch (error) {
+    // Never in the agent's way: its tool runs, unlocked and unrecorded.
+    await debug('-', flag('--finding') ?? '-', `hook.mjs failed: ${String(error)}`)
+  }

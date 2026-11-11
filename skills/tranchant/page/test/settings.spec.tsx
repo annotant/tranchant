@@ -355,3 +355,82 @@ test('a refused theme switch on the review is said there too', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'dismiss' }))
   expect(screen.queryByRole('status')).toBeNull()
 })
+
+test('the recipe in force says where it comes from, and each lens its source and status', () => {
+  renderSettings(
+    settingsPayload(
+      {},
+      {
+        recipe: 'main:.tranchant/recipe.json',
+        recipeFrom: 'project',
+        recipeLenses: [
+          { name: 'abac', source: 'workflow:code-reviewer-abac' },
+          {
+            name: 'money',
+            source: '../checks/money.md',
+            problem: '../checks/money.md: no such file at main',
+            fix: 'edit the recipe',
+          },
+        ],
+      },
+    ),
+  )
+  const recipe = row('Recipe in force')
+  expect(recipe.getByText(/the project's \.tranchant\/recipe\.json/)).toBeTruthy()
+  expect(recipe.getByText('Preview').title).toMatch(/Being tested/)
+  const lenses = within(recipe.getByRole('list')).getAllByRole('listitem')
+  expect(lenses.map((one) => one.textContent)).toEqual([
+    'abacworkflow:code-reviewer-abacready',
+    'money../checks/money.mdcannot be built: ../checks/money.md: no such file at main (edit the recipe)',
+  ])
+})
+
+test('an imported recipe shows its lenses and what it left out before Use this recipe', () => {
+  const onUseRecipe = vi.fn()
+  fakeServer(payload())
+  render(
+    <SettingsView
+      settings={settingsPayload(
+        {},
+        {
+          imports: [
+            {
+              id: 'imp-1',
+              createdAt: '2026-11-10T00:00:00Z',
+              source: 'workflow:code-review',
+              version: '2.3.0',
+              to: 'project',
+              target: '/repo/.tranchant/recipe.json',
+              state: 'ready',
+              extends: true,
+              lenses: [
+                {
+                  name: 'abac',
+                  source: 'workflow:code-reviewer-abac',
+                  paths: ['**/*.ts'],
+                },
+              ],
+              leftOut: [{ what: 'Sliced mode', why: 'orchestration' }],
+            },
+          ],
+        },
+      )}
+      offline={false}
+      onDismiss={() => undefined}
+      onSave={() => undefined}
+      onUseRecipe={onUseRecipe}
+    />,
+  )
+  expect(screen.getByRole('heading', { name: 'Imported recipes Preview' })).toBeTruthy()
+  const imported = screen.getByRole('listitem', {
+    name: 'Recipe imported from workflow:code-review',
+  })
+  expect(
+    within(imported).getByRole('list', { name: 'Its lenses' }).textContent,
+  ).toContain('abacworkflow:code-reviewer-abacon **/*.ts')
+  expect(within(imported).getByRole('list', { name: 'Left out' }).textContent).toContain(
+    'Sliced modeorchestration',
+  )
+  fireEvent.click(within(imported).getByRole('button', { name: 'Use this recipe' }))
+  expect(onUseRecipe).toHaveBeenCalledWith('imp-1')
+})

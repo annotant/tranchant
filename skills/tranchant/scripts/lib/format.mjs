@@ -10,17 +10,27 @@ export const REVIEW_VERSION = 1
 export const DECISIONS_VERSION = 1
 
 /**
- * Where a review stands: `reviewing` while its producer still adds findings,
- * `complete` once it is done. Absent from the envelope, it is `complete`.
- * @typedef {'reviewing' | 'complete'} Status
+ * Where a review stands: `preparing` while `/tranchant review` builds its
+ * lenses, `reviewing` while its producer still adds findings, `complete`
+ * once it is done, `refused` when a lens could not be built and no reviewer
+ * started. Absent from the envelope, it is `complete`.
+ * @typedef {'preparing' | 'reviewing' | 'complete' | 'refused'} Status
  */
 
 /** @type {ReadonlySet<string>} */
-const STATUSES = new Set(['reviewing', 'complete'])
+const STATUSES = new Set(['preparing', 'reviewing', 'complete', 'refused'])
+
+/** @param {unknown} value @returns {value is Status} */
+const isStatus = (value) => typeof value === 'string' && STATUSES.has(value)
 
 /** A review's status; absent means `complete`. @param {{ status?: unknown }} review */
-export const statusOf = (review) =>
-  review.status === 'reviewing' ? 'reviewing' : 'complete'
+export const statusOf = (review) => (isStatus(review.status) ? review.status : 'complete')
+
+/** Whether a review is over: complete, or refused before any reviewer started. */
+export const isSettled = (/** @type {{ status?: unknown }} */ review) => {
+  const status = statusOf(review)
+  return status === 'complete' || status === 'refused'
+}
 
 /**
  * Where a finding stands. Absent from the decisions file, it is `open`.
@@ -46,9 +56,9 @@ export const STATES = [
 
 /**
  * The moves of a finding: a reviewer's decision (`fix`, `post`, `issue`,
- * `drop`, `skip`, `answer`, `stop`), an agent's (`claim`, `done`, `ask`) or
- * the server's (`posted`, `moved`, `fail`).
- * @typedef {'fix' | 'post' | 'issue' | 'drop' | 'skip' | 'answer' | 'stop' | 'claim' | 'done' | 'ask' | 'posted' | 'moved' | 'fail'} Move
+ * `drop`, `skip`, `answer`, `stop`, or `change`, asked in its discussion), an
+ * agent's (`claim`, `done`, `ask`) or the server's (`posted`, `moved`, `fail`).
+ * @typedef {'fix' | 'post' | 'issue' | 'drop' | 'skip' | 'answer' | 'stop' | 'change' | 'claim' | 'done' | 'ask' | 'posted' | 'moved' | 'fail'} Move
  */
 
 /** The states a reviewer may still drop or skip from: nothing has landed yet. */
@@ -63,8 +73,8 @@ const UNDECIDED = /** @type {readonly State[]} */ ([
 /**
  * Each move, the states it leaves and the one it reaches. A `fixed`,
  * `posted` or `moved` finding is final: no move leaves it (a reply on its
- * thread is no move: see `Reply`). A question is answered with `answer`,
- * never with another `fix`.
+ * thread is no move: see `Reply`), but a `change` its thread's discussion
+ * asks for. A question is answered with `answer`, never with another `fix`.
  * @type {Readonly<Record<Move, { from: readonly State[], to: State }>>}
  */
 export const MOVES = {
@@ -75,6 +85,7 @@ export const MOVES = {
   skip: { from: [...UNDECIDED, 'dropped'], to: 'skipped' },
   answer: { from: ['asking'], to: 'queued' },
   stop: { from: ['queued', 'working'], to: 'stopped' },
+  change: { from: ['open', 'skipped', 'failed', 'stopped', 'fixed'], to: 'queued' },
   claim: { from: ['queued'], to: 'working' },
   done: { from: ['working'], to: 'fixed' },
   ask: { from: ['working'], to: 'asking' },
@@ -113,7 +124,7 @@ export const AGENT_ENDED_REASON = 'the agent ended without done.mjs or ask.mjs'
 /** @typedef {'Bugs' | 'Security & Permissions' | 'Breaking Changes' | 'Tests' | 'Conventions' | 'Code Quality' | 'Deprecation & Feature Flags'} Topic */
 
 /** @type {readonly Topic[]} */
-const TOPICS = [
+export const TOPICS = [
   'Bugs',
   'Security & Permissions',
   'Breaking Changes',
@@ -247,7 +258,20 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string[]} strengths
  * @property {Record<string, number>} [sources]
  * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.
- * @property {Finding[]} findings At least one, unless `status` is `reviewing`.
+ * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
+ * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
+ * @property {Finding[]} findings At least one, unless the review is not `complete`.
+ */
+
+/**
+ * A lens a review ran: its name, its source, the source's version when a
+ * plugin gives one, and the hash of the prompt built from it.
+ * @typedef {{ name: string, source: string, version?: string, hash: string }} LensRecord
+ */
+
+/**
+ * Why a review was refused: the lens, its source, the reason, and what fixes it.
+ * @typedef {{ lens: string, source: string, reason: string, fix?: string }} Refusal
  */
 
 /**
@@ -255,6 +279,8 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {'fix' | 'post' | 'issue' | 'drop' | 'skip'} action
  * @property {string} [context] `fix`: the reviewer's constraint or choice.
  * @property {boolean} [resolve] `post` on a thread: resolve it once replied.
+ * @property {string} [proposal] `post` on a thread: the `at` of the agent's message whose proposed reply it started from.
+ * @property {string} [change] `fix` asked in the thread's discussion: the `at` of the reviewer's message that asked.
  * @property {string} at
  */
 
@@ -292,11 +318,13 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
 
 /**
  * A reply on the thread of a finding settled already (`fixed`, or `posted`
- * and answered back): no move, the state stays; `posted` records it once on
- * the thread, `failed` says why it is not.
+ * and answered back) or whose fix is under way (`queued`, `working`,
+ * `asking`, `stopped`): no move, the state and the fix stay; `posted`
+ * records it once on the thread, `failed` says why it is not.
  * @typedef {object} Reply
  * @property {string} text
  * @property {boolean} [resolve]
+ * @property {string} [proposal] As the decision's.
  * @property {string} at
  * @property {string} [failed]
  */
@@ -309,6 +337,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} url
  * @property {string} at
  * @property {boolean} [resolved]
+ * @property {string} [proposal] As the decision's.
  */
 
 /**
@@ -365,7 +394,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Answer} [answer]
  * @property {string} [reason] `dropped`: the reviewer's words; `failed`: the error.
  * @property {Posted} [posted]
- * @property {Reply} [reply] A reply on a settled finding's thread, on its way or failed.
+ * @property {Reply} [reply] A reply on its thread aside from the moves (see `Reply`), on its way or failed.
  * @property {SentReply[]} [replies] The replies posted on its thread, oldest first.
  * @property {Issue} [issue] An issue decision: its title and body, then its `url` once created.
  * @property {Run[]} runs
@@ -422,9 +451,26 @@ export const repliesOn = (/** @type {{ thread?: unknown }} */ finding) =>
 /** The states a thread is replied on without moving: settled already, the reply a record of its own. */
 export const REPLY_IN = /** @type {readonly State[]} */ (['fixed', 'posted'])
 
-/** A reply on a settled finding's thread, on its way: not posted, not failed. */
-export const replyPending = (/** @type {Pick<Entry, 'state' | 'reply'>} */ entry) =>
-  REPLY_IN.includes(entry.state) && !!entry.reply && !entry.reply.failed
+/** The states a fix is under way in, `stopped` included: a reply on its thread leaves it be. */
+const FIX_UNDERWAY = /** @type {readonly State[]} */ ([
+  'queued',
+  'working',
+  'asking',
+  'stopped',
+])
+
+/**
+ * Whether a reply on `entry`'s thread is no move but a record of its own:
+ * settled already, or while its fix is under way, which the reply leaves be.
+ * @param {Pick<Entry, 'state' | 'decision'>} entry
+ */
+export const repliesAside = (entry) =>
+  REPLY_IN.includes(entry.state) ||
+  (entry.decision?.action === 'fix' && FIX_UNDERWAY.includes(entry.state))
+
+/** A reply on a finding's thread, on its way: not posted, not failed, even once the fix it was sent beside failed. */
+export const replyPending = (/** @type {Pick<Entry, 'reply'>} */ entry) =>
+  !!entry.reply && !entry.reply.failed
 
 /**
  * `text` on one line: the hooks read one event per line, and a line break in
@@ -813,7 +859,33 @@ export function validateEnvelope(review) {
   if (!SHA.test(String(review.headSha))) problems.push('headSha: a sha is required')
   if (!OWNERSHIPS.has(review.ownership)) problems.push('ownership: ours or theirs')
   if (review.status !== undefined && !STATUSES.has(review.status)) {
-    problems.push('status: reviewing or complete')
+    problems.push('status: preparing, reviewing, complete or refused')
+  }
+  if (
+    review.lenses !== undefined &&
+    (!Array.isArray(review.lenses) ||
+      !review.lenses.every(
+        (/** @type {any} */ lens) =>
+          isObject(lens) &&
+          isText(lens.name, 40) &&
+          isText(lens.source, 1000) &&
+          /^[0-9a-f]{64}$/.test(String(lens.hash)) &&
+          (lens.version === undefined || isText(lens.version, 100)),
+      ))
+  ) {
+    problems.push('lenses: an array of { name, source, version?, hash }')
+  }
+  if (
+    review.refusal !== undefined &&
+    (!isObject(review.refusal) ||
+      !isText(review.refusal.lens, 100) ||
+      typeof review.refusal.source !== 'string' ||
+      !isText(review.refusal.reason, 2000))
+  ) {
+    problems.push('refusal: { lens, source, reason, fix? }')
+  }
+  if (review.status === 'refused' && review.refusal === undefined) {
+    problems.push('refusal: a refused review says why')
   }
   if (!isText(review.title, 300)) problems.push('title: a text is required')
   if (typeof review.summary !== 'string')
@@ -842,7 +914,7 @@ export function validateEnvelope(review) {
 
 /**
  * What is wrong with a review, as its producer wrote it: empty when it is
- * sound. The findings may be empty only while the review is `reviewing`.
+ * sound. The findings may be empty only while the review is not `complete`.
  * @param {any} review
  * @returns {string[]}
  */
@@ -850,7 +922,7 @@ export function validateReview(review) {
   const problems = validateEnvelope(review)
   if (!isObject(review) || review.version !== REVIEW_VERSION) return problems
   const { findings } = review
-  const reviewing = statusOf(review) === 'reviewing'
+  const reviewing = statusOf(review) !== 'complete'
   if (!Array.isArray(findings) || (findings.length === 0 && !reviewing)) {
     problems.push(
       reviewing ? 'findings: an array is required' : 'findings: at least one is required',
@@ -925,12 +997,18 @@ export function envelopeOf(review) {
 
 /**
  * What tells a review from another with the same id, as JSON: its envelope,
- * status and `verify` left out. A review that grew, or completed, is still the
- * same one, opened again without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown }} review
+ * status, `verify` and what its Lenses step recorded left out. A review that
+ * grew, or completed, is still the same one, opened again without `--verify` too.
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, refusal?: unknown }} review
  */
 export function identityOf(review) {
-  const { status: _status, verify: _verify, ...identity } = envelopeOf(review)
+  const {
+    status: _status,
+    verify: _verify,
+    lenses: _lenses,
+    refusal: _refusal,
+    ...identity
+  } = envelopeOf(review)
   return JSON.stringify(canonical(identity))
 }
 

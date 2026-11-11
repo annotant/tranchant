@@ -13,7 +13,10 @@
 // It computes the change's diff (/api/diff) once, with git, for the page's main view,
 // and serves the text of its files at its head (/api/lines), for the lines its hunks hide.
 // It serves and writes the user's settings (/api/settings, lib/settings.mjs),
-// one write at a time, and pushes `settings` when the file changes.
+// one write at a time, with the recipe in force and the recipes imported for
+// the project (lib/imports.mjs), one of which /api/recipe/use puts in force;
+// it pushes `settings` when the file or the imports change. It serves the
+// Lenses step's progress (lenses.json) with the review.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -26,15 +29,15 @@ import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
-import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
+import { readDiscussions, say, syncChange, waitsForAnswer } from './lib/discussion.mjs'
+import { ImportRefusal, importsDir, listImports, useImport } from './lib/imports.mjs'
+import { describeRecipe } from './lib/lens.mjs'
 import {
   DEFAULTS,
   SETTINGS_DIR,
   SETTINGS_FILE,
   SettingsRefusal,
   loadSettings,
-  recipeInForce,
-  recipeLenses,
   writeSettings,
 } from './lib/settings.mjs'
 import { trackerOf } from './lib/tracker.mjs'
@@ -150,9 +153,13 @@ async function readJson(req) {
 }
 
 const ID = /^[\w-]{1,64}$/
+const RUN_ID = /^r\d{1,6}$/
+const MAX_RUNS = 50
 const MAX_TEXT = 4000
 const MAX_DECISIONS = 500
 const ACTIONS = new Set(['fix', 'post', 'issue', 'drop', 'skip'])
+// A reply's proposal is the `at` of the agent's message it came from, not text.
+const MAX_PROPOSAL = 64
 
 /** @param {unknown} value */
 const text = (value, max = MAX_TEXT) =>
@@ -161,7 +168,7 @@ const text = (value, max = MAX_TEXT) =>
 /**
  * One decision of a batch, as the page sends it; undefined when it is not one.
  * @param {any} input
- * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, reason?: string, title?: string, body?: string } | undefined}
+ * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, proposal?: string, reason?: string, title?: string, body?: string } | undefined}
  */
 function sanitiseDecision(input) {
   if (!input || typeof input !== 'object') return undefined
@@ -173,6 +180,7 @@ function sanitiseDecision(input) {
     context: text(input.context),
     comment: text(input.comment),
     resolve: input.resolve === true,
+    proposal: text(input.proposal, MAX_PROPOSAL),
     reason: text(input.reason),
     title: text(input.title, MAX_ISSUE_TITLE),
     body: text(input.body, MAX_ISSUE_BODY),
@@ -321,25 +329,40 @@ function trackerOnce(values) {
 
 /**
  * What `GET /api/settings` answers: the file as it stands, the values in
- * force, the keys an environment variable locks, and the lenses of the
- * recipe in force, which the page lists to turn off.
+ * force, the keys an environment variable locks, the recipe in force for
+ * this review's project (where it comes from, its lenses and their sources,
+ * which the page lists to turn off) and the recipes imported for it.
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
-  const recipe = recipeInForce(values)
-  const lenses = await recipeLenses(recipe)
+  const [recipe, imports] = await Promise.all([
+    describeRecipe({ project, base: review.base, settings: values.recipe }),
+    listImports(project).catch((error) => {
+      console.error(`tranchant server: imports unreadable: ${oneLine(String(error))}`)
+      return []
+    }),
+  ])
   return {
     path: SETTINGS_FILE,
     settings,
     values,
     defaults: DEFAULTS,
     locked,
-    recipe,
-    lenses: lenses.lenses,
-    ...(lenses.problem && { recipeProblem: lenses.problem }),
+    recipe: recipe.file,
+    recipeFrom: recipe.from,
+    recipeLenses: recipe.lenses,
+    lenses: recipe.lenses.map((lens) => lens.name),
+    imports,
+    ...(recipe.problem && { recipeProblem: recipe.problem }),
     ...(problem && { problem }),
   }
 }
+
+/** The Lenses step's progress, as lenses.mjs writes it; undefined before it starts. */
+const readLensesStep = () =>
+  readFile(path.join(dir, 'lenses.json'), 'utf8')
+    .then((json) => JSON.parse(json))
+    .catch(() => undefined)
 
 /** The most MiB of diff the server reads from git and hands the page. */
 const MAX_DIFF_MIB = Number(process.env.TRANCHANT_MAX_DIFF_MIB ?? 32)
@@ -616,19 +639,27 @@ function writtenPath(step) {
 }
 
 /**
- * By path, the last time finding `id`'s run that fixed it (else its last run
- * that ended) wrote it.
+ * By path, the last time finding `id`'s runs `wanted` that ended (with none
+ * named, its run that fixed it, else its last run that ended) wrote it.
  * @param {string} id
+ * @param {string[]} [wanted]
  */
-async function writtenBy(id) {
+async function writtenBy(id, wanted = []) {
   const { findings } = await store.readDecisions()
   const runs = findings[id]?.runs ?? []
-  const run =
+  const fallback =
     runs.findLast((one) => one.outcome === 'fixed') ?? runs.findLast((one) => one.endedAt)
+  const chosen = wanted.length
+    ? new Set(
+        runs.filter((one) => one.endedAt && wanted.includes(one.id)).map((one) => one.id),
+      )
+    : new Set(fallback ? [fallback.id] : [])
+  // Runs named that are not there, or still running, wrote nothing yet.
+  if (wanted.length && !chosen.size) return new Map()
   /** @type {Map<string, number>} */
   const last = new Map()
   for (const step of await readProgress(dir, id, undefined, { history: true })) {
-    if (run && step.run && step.run !== run.id) continue
+    if (chosen.size && step.run && !chosen.has(step.run)) continue
     const file = writtenPath(step)
     if (file) last.set(file, Math.max(last.get(file) ?? 0, step.at ?? 0))
   }
@@ -637,11 +668,13 @@ async function writtenBy(id) {
 
 /**
  * By path of `last`, the other findings whose runs, ended or in progress,
- * wrote it after `last` says this one did.
+ * wrote it after `last` says this one did; with `runs`, this finding's other
+ * runs too.
  * @param {string} id
  * @param {Map<string, number>} last
+ * @param {string[]} [runs]
  */
-async function writtenSince(id, last) {
+async function writtenSince(id, last, runs = []) {
   /** @type {Map<string, Set<string>>} */
   const since = new Map([...last.keys()].map((file) => [file, new Set()]))
   /** @type {string[]} */
@@ -658,6 +691,25 @@ async function writtenSince(id, last) {
       return other && other !== id ? [other] : []
     }),
   )
+  // Runs named: this finding's later runs show in the diff too, as `<id> (<run>)`.
+  if (runs.length) {
+    const mine = [
+      ...(await readProgress(dir, id)),
+      ...(await readProgress(dir, id, undefined, { history: true })),
+    ]
+    for (const step of mine) {
+      const file = writtenPath(step)
+      const at = file === undefined ? undefined : last.get(file)
+      if (
+        file &&
+        at !== undefined &&
+        step.run &&
+        !runs.includes(step.run) &&
+        (step.at ?? 0) > at
+      )
+        since.get(file)?.add(`${id} (${step.run})`)
+    }
+  }
   for (const other of others) {
     const steps = [
       ...(await readProgress(dir, other)),
@@ -786,15 +838,17 @@ async function newFileDiff(args, file) {
 }
 
 /**
- * What `GET /api/changes/<id>` answers: the files finding `id`'s fix wrote
- * and their diff against HEAD as the working tree has them now.
+ * What `GET /api/changes/<id>` answers: the files finding `id`'s fix (its
+ * runs `runs` when named: one change its discussion asked for) wrote and
+ * their diff against HEAD as the working tree has them now.
  * @param {string} id
+ * @param {string[]} [runs]
  * @returns {Promise<{ files: ChangedFile[], diff: string }>}
  */
-async function changesOf(id) {
-  const last = await writtenBy(id)
+async function changesOf(id, runs) {
+  const last = await writtenBy(id, runs)
   if (!last.size) return { files: [], diff: '' }
-  const since = await writtenSince(id, last)
+  const since = await writtenSince(id, last, runs)
   const paths = [...last.keys()]
   return {
     files: paths.map((file) => ({
@@ -862,23 +916,25 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
     // Read anew: findings land and the status flips while the review runs.
-    const [{ review: latest, decisions }, runs, agents, discussions, current] =
+    const [{ review: latest, decisions }, runs, agents, discussions, current, lenses] =
       await Promise.all([
         store.readAll(),
         store.runs(),
         readReviewAgents(dir),
         readDiscussions(dir),
         currentHead(),
+        readLensesStep(),
       ])
     return send(res, 200, {
       review: latest,
+      ...(lenses && { lenses }),
       findings: decisions.findings,
       runs,
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
       discussions: Object.fromEntries(
         Object.entries(discussions).map(([id, discussion]) => {
           // While it answers: its agent's last step, the page's progress line.
-          const steps = isWaiting(discussion)
+          const steps = waitsForAnswer(discussion)
             ? agents.find((agent) => agent.name === `ds-${id}`)?.steps
             : undefined
           // The file holds every agent the thread had: an end is a past one's.
@@ -971,8 +1027,11 @@ async function handle(req, res) {
   if (req.method === 'GET' && changed !== undefined) {
     const known = (await store.readReview()).findings.some((one) => one.id === changed)
     if (!ID.test(changed) || !known) return send(res, 404, { error: 'not found' })
+    const ofRuns = url.searchParams.getAll('run')
+    if (ofRuns.length > MAX_RUNS || ofRuns.some((one) => !RUN_ID.test(one)))
+      return send(res, 400, { error: `run is a run id (r1, r2…), ${MAX_RUNS} at most` })
     try {
-      return send(res, 200, await changesOf(changed))
+      return send(res, 200, await changesOf(changed, ofRuns))
     } catch (error) {
       if (!(error instanceof DiffUnavailable)) throw error
       console.error(`tranchant server: /api/changes/${changed}: ${error.message}`)
@@ -1003,6 +1062,8 @@ async function handle(req, res) {
         continue
       }
       applied.push(decision.id)
+      // A change dropped, skipped or replaced: the discussion says so.
+      await settleDiscussion(decision.id)
       decided(decision.id, decision.action)
     }
     return send(res, 200, { applied, refused })
@@ -1017,6 +1078,7 @@ async function handle(req, res) {
       ? input.choices.filter((choice) => typeof choice === 'string')
       : []
     const entry = await store.answer(input.id, { text: text(input.text), choices })
+    await settleDiscussion(input.id)
     print(`FIX ${input.id}`)
     return send(res, 200, { finding: entry })
   }
@@ -1026,9 +1088,28 @@ async function handle(req, res) {
     if (typeof input?.id !== 'string' || !ID.test(input.id)) {
       return send(res, 400, { error: 'id is required' })
     }
-    const discussion = await say(dir, input.id, text(input.text) ?? '')
-    print(`DISCUSS ${input.id}`)
+    // A change asked for is a fix: an agent that writes, never the discussing one.
+    const change = input.change === true
+    const discussion = await say(dir, input.id, text(input.text) ?? '', { change })
+    print(`${change ? 'FIX' : 'DISCUSS'} ${input.id}`)
     return send(res, 200, { discussion })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/recipe/use') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id)) {
+      return send(res, 400, { error: 'id is required' })
+    }
+    try {
+      const used = await useImport(project, input.id)
+      void importsChanged()
+      // In force already: a settings payload that fails now is the page's to ask again.
+      const settings = await settingsPayload().catch(() => undefined)
+      return send(res, 200, { ...used, ...(settings && { settings }) })
+    } catch (error) {
+      if (error instanceof ImportRefusal) return send(res, 409, { error: error.message })
+      throw error
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
@@ -1037,6 +1118,7 @@ async function handle(req, res) {
       return send(res, 400, { error: 'id is required' })
     }
     const entry = await store.stop(input.id)
+    await settleDiscussion(input.id)
     print(`STOP ${input.id}`)
     return send(res, 200, { finding: entry })
   }
@@ -1077,6 +1159,21 @@ function writeSettingsInTurn(res, input) {
   })
   settingsWriting = turn.catch(() => undefined)
   return turn
+}
+
+/**
+ * Brings finding `id`'s discussion in line with its decision once the store
+ * moved it: a failure is the server's to say, never the move's, which stands.
+ * @param {string} id
+ */
+async function settleDiscussion(id) {
+  try {
+    await syncChange(dir, id)
+  } catch (error) {
+    console.error(
+      `tranchant server: the discussion of ${id} is left as it is: ${oneLine(String(error))}`,
+    )
+  }
 }
 
 /**
@@ -1180,7 +1277,7 @@ async function fallBack(script, id, reason) {
       replying ||
       (entry?.state === 'queued' && entry.decision?.action === script.action)
     )
-      await store.fail(id, reason.slice(0, 300))
+      await store.fail(id, reason.slice(0, 300), { reply: replying })
   } catch (error) {
     if (!(error instanceof StoreRefusal))
       console.error(`tranchant server: ${script.action} ${id}: ${oneLine(String(error))}`)
@@ -1281,6 +1378,13 @@ async function changes() {
     )
     agents.push(`${name} ${file}`)
   }
+  // The Lenses step's rows, which change before any agent starts.
+  agents.push(
+    `lenses.json ${await stat(path.join(dir, 'lenses.json')).then(
+      (one) => `${one.size} ${one.mtimeMs}`,
+      () => '',
+    )}`,
+  )
   const agentsNow = agents.join('\n')
   const summary = latest
     ? JSON.stringify([latest.summary, latest.strengths])
@@ -1382,6 +1486,30 @@ function pageChanged(_event, file) {
     pageSeen = built
     for (const res of listeners) res.write('event: page\ndata: {}\n\n')
   }, BATCH_MS)
+}
+
+/** The imports' folders and their files' times at the last look: an import that ends changes the page's Settings. */
+let importsSeen = ''
+
+/** Tells the pages the imports changed, when they did since the last look. */
+async function importsChanged() {
+  const root = importsDir(project)
+  const marks = []
+  for (const id of (await readdir(root).catch(() => [])).toSorted((a, b) =>
+    a.localeCompare(b),
+  )) {
+    for (const name of ['import.json', 'recipe.json']) {
+      const mark = await stat(path.join(root, id, name)).then(
+        (one) => `${one.size} ${one.mtimeMs}`,
+        () => '',
+      )
+      marks.push(`${id}/${name} ${mark}`)
+    }
+  }
+  const now = marks.join('\n')
+  if (now === importsSeen) return
+  importsSeen = now
+  for (const res of listeners) res.write('event: settings\ndata: {}\n\n')
 }
 
 /** The settings file's size and time at the last look, or '' while it is missing. */
@@ -1516,7 +1644,7 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
   for (const [id, entry] of Object.entries(decisions?.findings ?? {})) {
-    // A reply on a settled finding's thread waits outside the states.
+    // A reply on a thread, settled or its fix under way, waits outside the states.
     if (replyPending(entry)) decided(id, 'post')
     if (entry.state !== 'queued') continue
     const action = entry.decision?.action
@@ -1528,7 +1656,9 @@ async function resumeQueued() {
     return {}
   })
   for (const [id, discussion] of Object.entries(discussions)) {
-    if (isWaiting(discussion)) print(`DISCUSS ${id}`)
+    if (waitsForAnswer(discussion)) print(`DISCUSS ${id}`)
+    // What a change left while no server ran, or a script failed to write.
+    else await settleDiscussion(id)
   }
 }
 
@@ -1550,9 +1680,11 @@ server.listen(port, '127.0.0.1', async () => {
   watchFolders()
   await resumeQueued()
   await refreshNext()
+  await importsChanged()
   setInterval(() => {
     watchFolders()
     settingsChanged()
+    void importsChanged()
     void refreshNext()
   }, pollMs)
 })

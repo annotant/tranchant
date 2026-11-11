@@ -104,7 +104,11 @@ code, and `bugs` and `docs` read every file. Every lens follows the
 execution chain past the changed lines: the server route a request reaches,
 and the dependencies in `node_modules` at the version the lockfile installs,
 whose source settles how a library behaves.
-`--recipe <path>` runs your own, in the same shape. See
+`--recipe <path>` runs your own, in the same shape. A team that has a
+review process of its own (a skill and the agents it starts, a project's
+`.claude/agents/*-reviewer.md`) imports it with `/tranchant import`: the
+recipe references its sources, and each review rebuilds the lenses from them,
+so they follow the sources' later changes. See
 [the review file](docs/review-file.md#the-recipe).
 
 ## Install
@@ -145,6 +149,7 @@ run script.
 /tranchant review feature/cart        # another branch, against the default branch
 /tranchant review <merge request url> # someone else's MR, read with glab
 /tranchant review ../other-repo       # another repository, at its current branch
+/tranchant import [<source>] [--to project|local]  # a team's review process as a recipe, shown before it is used
 /tranchant comments                   # the unresolved review threads of the current branch's PR/MR
 /tranchant comments <PR or MR url>    # those of another one
 /tranchant <review.json>              # import a review and open its page
@@ -206,7 +211,12 @@ In the page:
   in place, to edit before it posts) or **Drop with this reason** turn it
   into a decision in one click. A discussion decides nothing; it survives a
   reload, a finding that has one shows its count in the diff and the list,
-  and it reads as it stands once the finding is settled.
+  and it reads as it stands once the finding is settled. On a finding from
+  `/tranchant comments`, **Change** asks for a change instead ("go ahead",
+  "also cover the empty case"): an agent makes it in the working tree with
+  the whole discussion in hand, as a fix does (file locks, **Stop**), its
+  current step, its questions and what it changed (**View changes**) in the
+  thread; ask again for the next change, even once the finding is fixed.
 - The bar at the top selects every finding, a group (To do, Safe to
   auto-fix) or none, then applies one action to the selection (**Issue**
   opens one issue per finding, as drafted); Post all to do posts every open

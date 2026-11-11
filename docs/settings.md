@@ -19,7 +19,22 @@ the same rules, on their own.
 A run's flag (`--recipe` on `/tranchant review`), then an environment
 variable, then the settings file, then the default. When an environment
 variable wins, the page shows the option read-only and names the variable:
-`TRANCHANT_MODEL` sets the three models.
+`TRANCHANT_MODEL` sets the three models, and wins over a lens's own `model`.
+The recipe has two more places, between the flag and the settings' `recipe`:
+the local recipe, then the project's (see
+[where the recipe comes from](review-file.md#where-the-recipe-comes-from)).
+
+## The recipe's two locations
+
+`/tranchant import` writes the recipe where the user chooses:
+
+- **project**: `<repository>/.tranchant/recipe.json`, committed and shared
+  with the team, read at the base of each review;
+- **local**: `$XDG_CONFIG_HOME/tranchant/projects/<project hash>/recipe.json`
+  (else `~/.config/…`), `<project hash>` the first 12 hex digits of the SHA-1
+  of the project's root: the user's alone, outside the repository, and first
+  of the two. Its paths are read from the working tree, not at BASE: on a
+  branch someone else wrote, prefer the project recipe.
 
 A change applies to the next agent started, the next review, the next post:
 never to an agent already running.
@@ -60,7 +75,7 @@ removed.
 | `verifyModel`     | the same                          | The hooks, for each verifier.                                                                                                                                |
 | `maxFixAgents`    | integer, 1 to 8                   | The hooks, before each round of starts: the fixes waiting start up to it.                                                                                    |
 | `maxReviewAgents` | integer, 1 to 8                   | The hooks, for the reviewers, verifiers and discussing agents together.                                                                                      |
-| `recipe`          | an absolute path, or `~`, `~/…`   | `prepare.mjs`, when the run names no `--recipe`: a regular JSON file under 1 MiB. The page lists its lenses, or says why it cannot read it.                 |
+| `recipe`          | an absolute path, or `~`, `~/…`   | `prepare.mjs`, when the run names no `--recipe` and the project has no local or project recipe: a regular JSON file under 1 MiB. The page shows the recipe in force, its lenses and their sources, or says why it cannot read it. |
 | `disabledLenses`  | up to 12 lens names, `[\w-]{1,40}` | `prepare.mjs`, when the run names no `--recipe` (a run's own recipe runs whole): a lens named is not run, and no other lens takes its files. Every lens off refuses the review: `every lens of the recipe is turned off…`. |
 | `postWith`        | `auto`, `glab`, `gh`              | The server (`/api/tracker`, `/api/account`) and `issue.mjs`: `glab` or `gh` names the forge for a host neither tool recognises; on a host the other forge owns (`github.com` with `glab`) the tracker is refused, with the reason, so a token never goes to the wrong forge. `auto` reads the host, as before. MR comments always go through `glab`, whose account the batch bar names. |
 
@@ -73,7 +88,8 @@ Options meant for tests and development stay environment variables:
 
 | Route               | Does                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/settings` | `{ path, settings, values, defaults, locked, recipe, lenses, recipeProblem?, problem? }`: the file's path, the file as it stands (the keys set), the values in force (every key, `null` where nothing is chosen), the defaults, by key the environment variable that locks it, the recipe in force and its lenses' names (`recipeProblem` when it cannot be read), and `problem` when the file reads as none, and why. |
+| `GET /api/settings` | `{ path, settings, values, defaults, locked, recipe, recipeFrom, recipeLenses, lenses, imports, recipeProblem?, problem? }`: the file's path, the file as it stands (the keys set), the values in force (every key, `null` where nothing is chosen), the defaults, by key the environment variable that locks it, the recipe in force for the review's project (`recipe` its file, `BASE:<path>` for the project's; `recipeFrom` `local`, `project`, `settings` or `plugin`; `recipeLenses`, each `{ name, source, problem?, fix? }`, `problem` when it cannot be built now; `lenses` their names; `recipeProblem` when it cannot be read), the recipes imported for the project not used yet (`imports`, each with its source, location, state, lenses and what it left out), and `problem` when the file reads as none, and why. |
+| `POST /api/recipe/use` | Use this recipe: see [the server's routes](review-file.md#routes). |
 | `PUT /api/settings` | The whole file, as `settings` comes back from the GET: `{ "theme": "dark", … }`, a `null` or an absent key unsetting it; `{}` resets everything. Writes run one after the other. Answers what the GET does, written; 400 `{ error }` with the key when refused; 409 when the file reads as none; 500 with the file's path when it cannot be written (rights, disk). Every page learns of it through the `settings` event of `/api/events`, as of a page of another server's write, or an editor's. |
 
 The page's **Reset** on an option sends the file without its key; **Reset

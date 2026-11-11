@@ -1,13 +1,15 @@
 // A finding's discussion: the reviewer's questions and an agent's answers, in
-// discussions/<id>.json next to decisions.json. Not a decision: no move of the
-// finding's state goes through it. Described in docs/review-file.md.
+// discussions/<id>.json next to decisions.json. Not a decision: only a change
+// the reviewer asks for in it moves the finding, through the store's `change`.
+// Described in docs/review-file.md.
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
 import { withFileLock } from './filelock.mjs'
-import { REPLY_IN, stateWords } from './format.mjs'
+import { REPLY_IN, canMove, stateWords } from './format.mjs'
 import { StoreRefusal, createStore } from './store.mjs'
 
+/** @typedef {import('./format.mjs').Entry} Entry */
 /** @typedef {import('./format.mjs').State} State */
 /**
  * What the agent proposes the reviewer carries over to a decision: the fix's
@@ -15,8 +17,11 @@ import { StoreRefusal, createStore } from './store.mjs'
  * @typedef {{ fix?: string, comment?: string, drop?: string }} Proposal
  */
 /**
- * `failed`: the agent ended without answering; the text says so.
- * @typedef {{ by: 'reviewer' | 'agent', text: string, at: string, proposal?: Proposal, failed?: true }} Message
+ * `failed`: the agent ended without answering; the text says so. `change`:
+ * the reviewer's message asks for a change to the code, or answers the
+ * question its agent asked. `runs` and `outcome`: that change's result, the
+ * runs it took and the state they left the finding in.
+ * @typedef {{ by: 'reviewer' | 'agent', text: string, at: string, proposal?: Proposal, failed?: true, change?: true, runs?: string[], outcome?: State }} Message
  */
 /** @typedef {{ version: 1, messages: Message[] }} Discussion */
 
@@ -35,6 +40,8 @@ const MAX_ANSWER = 8000
 const MAX_PROPOSAL = 4000
 const PROPOSALS = /** @type {const} */ (['fix', 'comment', 'drop'])
 const UNANSWERED = 'The agent ended without answering: ask again.'
+/** The states a change asked for is still under way in: its result is not there yet. */
+const CHANGING = new Set(['queued', 'working'])
 
 /** The discussion file of finding `id`. */
 const discussionPath = (/** @type {string} */ dir, /** @type {string} */ id) =>
@@ -42,8 +49,16 @@ const discussionPath = (/** @type {string} */ dir, /** @type {string} */ id) =>
 
 const DISCUSSION_FILE = /^([\w-]{1,64})\.json$/
 
-/** Whether the reviewer's last message waits for the agent's answer. @param {Discussion | undefined} discussion */
-export const isWaiting = (discussion) => discussion?.messages.at(-1)?.by === 'reviewer'
+/** Whether the reviewer's last message waits, for an answer or a change. @param {Discussion | undefined} discussion */
+const isWaiting = (discussion) => discussion?.messages.at(-1)?.by === 'reviewer'
+
+/** Whether the reviewer's last message is a question waiting for the discussing agent's answer. @param {Discussion | undefined} discussion */
+export const waitsForAnswer = (discussion) =>
+  isWaiting(discussion) && !discussion?.messages.at(-1)?.change
+
+/** Whether the reviewer's last message waits for the change it asked for. @param {Discussion | undefined} discussion */
+const waitsForChange = (discussion) =>
+  isWaiting(discussion) && !!discussion?.messages.at(-1)?.change
 
 /**
  * @param {unknown} value
@@ -82,7 +97,7 @@ function parse(text) {
  * @param {string} dir
  * @param {string} id
  */
-async function readDiscussion(dir, id) {
+export async function readDiscussion(dir, id) {
   const text = await readText(dir, id)
   return text === undefined ? undefined : parse(text)
 }
@@ -138,7 +153,10 @@ async function changeDiscussion(dir, id, change) {
       throw new StoreRefusal(
         `discussions/${id}.json is not a discussion this Tranchant reads: left as it is`,
       )
+    const before = JSON.stringify(discussion)
     const result = await change(discussion)
+    // Unchanged, not written: the server would tell the pages for nothing.
+    if (JSON.stringify(discussion) === before) return result
     // Written to a temp file first: the server reads it while the agent answers.
     const temp = `${file}.${process.pid}.tmp`
     await writeFile(temp, `${JSON.stringify(discussion, null, 2)}\n`)
@@ -149,30 +167,51 @@ async function changeDiscussion(dir, id, change) {
 
 /**
  * The reviewer asks something about finding `id`: refused once the finding is
- * settled or an agent works on it, and while the last question waits.
+ * settled or an agent works on it, and while the last message waits. With
+ * `change`, they ask for a change to the code instead, on a finding from a
+ * PR/MR thread: the finding queues for a fix whose agent reads the
+ * discussion (the store's `change`), again once `fixed`.
  * @param {string} dir
  * @param {string} id
  * @param {string} text
+ * @param {{ change?: boolean }} [options]
  * @returns {Promise<Discussion>}
  */
-export async function say(dir, id, text) {
+export async function say(dir, id, text, { change = false } = {}) {
   const question = text.trim().slice(0, MAX_QUESTION)
   if (!question) throw new StoreRefusal('the message is empty')
   const store = createStore(dir)
   const review = await store.readReview()
   const finding = review.findings.find((one) => one.id === id)
   if (!finding) throw new StoreRefusal(`no finding ${id} in the review`)
+  if (change && !finding.thread)
+    throw new StoreRefusal(
+      `finding ${id} has no PR/MR thread: no change from its discussion`,
+    )
   const discussable = finding.thread ? THREAD_DISCUSSABLE : DISCUSSABLE
   return changeDiscussion(dir, id, async (discussion) => {
     // Read under the discussion's lock: as close to the write as it gets.
-    const state = (await store.readDecisions()).findings[id]?.state ?? 'open'
-    if (!discussable.has(state))
-      throw new StoreRefusal(`finding ${id} is ${stateWords(state)}: no discussion now`)
+    const entry = (await store.readDecisions()).findings[id]
+    const state = entry?.state ?? 'open'
+    // What a change left that could not land comes before this message, if it is taken.
+    settle(discussion, entry)
+    if (change ? !canMove('change', state) : !discussable.has(state))
+      throw new StoreRefusal(
+        `finding ${id} is ${stateWords(state)}: no ${change ? 'change from the discussion' : 'discussion'} now`,
+      )
     if (isWaiting(discussion))
       throw new StoreRefusal('the agent is still answering the last message')
     if (discussion.messages.length >= MAX_MESSAGES)
       throw new StoreRefusal(`a discussion holds ${MAX_MESSAGES} messages at most`)
-    discussion.messages.push({ by: 'reviewer', text: question, at: now() })
+    const at = now()
+    // Moved before the message lands: a refused move leaves the discussion as it was.
+    if (change) await store.change(id, { text: question, message: at })
+    discussion.messages.push({
+      by: 'reviewer',
+      text: question,
+      at,
+      ...(change ? { change: /** @type {const} */ (true) } : {}),
+    })
     return discussion
   })
 }
@@ -196,7 +235,8 @@ export function reply(dir, id, answer) {
     proposal[key] = value.trim().slice(0, MAX_PROPOSAL)
   }
   return changeDiscussion(dir, id, (discussion) => {
-    if (!isWaiting(discussion))
+    // A change asked for waits for its fix's agent: a discussing agent never answers it.
+    if (!waitsForAnswer(discussion))
       throw new StoreRefusal(`no question on finding ${id} waits for an answer`)
     discussion.messages.push({
       by: 'agent',
@@ -215,12 +255,114 @@ export function reply(dir, id, answer) {
  * @param {string} id
  */
 export async function endUnanswered(dir, id) {
-  if (!isWaiting(await readDiscussion(dir, id))) return false
+  if (!waitsForAnswer(await readDiscussion(dir, id))) return false
   return changeDiscussion(dir, id, (discussion) => {
-    if (!isWaiting(discussion)) return false
+    // A change asked for waits for its fix's agent, not for this one.
+    if (!waitsForAnswer(discussion)) return false
     discussion.messages.push({ by: 'agent', text: UNANSWERED, at: now(), failed: true })
     return true
   })
+}
+
+/**
+ * The `at` of the change the discussion waits for: the reviewer's last
+ * request, never their answer to its agent's question.
+ * @param {Discussion} discussion
+ */
+const requestOf = (discussion) =>
+  discussion.messages.findLast(
+    (message, i) => message.change && discussion.messages[i - 1]?.outcome !== 'asking',
+  )?.at
+
+/**
+ * What the change asked at `request` left the finding with, as the agent's
+ * message: its summary, its question, or why it went no further. Undefined
+ * while the change is under way.
+ * @param {Entry | undefined} entry
+ * @param {string | undefined} request
+ * @returns {Message | undefined}
+ */
+function resultOf(entry, request) {
+  const state = entry?.state ?? 'open'
+  const at = now()
+  // Another decision took the change's place: its own run is no answer to the request.
+  if (!request || entry?.decision?.change !== request)
+    return {
+      by: 'agent',
+      text: 'The change was not made: you decided otherwise.',
+      at,
+      outcome: state,
+      failed: true,
+    }
+  if (CHANGING.has(state)) return undefined
+  const since = entry.decision.at
+  const runs = entry.runs
+    .filter((run) => run.endedAt && run.startedAt >= since)
+    .map((run) => run.id)
+  const ran = runs.length ? { runs } : {}
+  const last = entry.runs.at(-1)
+  if (state === 'fixed')
+    return {
+      by: 'agent',
+      text: (runs.length && last?.summary?.trim()) || 'Changed on the working tree.',
+      at,
+      ...ran,
+      outcome: state,
+    }
+  if (state === 'asking' && entry.question)
+    return { by: 'agent', text: entry.question.text, at, ...ran, outcome: state }
+  const why =
+    state === 'failed'
+      ? `The change failed: ${entry.reason ?? 'no reason given'}.`
+      : state === 'stopped'
+        ? 'You stopped the change.'
+        : `The change was not made: the finding is ${stateWords(state)}.`
+  return { by: 'agent', text: why, at, ...ran, outcome: state, failed: true }
+}
+
+/**
+ * Brings the discussion in line with the finding's decision: the reviewer's
+ * answer to a change's question, then the change's result once its runs
+ * ended. Whether anything landed.
+ * @param {Discussion} discussion
+ * @param {Entry | undefined} entry
+ */
+function settle(discussion, entry) {
+  const last = discussion.messages.at(-1)
+  // An answer is dropped by the next question: one still there answers the last.
+  const answer = entry?.decision?.change ? entry.answer : undefined
+  let landed = false
+  if (last?.outcome === 'asking' && answer && entry?.state !== 'asking') {
+    const text = [answer.choices?.join(', '), answer.text].filter(Boolean).join(': ')
+    discussion.messages.push({
+      by: 'reviewer',
+      text: text.slice(0, MAX_QUESTION),
+      at: answer.at,
+      change: true,
+    })
+    landed = true
+  }
+  if (!waitsForChange(discussion)) return landed
+  const result = resultOf(entry, requestOf(discussion))
+  if (result) discussion.messages.push(result)
+  return landed || !!result
+}
+
+/**
+ * Brings finding `id`'s discussion in line with a change asked there, once
+ * the store moved it: the reviewer's answer, the run's result, or why there
+ * is none. Called by the scripts that end a run, by the server on each move
+ * the reviewer makes and at start, and before the next message; one call
+ * that failed is mended by the next. Whether anything landed.
+ * @param {string} dir
+ * @param {string} id
+ */
+export async function syncChange(dir, id) {
+  if (!(await readDiscussion(dir, id))?.messages.length) return false
+  const store = createStore(dir)
+  return changeDiscussion(dir, id, async (discussion) =>
+    settle(discussion, (await store.readDecisions()).findings[id]),
+  )
 }
 
 const now = () => new Date().toISOString()

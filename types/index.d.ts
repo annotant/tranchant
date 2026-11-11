@@ -14,12 +14,17 @@ export type Worker = {
   model?: string
 }
 
-/** A lens of a recipe: its instructions file and the path globs it applies to. */
+/** A lens of a recipe, built: its instructions file and the files it reviews. */
 export type Lens = {
   name: string
-  /** Absolute, as prepare.mjs prints it (a recipe names it relative to itself). */
+  /** The prompt lenses.mjs built, absolute: <state>/lenses/<sha256>.md. */
   prompt: string
+  /** The changed files it reviews, or the globs they match. */
   paths: string[]
+  /** The model the recipe asks for: TRANCHANT_MODEL still wins, the settings' come after. */
+  model?: string
+  /** The topics its findings file under, when the recipe declares them. */
+  topics?: string[]
 }
 
 /**
@@ -59,6 +64,24 @@ export type ReviewAgent = {
   running: boolean
   since: number
   model?: string
+  /** A reviewer's: the model its lens asks for, registered again after a reload. */
+  lensModel?: string
+}
+
+/**
+ * An import `/tranchant import` runs: its agent, its folder in the state,
+ * the recipe file it alone may write, and where Use this recipe puts it.
+ */
+export type Importing = {
+  agent: string
+  /** `im-` and the import id's first 8 characters: its agent type's name. */
+  name: string
+  dir: string
+  recipe: string
+  source: string
+  target: string
+  project: string
+  running: boolean
 }
 
 /** A review the hooks serve: its folder and the project it lies in. */
@@ -83,6 +106,10 @@ declare module 'claude-code' {
       run?: boolean
       target?: string
       recipe?: string
+      /** A review process to import as a recipe; empty, the project's are listed. */
+      import?: string
+      /** With import: `project` or `local`. */
+      to?: string
     }
   }
   interface PluginState {
@@ -105,6 +132,8 @@ declare module 'claude-code' {
       reviewAgents: Record<string, ReviewAgent>
       /** By review folder, the findings whose question waits for a free agent, in order. */
       discussing: Record<string, string[]>
+      /** By import folder: the imports started, running or ended. */
+      importing: Record<string, Importing>
     }
   }
 }

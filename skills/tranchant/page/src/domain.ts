@@ -4,8 +4,42 @@
 export type Ownership = 'ours' | 'theirs'
 export type Bucket = 'review' | 'auto'
 export type Tag = 'concern' | 'question' | 'suggestion'
-/** `reviewing` while the producer still adds findings; `complete` once done. */
-type Status = 'reviewing' | 'complete'
+/** `preparing` while the lenses build, `reviewing` while findings land, then `complete`; `refused` when a lens could not be built. */
+type Status = 'preparing' | 'reviewing' | 'complete' | 'refused'
+
+/** A lens a review ran, as review.json records it. */
+interface LensRecord {
+  name: string
+  source: string
+  version?: string
+  hash: string
+}
+
+/** Why a review was refused: the lens, its source, the reason, and what fixes it. */
+interface Refusal {
+  lens: string
+  source: string
+  reason: string
+  fix?: string
+}
+
+/** One row of the Lenses step, as lenses.mjs writes it. */
+export interface LensRow {
+  name: string
+  source: string
+  state: 'resolving' | 'ready' | 'failed'
+  /** With `ready`: against the project's previous review. */
+  change?: 'unchanged' | 'updated' | 'new'
+  version?: string
+  reason?: string
+  fix?: string
+}
+
+/** The Lenses step's progress: lenses.json. */
+export interface LensesProgress {
+  state: 'resolving' | 'ready' | 'refused'
+  lenses: LensRow[]
+}
 
 /** The seven topics, in the order the page lists them within a bucket. */
 const TOPICS = [
@@ -127,6 +161,10 @@ export interface Review {
   ownership: Ownership
   /** `complete` when absent: the producer wrote the review whole. */
   status?: Status
+  /** The lenses `/tranchant review` ran. */
+  lenses?: LensRecord[]
+  /** With `refused`. */
+  refusal?: Refusal
   title: string
   mr?: MergeRequest
   jira?: { key: string; url: string }
@@ -164,6 +202,8 @@ export interface DecisionInput {
   comment?: string
   /** `post` on a thread: resolve it once replied. */
   resolve?: boolean
+  /** `post` on a thread: the `at` of the agent's message whose proposed reply it started from. */
+  proposal?: string
   /** `drop`: why. */
   reason?: string
   /** `issue`: the issue as the reviewer wrote it. */
@@ -214,11 +254,19 @@ interface SentReply {
   url: string
   at: string
   resolved?: boolean
+  proposal?: string
 }
 
 export interface FindingRecord {
   state: State
-  decision?: { action: Action; context?: string; at: string }
+  /** `change`: the `at` of the discussion's message that asked for this fix. */
+  decision?: {
+    action: Action
+    context?: string
+    proposal?: string
+    change?: string
+    at: string
+  }
   comment?: string
   question?: Question
   answer?: { text: string; choices?: string[]; at: string }
@@ -232,8 +280,14 @@ export interface FindingRecord {
     resolved?: boolean
     unresolved?: string
   }
-  /** A reply on a settled finding's thread: on its way, or `failed` and why; the state stays. */
-  reply?: { text: string; resolve?: boolean; at: string; failed?: string }
+  /** A reply on its thread aside from the moves (`repliesAside`): on its way, or `failed` and why; the state stays. */
+  reply?: {
+    text: string
+    resolve?: boolean
+    proposal?: string
+    at: string
+    failed?: string
+  }
   /** The replies posted on its thread from the page, oldest first. */
   replies?: SentReply[]
   /** `issue`: its title and body; `url` and `ref` (`#12`) once created. */
@@ -280,8 +334,13 @@ export interface Message {
   text: string
   at: string
   proposal?: Proposal
-  /** The agent ended, was stopped or never started before it answered. */
+  /** The agent ended, was stopped or never started before it answered; or a change went no further. */
   failed?: true
+  /** The reviewer's: it asks for a change to the code, or answers the question its agent asked. */
+  change?: true
+  /** The result of a change: the runs it took, if any started, and the state they left the finding in. */
+  runs?: string[]
+  outcome?: State
 }
 
 /** A finding's discussion with an agent, as `/api/review` sends it. */
@@ -299,6 +358,8 @@ export interface ReviewPayload {
   runs: Record<string, Step[]>
   /** The review's agents, in the order they started; absent from older servers. */
   reviewers?: ReviewAgent[]
+  /** The Lenses step of a `/tranchant review` review, once it started. */
+  lenses?: LensesProgress
   /** By finding id; absent from older servers. */
   discussions?: Record<string, Discussion>
   head: { reviewed: string; current: string | null }
@@ -384,7 +445,7 @@ export const unverifiedIds = (review: Pick<Review, 'verify' | 'findings'>) =>
 
 /** Whether findings may still land: the page then shows the review in progress. */
 export const isReviewing = (review: Pick<Review, 'status'>) =>
-  review.status === 'reviewing'
+  review.status === 'reviewing' || review.status === 'preparing'
 
 export const plural = (count: number, noun: string, many = `${noun}s`) =>
   `${count} ${count === 1 ? noun : many}`
@@ -421,9 +482,9 @@ export const changeName = (review: Pick<Review, 'mr'>) =>
 export const changeRef = (mr: NonNullable<Review['mr']>) =>
   `${mr.forge === 'github' ? '#' : '!'}${mr.iid}`
 
-/** A reply on a settled finding's thread is on its way: no other until it lands or fails. */
+/** A reply on the finding's thread is on its way: no other until it lands or fails. */
 export const replyPending = (record: FindingRecord | undefined) =>
-  !!record?.reply && !record.reply.failed && REPLY_IN.has(record.state)
+  !!record?.reply && !record.reply.failed
 
 /**
  * The reply a thread's editor opens with: as last written, else after a
@@ -507,6 +568,32 @@ export function threadItems(
     })
   }
   return items
+}
+
+/**
+ * Whether a reply took the agent's proposed one, `answer` the message that
+ * proposed it: on its way or sent from its editor (`proposal`, even edited),
+ * or in the thread with its text. A failed one takes nothing.
+ */
+export function replyTaken(
+  thread: Thread,
+  record: FindingRecord | undefined,
+  viewer: string | undefined,
+  answer: { at: string; text: string },
+): boolean {
+  const from = (one: { proposal?: string } | undefined) => one?.proposal === answer.at
+  if (record?.reply && !record.reply.failed && from(record.reply)) return true
+  if (
+    record?.state === 'queued' &&
+    record.decision?.action === 'post' &&
+    from(record.decision)
+  )
+    return true
+  if (record?.replies?.some(from)) return true
+  return threadItems(thread, record, viewer).some(
+    (item) =>
+      item.mine && item.sent !== 'failed' && item.body.trim() === answer.text.trim(),
+  )
 }
 
 /** A reply from the page resolved the thread. */
@@ -631,6 +718,8 @@ const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stoppe
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
 // Settled already, a thread still gets its replies: no move, a record of their own.
 const REPLY_IN = new Set<State>(['fixed', 'posted'])
+// A fix under way, `stopped` included: a reply on its thread leaves it be.
+const FIX_UNDERWAY = new Set<State>(['queued', 'working', 'asking', 'stopped'])
 const REPLY_FROM = new Set<State>([...POST_FROM, ...REPLY_IN])
 const ISSUE_FROM = POST_FROM
 // Nothing has landed in these states: a reviewer may still drop or skip.
@@ -647,12 +736,32 @@ const THREAD_DISCUSS_IN = new Set<State>([...DISCUSS_IN, ...REPLY_IN])
 export const discussable = (state: State, finding?: Pick<Finding, 'thread'>) =>
   (finding?.thread ? THREAD_DISCUSS_IN : DISCUSS_IN).has(state)
 
-/** The reviewer's last message waits for the agent's answer. */
+/** The reviewer's last message waits for the agent's answer, or for the change it asked for. */
 export const isWaiting = (discussion: Discussion | undefined) =>
   discussion?.messages.at(-1)?.by === 'reviewer'
 
+/** The reviewer's last message waits for the change it asked for. */
+export const waitsForChange = (discussion: Discussion | undefined) =>
+  isWaiting(discussion) && !!discussion?.messages.at(-1)?.change
+
+// As lib/format.mjs's `change`: a thread's discussion asks for a change, again once fixed.
+const CHANGE_FROM = new Set<State>(['open', 'skipped', 'failed', 'stopped', 'fixed'])
+
+/** Whether the reviewer may ask, in the finding's discussion, for a change to the code. */
+export const changeable = (state: State, finding?: Pick<Finding, 'thread'>) =>
+  !!finding?.thread && CHANGE_FROM.has(state)
+
 /** Whether a post may leave `state`, the review aside. */
 export const postsFrom = (state: State) => POST_FROM.has(state)
+
+/**
+ * As lib/format.mjs: whether a reply on the finding's thread is no move but
+ * a record of its own, settled already or while its fix is under way.
+ */
+export const repliesAside = (record: FindingRecord | undefined) =>
+  !!record &&
+  (REPLY_IN.has(record.state) ||
+    (record.decision?.action === 'fix' && FIX_UNDERWAY.has(record.state)))
 
 /** A move the page offers: the store's, `answer` being sent by the asking form. */
 export type Move = Action | 'stop' | 'answer'
