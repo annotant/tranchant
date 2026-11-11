@@ -38,8 +38,39 @@ export interface SettingsPayload {
   recipe: string
   lenses: string[]
   recipeProblem?: string
+  /** Where the recipe in force comes from: the local recipe, the project's, the settings', the plugin's. */
+  recipeFrom?: RecipeFrom
+  /** Its lenses, each with its source and, when it cannot be built now, why. */
+  recipeLenses?: RecipeLens[]
+  /** The recipes `/tranchant import` wrote for this project, not used yet. */
+  imports?: ImportedRecipe[]
   /** Why the file reads as none: not JSON, another version, a wrong value. The server then writes nothing. */
   problem?: string
+}
+
+export type RecipeFrom = 'run' | 'local' | 'project' | 'settings' | 'plugin'
+
+/** A lens of the recipe in force: its source, and why it cannot be built, when it cannot. */
+interface RecipeLens {
+  name: string
+  source: string
+  problem?: string
+  fix?: string
+}
+
+/** A recipe `/tranchant import` wrote: its lenses and what it left out, shown before it is used. */
+export interface ImportedRecipe {
+  id: string
+  createdAt: string
+  source: string
+  version?: string
+  to: 'project' | 'local'
+  target: string
+  state: 'importing' | 'ready' | 'failed'
+  reason?: string
+  extends: boolean
+  lenses: { name: string; source: string; skills?: string[]; paths: string[] }[]
+  leftOut: { what: string; why: string }[]
 }
 
 /** The most agents of a kind the settings allow at a time. */

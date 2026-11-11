@@ -173,7 +173,7 @@ test('refuses a review that is not sound, naming what is wrong', async (t) => {
   await writeFile(file, JSON.stringify({ ...review, status: 'done' }))
   assert.equal(
     (await open([file])).stdout,
-    `REVIEW_REFUSED ${file}: status: reviewing or complete\n`,
+    `REVIEW_REFUSED ${file}: status: preparing, reviewing, complete or refused\n`,
   )
   await writeFile(file, JSON.stringify({ ...review, version: 2 }))
   assert.match(

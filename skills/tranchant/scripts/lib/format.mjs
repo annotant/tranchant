@@ -10,17 +10,27 @@ export const REVIEW_VERSION = 1
 export const DECISIONS_VERSION = 1
 
 /**
- * Where a review stands: `reviewing` while its producer still adds findings,
- * `complete` once it is done. Absent from the envelope, it is `complete`.
- * @typedef {'reviewing' | 'complete'} Status
+ * Where a review stands: `preparing` while `/tranchant review` builds its
+ * lenses, `reviewing` while its producer still adds findings, `complete`
+ * once it is done, `refused` when a lens could not be built and no reviewer
+ * started. Absent from the envelope, it is `complete`.
+ * @typedef {'preparing' | 'reviewing' | 'complete' | 'refused'} Status
  */
 
 /** @type {ReadonlySet<string>} */
-const STATUSES = new Set(['reviewing', 'complete'])
+const STATUSES = new Set(['preparing', 'reviewing', 'complete', 'refused'])
+
+/** @param {unknown} value @returns {value is Status} */
+const isStatus = (value) => typeof value === 'string' && STATUSES.has(value)
 
 /** A review's status; absent means `complete`. @param {{ status?: unknown }} review */
-export const statusOf = (review) =>
-  review.status === 'reviewing' ? 'reviewing' : 'complete'
+export const statusOf = (review) => (isStatus(review.status) ? review.status : 'complete')
+
+/** Whether a review is over: complete, or refused before any reviewer started. */
+export const isSettled = (/** @type {{ status?: unknown }} */ review) => {
+  const status = statusOf(review)
+  return status === 'complete' || status === 'refused'
+}
 
 /**
  * Where a finding stands. Absent from the decisions file, it is `open`.
@@ -114,7 +124,7 @@ export const AGENT_ENDED_REASON = 'the agent ended without done.mjs or ask.mjs'
 /** @typedef {'Bugs' | 'Security & Permissions' | 'Breaking Changes' | 'Tests' | 'Conventions' | 'Code Quality' | 'Deprecation & Feature Flags'} Topic */
 
 /** @type {readonly Topic[]} */
-const TOPICS = [
+export const TOPICS = [
   'Bugs',
   'Security & Permissions',
   'Breaking Changes',
@@ -248,7 +258,20 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string[]} strengths
  * @property {Record<string, number>} [sources]
  * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.
- * @property {Finding[]} findings At least one, unless `status` is `reviewing`.
+ * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
+ * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
+ * @property {Finding[]} findings At least one, unless the review is not `complete`.
+ */
+
+/**
+ * A lens a review ran: its name, its source, the source's version when a
+ * plugin gives one, and the hash of the prompt built from it.
+ * @typedef {{ name: string, source: string, version?: string, hash: string }} LensRecord
+ */
+
+/**
+ * Why a review was refused: the lens, its source, the reason, and what fixes it.
+ * @typedef {{ lens: string, source: string, reason: string, fix?: string }} Refusal
  */
 
 /**
@@ -836,7 +859,33 @@ export function validateEnvelope(review) {
   if (!SHA.test(String(review.headSha))) problems.push('headSha: a sha is required')
   if (!OWNERSHIPS.has(review.ownership)) problems.push('ownership: ours or theirs')
   if (review.status !== undefined && !STATUSES.has(review.status)) {
-    problems.push('status: reviewing or complete')
+    problems.push('status: preparing, reviewing, complete or refused')
+  }
+  if (
+    review.lenses !== undefined &&
+    (!Array.isArray(review.lenses) ||
+      !review.lenses.every(
+        (/** @type {any} */ lens) =>
+          isObject(lens) &&
+          isText(lens.name, 40) &&
+          isText(lens.source, 1000) &&
+          /^[0-9a-f]{64}$/.test(String(lens.hash)) &&
+          (lens.version === undefined || isText(lens.version, 100)),
+      ))
+  ) {
+    problems.push('lenses: an array of { name, source, version?, hash }')
+  }
+  if (
+    review.refusal !== undefined &&
+    (!isObject(review.refusal) ||
+      !isText(review.refusal.lens, 100) ||
+      typeof review.refusal.source !== 'string' ||
+      !isText(review.refusal.reason, 2000))
+  ) {
+    problems.push('refusal: { lens, source, reason, fix? }')
+  }
+  if (review.status === 'refused' && review.refusal === undefined) {
+    problems.push('refusal: a refused review says why')
   }
   if (!isText(review.title, 300)) problems.push('title: a text is required')
   if (typeof review.summary !== 'string')
@@ -865,7 +914,7 @@ export function validateEnvelope(review) {
 
 /**
  * What is wrong with a review, as its producer wrote it: empty when it is
- * sound. The findings may be empty only while the review is `reviewing`.
+ * sound. The findings may be empty only while the review is not `complete`.
  * @param {any} review
  * @returns {string[]}
  */
@@ -873,7 +922,7 @@ export function validateReview(review) {
   const problems = validateEnvelope(review)
   if (!isObject(review) || review.version !== REVIEW_VERSION) return problems
   const { findings } = review
-  const reviewing = statusOf(review) === 'reviewing'
+  const reviewing = statusOf(review) !== 'complete'
   if (!Array.isArray(findings) || (findings.length === 0 && !reviewing)) {
     problems.push(
       reviewing ? 'findings: an array is required' : 'findings: at least one is required',
@@ -948,12 +997,18 @@ export function envelopeOf(review) {
 
 /**
  * What tells a review from another with the same id, as JSON: its envelope,
- * status and `verify` left out. A review that grew, or completed, is still the
- * same one, opened again without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown }} review
+ * status, `verify` and what its Lenses step recorded left out. A review that
+ * grew, or completed, is still the same one, opened again without `--verify` too.
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, refusal?: unknown }} review
  */
 export function identityOf(review) {
-  const { status: _status, verify: _verify, ...identity } = envelopeOf(review)
+  const {
+    status: _status,
+    verify: _verify,
+    lenses: _lenses,
+    refusal: _refusal,
+    ...identity
+  } = envelopeOf(review)
   return JSON.stringify(canonical(identity))
 }
 

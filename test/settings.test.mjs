@@ -11,7 +11,6 @@ import {
   effectiveSettings,
   expandHome,
   readSettings,
-  recipeLenses,
   validateSettings,
   writeSettings,
 } from '../skills/tranchant/scripts/lib/settings.mjs'
@@ -140,28 +139,4 @@ test('effectiveSettings lays the file over the defaults, and the environment ove
     values: { ...DEFAULTS, fixModel: 'opus' },
     locked: {},
   })
-})
-
-test("recipeLenses names a recipe's lenses, or says why it cannot", async (t) => {
-  const dir = await tempDir(t)
-  const recipe = path.join(dir, 'recipe.json')
-  assert.deepEqual(await recipeLenses(recipe), {
-    lenses: [],
-    problem: `${recipe}: no such file`,
-  })
-  await writeFile(recipe, '{')
-  assert.match((await recipeLenses(recipe)).problem ?? '', new RegExp(`^${recipe}: `))
-  await writeFile(recipe, JSON.stringify({ version: 2, lenses: [] }))
-  assert.deepEqual(await recipeLenses(recipe), {
-    lenses: [],
-    problem: `${recipe}: version 1 and at least one lens are required`,
-  })
-  await writeFile(
-    recipe,
-    JSON.stringify({
-      version: 1,
-      lenses: [{ name: 'js', prompt: 'js.md' }, { prompt: 'nameless.md' }, 'odd'],
-    }),
-  )
-  assert.deepEqual(await recipeLenses(recipe), { lenses: ['js'] })
 })

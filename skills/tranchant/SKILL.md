@@ -8,6 +8,7 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   branch's own), drops or skips
   it, one at a time or in batches; "/tranchant review [<branch> | <mr url>]"
   reviews a change in the background and streams the findings to the page;
+  "/tranchant import [<source>]" turns a team's review process into a recipe;
   "/tranchant comments [<pr/mr url>]" brings the unresolved review threads
   of the user's own PR/MR to the page, one finding each;
   "/tranchant status" says what runs, "/tranchant stop" ends the server and
@@ -26,7 +27,7 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   `combined-review --tranchant` run), use the file it wrote; otherwise ask
   for the file.
 
-Read the arguments as `[mode] [file]`: the mode is `review`, `comments`,
+Read the arguments as `[mode] [file]`: the mode is `review`, `import`, `comments`,
 `stop` or `status`, or none for the open; any other argument is the review file
 (`/tranchant .tranchant/review.json`, `/tranchant ~/Downloads/review.json`).
 After `review` come an optional branch, merge request url or folder, and an optional
@@ -52,7 +53,9 @@ the change in the background, one agent per lens, and the page fills as the
 findings land and are verified. Never review the change yourself then. For
 `comments`, with `{ "comments": true }`, plus `"target"` (the url) when
 given: the PR/MR's unresolved threads open as findings; never read or answer
-them yourself. Pass
+them yourself. For `import`, with `{ "import": "<source>" }` (`""` when none
+was named), plus `"to"` (`project` or `local`) once the user chose it with
+AskUserQuestion; the user names or confirms the source, never you. Pass
 `recipe` only when the user named the file: a recipe's lenses instruct the
 reviewers. The plugin's hooks read the page's decisions and start
 one background agent per fix, or per question asked in a finding's

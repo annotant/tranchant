@@ -4,7 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { AgentOfferInput, CommandRunInput, EngineInterface, On } from 'claude-code'
 
-import type { Served } from '../types'
+import type { Importing, Served } from '../types'
 
 type AgentSpec = Parameters<EngineInterface['agent']['register']>[0]
 
@@ -27,8 +27,23 @@ const INBOX = '/home/u/.cache/tranchant/inbox/rev-1.json'
 const SETTINGS = '/home/u/.config/tranchant/settings.json'
 const lens = (name: string) =>
   `LENS ${JSON.stringify({ name, prompt: `/lenses/${name}.md`, paths: ['**'] })}`
-/** prepare.mjs's lines: the envelope it wrote, and two lenses. */
-const PREPARED = [`INBOX ${INBOX}`, lens('bugs'), lens('style'), ''].join('\n')
+const PLAN = '/home/u/.cache/tranchant/inbox/rev-1.plan.json'
+/** prepare.mjs's lines: the envelope it wrote, and its plan. */
+const PREPARED = [`INBOX ${INBOX}`, `PLAN ${PLAN}`, ''].join('\n')
+/** What import.mjs --prepare prints: the import's folder and its one writable file. */
+const IMPORT_MADE = {
+  id: 'imp00001-aaaa',
+  dir: '/state/imports/imp-1',
+  recipe: '/state/imports/imp-1/recipe.json',
+  source: 'workflow:code-review',
+  file: '/plugins/workflow/skills/code-review/SKILL.md',
+  folder: '/plugins/workflow/skills/code-review',
+  to: 'project',
+  target: `${ROOT}/.tranchant/recipe.json`,
+  project: ROOT,
+}
+/** lenses.mjs's lines: two lenses built. */
+const BUILT = [lens('bugs'), lens('style'), ''].join('\n')
 
 const ok = (stdout: string, exitCode = 0, stderr = '') => ({
   value: {
@@ -44,7 +59,7 @@ const ok = (stdout: string, exitCode = 0, stderr = '') => ({
 /** `gitRoot`: the repository the project is in, as `git rev-parse` answers. */
 /** `seeded`: what `$.state`'s `serving` holds before the module runs, as after a reload. */
 /** `refusing`: what open.mjs prints instead of `REVIEW <dir>`. */
-/** `preparing`: what prepare.mjs prints; `pending`: what each `verify.mjs --pending` prints, in turn. */
+/** `preparing`: what prepare.mjs prints; `building`: what lenses.mjs prints; `pending`: what each `verify.mjs --pending` prints, in turn. */
 /** `spawnRefused`: why every spawn is refused; `completeSays`: complete.mjs's refusal, exit 2. */
 /** `unreadable`: the review's review.json, which the hooks cannot load; `mr`: its MR. */
 /** `settings`: the user's settings file, as JSON; `env`: the session's environment, besides HOME. */
@@ -55,8 +70,10 @@ function world(
     gitRoot,
     refused,
     seeded,
+    seededImports,
     refusing,
     preparing = PREPARED,
+    building = BUILT,
     pending = [],
     spawnRefused,
     completeSays,
@@ -73,8 +90,10 @@ function world(
     gitRoot?: string
     refused?: string
     seeded?: Record<string, Served>
+    seededImports?: Record<string, Importing>
     refusing?: string
     preparing?: string
+    building?: string
     pending?: string[]
     mr?: { diffRefs: { baseSha: string; headSha: string; startSha: string } }
     settings?: unknown
@@ -132,6 +151,8 @@ function world(
       return { value: '---\nname: summary\n---\n\nYou summarize the change.\n' }
     if (e.path.endsWith('/agents/discuss.md'))
       return { value: '---\nname: discuss\n---\n\nYou answer one question.\n' }
+    if (e.path.endsWith('/agents/import.md'))
+      return { value: '---\nname: import\n---\n\nYou import a review process.\n' }
     const text = files.get(e.path)
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
@@ -172,6 +193,8 @@ function world(
   const endings: string[][] = []
   const notes: { argv: string[]; stdin: string }[] = []
   const prepared: { argv: string[]; cwd?: string }[] = []
+  const built: string[][] = []
+  const importRuns: { argv: string[]; cwd?: string }[] = []
   const completed: string[][] = []
   const replies: string[][] = []
   const commented: { argv: string[]; cwd?: string }[] = []
@@ -192,6 +215,17 @@ function world(
     if (e.argv[1]?.endsWith('/scripts/prepare.mjs')) {
       prepared.push({ argv: e.argv.slice(2), cwd: e.init?.cwd })
       return ok(preparing)
+    }
+    if (e.argv[1]?.endsWith('/scripts/import.mjs')) {
+      importRuns.push({ argv: e.argv.slice(2), cwd: e.init?.cwd })
+      if (e.argv[2] === '--find') return ok('CANDIDATE .claude/skills/team-review\n')
+      if (e.argv[2] === '--check') return ok(`IMPORTED ${ROOT}/.tranchant/recipe.json\n`)
+      return ok(`IMPORT ${JSON.stringify(IMPORT_MADE)}\n`)
+    }
+    if (e.argv[1]?.endsWith('/scripts/lenses.mjs')) {
+      built.push(e.argv.slice(2))
+      order.push('lenses')
+      return ok(building, building.startsWith('REVIEW_REFUSED') ? 2 : 0)
     }
     if (e.argv[1]?.endsWith('/scripts/verify.mjs'))
       return ok((pending.shift() ?? []).map((id) => `UNVERIFIED ${id}\n`).join(''))
@@ -277,10 +311,16 @@ function world(
   })
   // The state a reload finds: `serving` as the module left it before.
   let seed = seeded
+  let importSeed = seededImports
   on('state.get', (_$, e, next) =>
-    seed && e.key === 'serving' ? { value: { value: seed, version: 1 } } : next(e),
+    seed && e.key === 'serving'
+      ? { value: { value: seed, version: 1 } }
+      : importSeed && e.key === 'importing'
+        ? { value: { value: importSeed, version: 1 } }
+        : next(e),
   )
   on('state.set', (_$, e, next) => {
+    if (e.key === 'importing') importSeed = undefined
     if (e.key === 'serving') seed = undefined
     return next(e)
   })
@@ -350,6 +390,8 @@ function world(
     clock,
     order,
     prepared,
+    built,
+    importRuns,
     completed,
     replies,
     files,
@@ -853,6 +895,39 @@ test('a reload serves the reviews again, without opening the browser', async ($,
   await w.exit(0)
 })
 
+test('a reload gives a running import agent its hook back, held to its recipe', async ($, on) => {
+  const w = world(on, {
+    seededImports: {
+      '/state/imports/imp-1': {
+        agent: 'a9',
+        name: 'im-imp00001',
+        dir: '/state/imports/imp-1',
+        recipe: '/state/imports/imp-1/recipe.json',
+        source: 'workflow:code-review',
+        target: `${ROOT}/.tranchant/recipe.json`,
+        project: ROOT,
+        running: true,
+      },
+    },
+  })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.registered.get('tranchant:im-imp00001')?.hooks?.PreToolUse).toEqual([
+    {
+      matcher: '*',
+      hooks: [
+        {
+          type: 'command',
+          command: expect.stringMatching(
+            /'--importer' 'im-imp00001' '--recipe' '\/state\/imports\/imp-1\/recipe\.json'$/,
+          ),
+        },
+      ],
+    },
+  ])
+})
+
 test('/tranchant status tells the server, the agents at work and the queue in order', async ($, on) => {
   const w = world(on)
   expect((await $.command.run(command('status'))).text).toMatch(
@@ -915,7 +990,7 @@ test("an ours review whose MR is at another head keeps the branch's own range", 
   expect(w.spawned[0]?.prompt).toContain(`RANGE=main...${HEAD}\n`)
 })
 
-test('review writes the envelope and opens the page first, then the summary agent and one reviewer per lens', async ($, on) => {
+test('review writes the envelope and opens the page first, builds the lenses, then the summary agent and one reviewer per lens', async ($, on) => {
   const w = world(on)
   const text = await review($, w, 'review feature/cart-discounts --recipe my.json')
   expect(w.prepared).toEqual([
@@ -923,10 +998,12 @@ test('review writes the envelope and opens the page first, then the summary agen
   ])
   // The envelope prepare.mjs wrote opens through the same path as a review file.
   expect(w.imported).toEqual([INBOX])
+  expect(w.built).toEqual([['--review', DIR, '--plan', PLAN]])
   expect(w.order).toEqual([
     'import',
     'server',
     'page',
+    'lenses',
     'spawn tranchant:sm-summary-rev-1',
     'spawn tranchant:rv-bugs-rev-1',
     'spawn tranchant:rv-style-rev-1',
@@ -995,6 +1072,112 @@ test('review writes the envelope and opens the page first, then the summary agen
     expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
   expect(w.completed).toEqual([])
   await w.exit(0)
+})
+
+test('a lens that cannot be built refuses the review on the page and in one line: no agent starts', async ($, on) => {
+  const w = world(on, {
+    building:
+      'REVIEW_REFUSED lens abac (workflow:code-reviewer-abac): the plugin workflow is not installed; install the plugin workflow (/plugin)\n',
+  })
+  const text = await review($, w)
+  // The page opened first: it shows the Lenses step and the reason.
+  expect(w.order).toEqual(['import', 'server', 'page', 'lenses'])
+  expect(text.split('\n')[0]).toBe(
+    'Tranchant cannot review: lens abac (workflow:code-reviewer-abac): the plugin workflow is not installed; install the plugin workflow (/plugin)',
+  )
+  expect(w.spawned).toEqual([])
+  expect(w.completed).toEqual([])
+  await w.exit(0)
+})
+
+test('a Lenses step that prints no lens is abandoned: the review is refused, not left preparing', async ($, on) => {
+  const w = world(on, { building: '' })
+  const text = await review($, w)
+  expect(text).toMatch(/^Tranchant could not build the lenses/)
+  expect(w.built.at(-1)).toEqual([
+    '--review',
+    DIR,
+    '--abandon',
+    expect.stringMatching(/^lenses\.mjs printed no lens/),
+  ])
+  expect(w.spawned).toEqual([])
+  await w.exit(0)
+})
+
+test("a lens's model and topics reach its reviewer; TRANCHANT_MODEL still wins", async ($, on) => {
+  const built = `LENS ${JSON.stringify({ name: 'abac', prompt: '/lenses/bugs.md', paths: ['**'], model: 'opus', topics: ['Security & Permissions'] })}\n`
+  const w = world(on, { building: built, settings: { version: 1, reviewModel: 'haiku' } })
+  await review($, w)
+  expect(w.registered.get('tranchant:rv-abac-rev-1')?.model).toBe('opus')
+  expect(w.registered.get('tranchant:sm-summary-rev-1')?.model).toBe('haiku')
+  expect(w.spawned[1]?.prompt).toContain('\nTOPICS=Security & Permissions')
+  await w.exit(0)
+})
+
+test('import asks for the source and the location first, then starts one agent that writes its recipe only', async ($, on) => {
+  const w = world(on)
+  // No source: the project's review processes, for the user to name one.
+  expect((await $.command.run(command('import'))).text).toContain(
+    '/tranchant import .claude/skills/team-review --to project | local',
+  )
+  // No location: the two to choose from, asked before anything is written.
+  expect((await $.command.run(command('import workflow:code-review'))).text).toMatch(
+    /^Where should the recipe imported from workflow:code-review go\?/,
+  )
+  expect(w.importRuns.map((one) => one.argv)).toEqual([['--find']])
+  expect(w.spawned).toEqual([])
+  const { text } = await $.command.run(
+    command('import workflow:code-review --to project'),
+  )
+  expect(text).toMatch(/^Importing workflow:code-review: an agent reads it/)
+  expect(w.importRuns[1]).toEqual({
+    argv: ['--prepare', 'workflow:code-review', '--to', 'project'],
+    cwd: ROOT,
+  })
+  const spec = w.registered.get('tranchant:im-imp00001')
+  expect(spec?.prompt).toBe('You import a review process.\n')
+  expect(spec?.tools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Bash'])
+  // hook.mjs holds it to the one recipe file, around every tool.
+  expect(spec?.hooks?.PreToolUse).toEqual([
+    {
+      matcher: '*',
+      hooks: [
+        {
+          type: 'command',
+          command: expect.stringMatching(
+            /^'node' '\/.+\/scripts\/hook\.mjs' 'pre' '--importer' 'im-imp00001' '--recipe' '\/state\/imports\/imp-1\/recipe\.json'$/,
+          ),
+        },
+      ],
+    },
+  ])
+  expect(w.spawned[0]?.prompt.split('\n')).toEqual([
+    'SOURCE=workflow:code-review',
+    'SOURCE_FILE=/plugins/workflow/skills/code-review/SKILL.md',
+    'SOURCE_FOLDER=/plugins/workflow/skills/code-review',
+    `PROJECT=${ROOT}`,
+    'TO=project',
+    `TARGET=${ROOT}/.tranchant/recipe.json`,
+    'RECIPE=/state/imports/imp-1/recipe.json',
+  ])
+  for (const agent of ['tranchant:im-imp00001', 'tranchant:import'])
+    expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
+  // Its turn ends: the recipe is checked, and the page's Settings show it.
+  await $.turn.complete(turnEnded('a1', '2 lenses, 3 parts left out.'))
+  expect(w.importRuns[2]?.argv).toEqual(['--check', '/state/imports/imp-1'])
+  expect(w.toasts.at(-1)).toMatch(
+    /^Tranchant imported workflow:code-review \(2 lenses, 3 parts left out\.\): read the recipe in the page's Settings/,
+  )
+  // The skill's way in, the same.
+  const { result } = await $.tool.call({
+    tool: 'mcp__tranchant__open',
+    import: 'workflow:code-review',
+    tool_use_id: 'i1',
+  })
+  expect(result).toMatch(/^Where should the recipe/)
+  expect((await $.command.run(command('import a b'))).text).toMatch(
+    /^Usage: \/tranchant import/,
+  )
 })
 
 test('review of a folder runs prepare.mjs in it, a recipe resolved from the session', async ($, on) => {
@@ -1233,7 +1416,7 @@ test("an agent of this session's report, entering as a prompt, is dropped; the p
 })
 
 test('a final report with no turn.complete ends its agent: the toast, its place freed', async ($, on) => {
-  const w = world(on, { preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n') })
+  const w = world(on, { building: [lens('bugs'), ''].join('\n') })
   await review($, w)
   await peer($, w.spawned[1]?.name ?? '', 'No finding.')
   await w.clock.settle()
@@ -1264,7 +1447,7 @@ test("a fix's agent's final report is kept from the conversation too", async ($,
 })
 
 test('verifiers of long ids sharing their start get names of their own, which Claude Code takes', async ($, on) => {
-  const w = world(on, { preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n') })
+  const w = world(on, { building: [lens('bugs'), ''].join('\n') })
   await review($, w)
   const long = `bugs-${'x'.repeat(57)}`
   await w.print(`LANDED ${long}-1`, `LANDED ${long}-2`)
@@ -1279,7 +1462,7 @@ test('verifiers of long ids sharing their start get names of their own, which Cl
 
 test('a review agent that cannot start frees its place, and the review still completes', async ($, on) => {
   const w = world(on, {
-    preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n'),
+    building: [lens('bugs'), ''].join('\n'),
     spawnRefused: 'agents are turned off',
   })
   await review($, w)
@@ -1296,7 +1479,7 @@ test('a review agent that cannot start frees its place, and the review still com
 
 test('a complete.mjs that fails is said, with the command that does it', async ($, on) => {
   const w = world(on, {
-    preparing: [`INBOX ${INBOX}`, lens('bugs'), ''].join('\n'),
+    building: [lens('bugs'), ''].join('\n'),
     completeSays: 'COMPLETE_REFUSED the review is complete already',
   })
   await review($, w)

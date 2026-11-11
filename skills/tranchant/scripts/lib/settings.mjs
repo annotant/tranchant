@@ -3,13 +3,13 @@
 // and read by prepare.mjs, issue.mjs, hook.mjs and the hooks (hooks/register.ts
 // reads it on its own, no Node module there). Described in docs/settings.md.
 // Precedence: a run's flag (--recipe), then an environment variable, then
-// this file, then the default.
+// this file, then the default; the recipe has the local and the project's
+// between the flag and this file (lib/lens.mjs).
 import { randomBytes } from 'node:crypto'
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
-import { PLUGIN_ROOT } from './project.mjs'
 
 /** The settings version this code reads and writes; any other is refused. */
 const SETTINGS_VERSION = 1
@@ -20,9 +20,6 @@ export const SETTINGS_DIR = path.join(
   'tranchant',
 )
 export const SETTINGS_FILE = path.join(SETTINGS_DIR, 'settings.json')
-
-/** The plugin's own recipe, used when the settings name none. */
-const DEFAULT_RECIPE = path.join(PLUGIN_ROOT, 'agents', 'review', 'recipe.json')
 
 /** The most agents of a kind the hooks run at a time. */
 const MAX_AGENTS = 8
@@ -249,90 +246,4 @@ export function effectiveSettings(settings, env = process.env) {
 export async function loadSettings(env = process.env) {
   const { settings, problem } = await readSettings()
   return { ...effectiveSettings(settings, env), settings, problem }
-}
-
-/** The recipe `/tranchant review` runs when a run names none: the settings', else the plugin's. */
-export const recipeInForce = (/** @type {Values} */ values) =>
-  values.recipe ? expandHome(values.recipe) : DEFAULT_RECIPE
-
-/** The most a recipe file may weigh: a path the settings name is read whole. */
-const MAX_RECIPE_BYTES = 1024 * 1024
-
-/**
- * The recipe at `file`, parsed: a regular file of JSON, under MAX_RECIPE_BYTES.
- * Rejects with a reason that quotes nothing of the file: the page shows it.
- * @param {string} file
- * @returns {Promise<unknown>}
- */
-export async function readRecipeFile(file) {
-  // One handle for the size and the text: what is measured is what is read.
-  let handle
-  try {
-    handle = await open(file, 'r')
-  } catch (error) {
-    const code = errorCode(error)
-    throw new Error(
-      code === 'ENOENT'
-        ? 'no such file'
-        : `cannot be read (${typeof code === 'string' ? code : 'error'})`,
-      { cause: error },
-    )
-  }
-  try {
-    const info = await handle.stat()
-    if (!info.isFile()) throw new Error('not a regular file')
-    if (info.size > MAX_RECIPE_BYTES)
-      throw new Error(`larger than ${MAX_RECIPE_BYTES / 1024 / 1024} MiB`)
-    const text = await handle.readFile('utf8')
-    try {
-      return JSON.parse(text)
-    } catch (error) {
-      throw new Error('not JSON', { cause: error })
-    }
-  } finally {
-    await handle.close()
-  }
-}
-
-/**
- * The names of the recipe's lenses, read leniently: the page lists them to
- * turn off. `problem` when the file is not a recipe prepare.mjs would read.
- * @param {string} file
- * @returns {Promise<{ lenses: string[], problem?: string }>}
- */
-export async function recipeLenses(file) {
-  let recipe
-  try {
-    recipe = await readRecipeFile(file)
-  } catch (error) {
-    return {
-      lenses: [],
-      problem: `${file}: ${error instanceof Error ? error.message : String(error)}`,
-    }
-  }
-  const lenses =
-    recipe &&
-    typeof recipe === 'object' &&
-    'lenses' in recipe &&
-    Array.isArray(recipe.lenses)
-      ? recipe.lenses
-      : undefined
-  if (
-    !recipe ||
-    typeof recipe !== 'object' ||
-    !('version' in recipe) ||
-    recipe.version !== 1 ||
-    !lenses?.length
-  )
-    return {
-      lenses: [],
-      problem: `${file}: version 1 and at least one lens are required`,
-    }
-  return {
-    lenses: lenses.flatMap((/** @type {unknown} */ lens) =>
-      lens && typeof lens === 'object' && 'name' in lens && typeof lens.name === 'string'
-        ? [lens.name]
-        : [],
-    ),
-  }
 }
