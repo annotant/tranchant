@@ -19,6 +19,8 @@ interface Props {
   canDrop: boolean
   /** A PR/MR thread's finding: the proposed comment is a reply, opened in its editor. */
   replyOn?: boolean
+  /** Read as it stands while its fix runs, the thread still takes the agent's reply. */
+  replyAside?: boolean
   /** Resolves to whether the server took the message: the draft stays until it does. */
   onSend: (text: string) => Promise<boolean>
   onFix: (context: string) => void
@@ -335,7 +337,8 @@ function Composer({
 
 /** A finding's discussion with an agent: the reviewer asks, a read-only agent answers. */
 export function Discussion(props: Props) {
-  const { discussion, writable, closed, taken, disabled, replyOn, onSend } = props
+  const { discussion, writable, closed, taken, disabled, replyOn, replyAside, onSend } =
+    props
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const messages = discussion?.messages ?? []
@@ -428,6 +431,14 @@ export function Discussion(props: Props) {
                   )}
                   {writable && message === last && !message.failed && (
                     <Proposals message={message} {...props} />
+                  )}
+                  {!writable && replyAside && message === last && !message.failed && (
+                    <Proposals
+                      message={message}
+                      {...props}
+                      canFix={false}
+                      canDrop={false}
+                    />
                   )}
                   {message === last &&
                     !message.failed &&

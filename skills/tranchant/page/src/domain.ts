@@ -235,7 +235,7 @@ export interface FindingRecord {
     resolved?: boolean
     unresolved?: string
   }
-  /** A reply on a settled finding's thread: on its way, or `failed` and why; the state stays. */
+  /** A reply on its thread aside from the moves (`repliesAside`): on its way, or `failed` and why; the state stays. */
   reply?: {
     text: string
     resolve?: boolean
@@ -430,9 +430,9 @@ export const changeName = (review: Pick<Review, 'mr'>) =>
 export const changeRef = (mr: NonNullable<Review['mr']>) =>
   `${mr.forge === 'github' ? '#' : '!'}${mr.iid}`
 
-/** A reply on a settled finding's thread is on its way: no other until it lands or fails. */
+/** A reply on the finding's thread is on its way: no other until it lands or fails. */
 export const replyPending = (record: FindingRecord | undefined) =>
-  !!record?.reply && !record.reply.failed && REPLY_IN.has(record.state)
+  !!record?.reply && !record.reply.failed
 
 /**
  * The reply a thread's editor opens with: as last written, else after a
@@ -666,6 +666,8 @@ const FIX_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed', 'stoppe
 const POST_FROM = new Set<State>(['open', 'dropped', 'skipped', 'failed'])
 // Settled already, a thread still gets its replies: no move, a record of their own.
 const REPLY_IN = new Set<State>(['fixed', 'posted'])
+// A fix under way, `stopped` included: a reply on its thread leaves it be.
+const FIX_UNDERWAY = new Set<State>(['queued', 'working', 'asking', 'stopped'])
 const REPLY_FROM = new Set<State>([...POST_FROM, ...REPLY_IN])
 const ISSUE_FROM = POST_FROM
 // Nothing has landed in these states: a reviewer may still drop or skip.
@@ -688,6 +690,15 @@ export const isWaiting = (discussion: Discussion | undefined) =>
 
 /** Whether a post may leave `state`, the review aside. */
 export const postsFrom = (state: State) => POST_FROM.has(state)
+
+/**
+ * As lib/format.mjs: whether a reply on the finding's thread is no move but
+ * a record of its own, settled already or while its fix is under way.
+ */
+export const repliesAside = (record: FindingRecord | undefined) =>
+  !!record &&
+  (REPLY_IN.has(record.state) ||
+    (record.decision?.action === 'fix' && FIX_UNDERWAY.has(record.state)))
 
 /** A move the page offers: the store's, `answer` being sent by the asking form. */
 export type Move = Action | 'stop' | 'answer'

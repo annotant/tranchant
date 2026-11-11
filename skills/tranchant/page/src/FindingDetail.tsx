@@ -15,6 +15,7 @@ import {
   type FindingRecord,
   postsFrom,
   replyPending,
+  repliesAside,
   replyTaken,
   repliesOn,
   staleMrReason,
@@ -287,6 +288,11 @@ export function FindingDetail({
   const blocked = !!blocker && !disabled && postsFrom(state)
   const change = changeName(review)
   const replying = replyPending(record)
+  // A thread is replied on aside from the moves too: once settled, or beside a fix under way.
+  const canReply =
+    reply &&
+    !replying &&
+    (can('post') || (!disabled && !!review.mr && repliesAside(record)))
   const thread = finding.thread
   const tag = tagOf(finding)
   const writable = discussable(state, finding)
@@ -711,7 +717,7 @@ export function FindingDetail({
                   Fix now
                 </button>
               )}
-              {reply && can('post') && !replying && (
+              {canReply && (
                 <button
                   type="button"
                   className={`tr-btn ${state === 'fixed' ? 'tr-btn--primary' : ''}`}
@@ -829,9 +835,10 @@ export function FindingDetail({
           taken={taken}
           disabled={disabled}
           canFix={can('fix')}
-          canPost={can('post') && !replying && !replied && !editingProposal}
+          canPost={(reply ? canReply : can('post')) && !replied && !editingProposal}
           canDrop={can('drop')}
           replyOn={reply}
+          replyAside={reply && repliesAside(record)}
           onSend={(text) => onDiscuss(finding.id, text)}
           onFix={(proposed) => decide({ action: 'fix', context: proposed })}
           onPost={(proposed) =>

@@ -14,6 +14,7 @@ import {
   openIds,
   orderedFindings,
   replyPending,
+  repliesAside,
   type State,
   stateLabel,
   staleMrReason,
@@ -272,7 +273,17 @@ test('a settled thread is replied on again, one reply at a time', () => {
   expect(
     replyPending(record('fixed', { reply: { text: 'x', at: '', failed: 'no' } })),
   ).toBe(false)
-  expect(replyPending(record('open', { reply: { text: 'x', at: '' } }))).toBe(false)
+  // Beside a fix under way, a reply is no move either; nowhere else.
+  const fix = { decision: { action: 'fix' as const, at: '' } }
+  for (const state of ['queued', 'working', 'asking', 'stopped', 'fixed'] as const)
+    expect(repliesAside(record(state, fix))).toBe(true)
+  expect(repliesAside(record('posted', {}))).toBe(true)
+  expect(repliesAside(record('failed', fix))).toBe(false)
+  expect(repliesAside(record('open', {}))).toBe(false)
+  expect(repliesAside(record('queued', { decision: { action: 'post', at: '' } }))).toBe(
+    false,
+  )
+  expect(repliesAside(record('stopped', {}))).toBe(false)
 })
 
 test("a thread's items: yours marked, a first reply on its way or failed after them", () => {

@@ -14,6 +14,12 @@ released to the `stable` branch.
   from posting it twice. It now hides while the editor holds it, and once a
   reply from it is on its way or posted, even edited, it turns into a note,
   like Fix and Drop. A failed reply, or a later answer, offers it again.
+- **Reply on a thread while its fix runs.** Once a comment's finding went
+  to **Fix now**, **Reply on the thread** (and **Reply with this**) was gone
+  while the fix was queued, running or waiting on your answer, and for good
+  after a **Stop**. It is now offered then too: the reply is posted beside
+  the fix, which carries on untouched, and shows in the thread like the
+  others.
 
 ## 0.4.0 - 2026-11-10
 

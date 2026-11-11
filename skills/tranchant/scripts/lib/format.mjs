@@ -293,8 +293,9 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
 
 /**
  * A reply on the thread of a finding settled already (`fixed`, or `posted`
- * and answered back): no move, the state stays; `posted` records it once on
- * the thread, `failed` says why it is not.
+ * and answered back) or whose fix is under way (`queued`, `working`,
+ * `asking`, `stopped`): no move, the state and the fix stay; `posted`
+ * records it once on the thread, `failed` says why it is not.
  * @typedef {object} Reply
  * @property {string} text
  * @property {boolean} [resolve]
@@ -368,7 +369,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Answer} [answer]
  * @property {string} [reason] `dropped`: the reviewer's words; `failed`: the error.
  * @property {Posted} [posted]
- * @property {Reply} [reply] A reply on a settled finding's thread, on its way or failed.
+ * @property {Reply} [reply] A reply on its thread aside from the moves (see `Reply`), on its way or failed.
  * @property {SentReply[]} [replies] The replies posted on its thread, oldest first.
  * @property {Issue} [issue] An issue decision: its title and body, then its `url` once created.
  * @property {Run[]} runs
@@ -425,9 +426,26 @@ export const repliesOn = (/** @type {{ thread?: unknown }} */ finding) =>
 /** The states a thread is replied on without moving: settled already, the reply a record of its own. */
 export const REPLY_IN = /** @type {readonly State[]} */ (['fixed', 'posted'])
 
-/** A reply on a settled finding's thread, on its way: not posted, not failed. */
-export const replyPending = (/** @type {Pick<Entry, 'state' | 'reply'>} */ entry) =>
-  REPLY_IN.includes(entry.state) && !!entry.reply && !entry.reply.failed
+/** The states a fix is under way in, `stopped` included: a reply on its thread leaves it be. */
+const FIX_UNDERWAY = /** @type {readonly State[]} */ ([
+  'queued',
+  'working',
+  'asking',
+  'stopped',
+])
+
+/**
+ * Whether a reply on `entry`'s thread is no move but a record of its own:
+ * settled already, or while its fix is under way, which the reply leaves be.
+ * @param {Pick<Entry, 'state' | 'decision'>} entry
+ */
+export const repliesAside = (entry) =>
+  REPLY_IN.includes(entry.state) ||
+  (entry.decision?.action === 'fix' && FIX_UNDERWAY.includes(entry.state))
+
+/** A reply on a finding's thread, on its way: not posted, not failed, even once the fix it was sent beside failed. */
+export const replyPending = (/** @type {Pick<Entry, 'reply'>} */ entry) =>
+  !!entry.reply && !entry.reply.failed
 
 /**
  * `text` on one line: the hooks read one event per line, and a line break in

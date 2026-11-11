@@ -734,6 +734,119 @@ test('a reply that fails on a fixed thread keeps it fixed; one on its way holds 
   assert.equal((await store.readDecisions()).findings[id]?.reply?.text, 'Fixed, again')
 })
 
+test('a thread is replied on while its fix runs: the fix carries on', async (t) => {
+  const reply = 'https://github.com/acme/shop/pull/7#discussion_r42'
+  const { store, id, post, calls } = await replying(
+    t,
+    [
+      [
+        'addPullRequestReviewThreadReply',
+        { data: { addPullRequestReviewThreadReply: { comment: { url: reply } } } },
+      ],
+    ],
+    'github',
+  )
+  await store.decide(id, { action: 'fix' })
+  const { run: claimed } = await store.claim(id, { agent: 'a1' })
+  await store.decide(id, { action: 'post', comment: 'On it' })
+  // Sent, the reply waits beside the fix: no move, one at a time.
+  let entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'working')
+  assert.equal(entry?.reply?.text, 'On it')
+  await assert.rejects(
+    store.decide(id, { action: 'post', comment: 'Again' }),
+    /is on its way/,
+  )
+  const ran = await post()
+  assert.equal(ran.stdout, `posted ${reply}\n`, ran.stderr)
+  assert.deepEqual(JSON.parse((await calls())[0]?.input ?? '{}').variables, {
+    thread: 'PRRT_1',
+    body: 'On it',
+  })
+  entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'working')
+  assert.equal(entry?.reply, undefined)
+  assert.equal(entry?.runs.at(-1)?.id, claimed.id)
+  assert.equal(entry?.runs.at(-1)?.outcome, undefined)
+  assert.deepEqual(
+    entry?.replies?.map(({ text, url }) => ({ text, url })),
+    [{ text: 'On it', url: reply }],
+  )
+  // The fix goes on as if nothing was posted.
+  await store.done(id, 'Skipped the items without a price.')
+  assert.equal((await store.readDecisions()).findings[id]?.state, 'fixed')
+})
+
+test('a reply after a Stop fails on its own; the stopped fix may be sent again', async (t) => {
+  const { store, id, post } = await replying(
+    t,
+    [['addPullRequestReviewThreadReply', 'ERROR: GraphQL: Could not resolve to a node']],
+    'github',
+  )
+  await store.decide(id, { action: 'fix' })
+  await store.stop(id)
+  await store.decide(id, { action: 'post', comment: 'Later' })
+  const ran = await post()
+  assert.equal(ran.stdout, 'failed ERROR: GraphQL: Could not resolve to a node\n')
+  let entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'stopped')
+  assert.equal(entry?.reply?.failed, 'ERROR: GraphQL: Could not resolve to a node')
+  assert.equal(entry?.reason, undefined)
+  await store.decide(id, { action: 'fix' })
+  entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'queued')
+  assert.equal(entry?.decision?.action, 'fix')
+  // Dropped then replied on, the thread's post replaces the failed reply: its own fate shows.
+  await store.decide(id, { action: 'drop' })
+  await store.decide(id, { action: 'post', comment: 'Now' })
+  entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'queued')
+  assert.equal(entry?.decision?.action, 'post')
+  assert.equal(entry?.reply, undefined)
+})
+
+test('a reply on its way holds a post back after the fix it was sent beside failed, then lands', async (t) => {
+  const reply = 'https://github.com/acme/shop/pull/7#discussion_r43'
+  const { store, id, post } = await replying(
+    t,
+    [
+      [
+        'addPullRequestReviewThreadReply',
+        { data: { addPullRequestReviewThreadReply: { comment: { url: reply } } } },
+      ],
+    ],
+    'github',
+  )
+  await store.decide(id, { action: 'fix' })
+  await store.claim(id, { agent: 'a1' })
+  await store.decide(id, { action: 'post', comment: 'On it' })
+  assert.ok(await store.abandon(id, 'a1'))
+  let entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'failed')
+  // Still on its way: the reply is not mistaken for the failed fix's.
+  assert.equal(entry?.reply?.failed, undefined)
+  await assert.rejects(
+    store.decide(id, { action: 'post', comment: 'Again' }),
+    /is on its way/,
+  )
+  // Landed, it is a reply aside still: the failed fix is not taken for a post.
+  const ran = await post()
+  assert.equal(ran.stdout, `posted ${reply}\n`, ran.stderr)
+  entry = (await store.readDecisions()).findings[id]
+  assert.equal(entry?.state, 'failed')
+  assert.equal(entry?.reply, undefined)
+  assert.deepEqual(
+    entry?.replies?.map(({ text }) => text),
+    ['On it'],
+  )
+  // With nothing on its way, a reply's outcome is refused rather than taken for the finding's.
+  await assert.rejects(store.fail(id, 'late', { reply: true }), /no reply/)
+  await assert.rejects(
+    store.posted(id, { discussionId: 'PRRT_1', url: reply }, { reply: true }),
+    /no reply/,
+  )
+})
+
 test('a resolve the forge does not confirm is not recorded as resolved', async (t) => {
   const reply = 'https://github.com/acme/shop/pull/7#discussion_r99'
   const { store, id, post } = await replying(
