@@ -153,6 +153,8 @@ const ID = /^[\w-]{1,64}$/
 const MAX_TEXT = 4000
 const MAX_DECISIONS = 500
 const ACTIONS = new Set(['fix', 'post', 'issue', 'drop', 'skip'])
+// A reply's proposal is the `at` of the agent's message it came from, not text.
+const MAX_PROPOSAL = 64
 
 /** @param {unknown} value */
 const text = (value, max = MAX_TEXT) =>
@@ -161,7 +163,7 @@ const text = (value, max = MAX_TEXT) =>
 /**
  * One decision of a batch, as the page sends it; undefined when it is not one.
  * @param {any} input
- * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, reason?: string, title?: string, body?: string } | undefined}
+ * @returns {{ id: string, action: 'fix' | 'post' | 'issue' | 'drop' | 'skip', context?: string, comment?: string, resolve?: boolean, proposal?: string, reason?: string, title?: string, body?: string } | undefined}
  */
 function sanitiseDecision(input) {
   if (!input || typeof input !== 'object') return undefined
@@ -173,6 +175,7 @@ function sanitiseDecision(input) {
     context: text(input.context),
     comment: text(input.comment),
     resolve: input.resolve === true,
+    proposal: text(input.proposal, MAX_PROPOSAL),
     reason: text(input.reason),
     title: text(input.title, MAX_ISSUE_TITLE),
     body: text(input.body, MAX_ISSUE_BODY),

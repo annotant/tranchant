@@ -175,6 +175,7 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
         "action": "fix",
         "context": "keep the early return, no throw",
         "resolve": true, // a post on a thread: resolve it once replied
+        "proposal": "…", // a post on a thread: the `at` of the agent's message whose proposed reply it started from
         "at": "…",
       },
       "comment": "…", // a post: the text as posted, when the reviewer edited it
@@ -187,8 +188,8 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       "answer": { "text": "…", "choices": ["…"], "at": "…" },
       "reason": "…", // dropped: the reviewer's words; failed: the error
       "posted": { "discussionId": "…", "url": "…", "at": "…", "resolved": true }, // `unresolved`: why resolving the thread failed
-      "reply": { "text": "…", "resolve": true, "at": "…", "failed": "…" }, // a reply on a settled finding's thread: on its way, or why it failed
-      "replies": [{ "text": "…", "url": "…", "at": "…", "resolved": true }], // the replies posted on its thread, shown in it until an import holds them
+      "reply": { "text": "…", "resolve": true, "proposal": "…", "at": "…", "failed": "…" }, // a reply on a settled finding's thread: on its way, or why it failed
+      "replies": [{ "text": "…", "url": "…", "at": "…", "resolved": true, "proposal": "…" }], // the replies posted on its thread, shown in it until an import holds them
       "issue": { "title": "…", "body": "…", "url": "…", "ref": "#12", "at": "…" }, // an issue: url, ref, at once created
       "runs": [/* Run */],
       "events": [/* Event */],
@@ -314,7 +315,11 @@ The reviewer may write while the finding is `open`, `skipped`, `failed` or
 also once `fixed` or `posted`, the thread living on until it is resolved.
 In any other state the discussion reads as it stands. On a thread, the
 agent's `comment` is a reply: **Reply with this** opens the reply editor
-with it, for the reviewer to change and send. A discussion holds 60 messages at most.
+with it, for the reviewer to change and send, and the `post` carries the
+answer's `at` as its `proposal`. A reply on its way or sent with that
+`proposal`, or with the proposal's text, takes it: the page says so under the
+answer instead of offering it again; a failed one offers it again. A
+discussion holds 60 messages at most.
 
 Each question starts one agent (`tranchant:ds-<id>-<review>`,
 `agents/discuss.md`), which reads the whole discussion again: one agent per

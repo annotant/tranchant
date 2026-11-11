@@ -255,6 +255,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {'fix' | 'post' | 'issue' | 'drop' | 'skip'} action
  * @property {string} [context] `fix`: the reviewer's constraint or choice.
  * @property {boolean} [resolve] `post` on a thread: resolve it once replied.
+ * @property {string} [proposal] `post` on a thread: the `at` of the agent's message whose proposed reply it started from.
  * @property {string} at
  */
 
@@ -297,6 +298,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @typedef {object} Reply
  * @property {string} text
  * @property {boolean} [resolve]
+ * @property {string} [proposal] As the decision's.
  * @property {string} at
  * @property {string} [failed]
  */
@@ -309,6 +311,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} url
  * @property {string} at
  * @property {boolean} [resolved]
+ * @property {string} [proposal] As the decision's.
  */
 
 /**

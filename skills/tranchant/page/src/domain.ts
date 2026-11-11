@@ -164,6 +164,8 @@ export interface DecisionInput {
   comment?: string
   /** `post` on a thread: resolve it once replied. */
   resolve?: boolean
+  /** `post` on a thread: the `at` of the agent's message whose proposed reply it started from. */
+  proposal?: string
   /** `drop`: why. */
   reason?: string
   /** `issue`: the issue as the reviewer wrote it. */
@@ -214,11 +216,12 @@ interface SentReply {
   url: string
   at: string
   resolved?: boolean
+  proposal?: string
 }
 
 export interface FindingRecord {
   state: State
-  decision?: { action: Action; context?: string; at: string }
+  decision?: { action: Action; context?: string; proposal?: string; at: string }
   comment?: string
   question?: Question
   answer?: { text: string; choices?: string[]; at: string }
@@ -233,7 +236,13 @@ export interface FindingRecord {
     unresolved?: string
   }
   /** A reply on a settled finding's thread: on its way, or `failed` and why; the state stays. */
-  reply?: { text: string; resolve?: boolean; at: string; failed?: string }
+  reply?: {
+    text: string
+    resolve?: boolean
+    proposal?: string
+    at: string
+    failed?: string
+  }
   /** The replies posted on its thread from the page, oldest first. */
   replies?: SentReply[]
   /** `issue`: its title and body; `url` and `ref` (`#12`) once created. */
@@ -507,6 +516,32 @@ export function threadItems(
     })
   }
   return items
+}
+
+/**
+ * Whether a reply took the agent's proposed one, `answer` the message that
+ * proposed it: on its way or sent from its editor (`proposal`, even edited),
+ * or in the thread with its text. A failed one takes nothing.
+ */
+export function replyTaken(
+  thread: Thread,
+  record: FindingRecord | undefined,
+  viewer: string | undefined,
+  answer: { at: string; text: string },
+): boolean {
+  const from = (one: { proposal?: string } | undefined) => one?.proposal === answer.at
+  if (record?.reply && !record.reply.failed && from(record.reply)) return true
+  if (
+    record?.state === 'queued' &&
+    record.decision?.action === 'post' &&
+    from(record.decision)
+  )
+    return true
+  if (record?.replies?.some(from)) return true
+  return threadItems(thread, record, viewer).some(
+    (item) =>
+      item.mine && item.sent !== 'failed' && item.body.trim() === answer.text.trim(),
+  )
 }
 
 /** A reply from the page resolved the thread. */

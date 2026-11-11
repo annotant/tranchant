@@ -613,6 +613,7 @@ test('a post on a thread replies there with gh, then resolves it when asked', as
     action: 'post',
     comment: 'Done in the next push',
     resolve: true,
+    proposal: '2026-11-06T10:01:00Z',
   })
   const ran = await post()
   assert.equal(ran.stdout, `posted ${reply}\n`, ran.stderr)
@@ -627,9 +628,22 @@ test('a post on a thread replies there with gh, then resolves it when asked', as
   assert.equal(entry?.posted?.url, reply)
   assert.equal(entry?.posted?.resolved, true)
   // Kept for the page to show in the thread, until a refresh reads it from GitHub.
+  // With the agent's answer it started from: the page offers that proposal no more.
   assert.deepEqual(
-    entry?.replies?.map(({ text, url, resolved }) => ({ text, url, resolved })),
-    [{ text: 'Done in the next push', url: reply, resolved: true }],
+    entry?.replies?.map(({ text, url, resolved, proposal }) => ({
+      text,
+      url,
+      resolved,
+      proposal,
+    })),
+    [
+      {
+        text: 'Done in the next push',
+        url: reply,
+        resolved: true,
+        proposal: '2026-11-06T10:01:00Z',
+      },
+    ],
   )
   // Replied on, the thread lives on: its reviewer may answer back, so it may be discussed.
   const discussed = await say(dir, id, 'What would she answer?')
@@ -648,7 +662,16 @@ test('a fixed thread is replied on with glab; a resolve that fails leaves the re
   await store.decide(id, { action: 'fix' })
   await store.claim(id)
   await store.done(id, 'Skipped the items without a price.')
-  await store.decide(id, { action: 'post', comment: 'Fixed', resolve: true })
+  await store.decide(id, {
+    action: 'post',
+    comment: 'Fixed',
+    resolve: true,
+    proposal: '2026-11-06T10:01:00Z',
+  })
+  assert.equal(
+    (await store.readDecisions()).findings[id]?.reply?.proposal,
+    '2026-11-06T10:01:00Z',
+  )
   const ran = await post()
   assert.equal(ran.stdout, `posted ${MR_URL}#note_4242\n`, ran.stderr)
   const [reply, resolve] = await calls()
@@ -670,8 +693,20 @@ test('a fixed thread is replied on with glab; a resolve that fails leaves the re
   assert.equal(entry?.posted?.unresolved, 'ERROR: 403 Forbidden')
   assert.equal(entry?.runs.at(-1)?.outcome, 'fixed')
   assert.deepEqual(
-    entry?.replies?.map(({ text, url, resolved }) => ({ text, url, resolved })),
-    [{ text: 'Fixed', url: `${MR_URL}#note_4242`, resolved: undefined }],
+    entry?.replies?.map(({ text, url, resolved, proposal }) => ({
+      text,
+      url,
+      resolved,
+      proposal,
+    })),
+    [
+      {
+        text: 'Fixed',
+        url: `${MR_URL}#note_4242`,
+        resolved: undefined,
+        proposal: '2026-11-06T10:01:00Z',
+      },
+    ],
   )
 })
 
