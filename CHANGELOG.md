@@ -9,6 +9,13 @@ released to the `stable` branch.
 
 ### Added
 
+- **Ask for a change from a comment's discussion.** On a finding from
+  `/tranchant comments`, **Change** sends your message ("go ahead", "also
+  cover the empty case") to an agent that makes the change in the working
+  tree, with the whole discussion in hand, under a fix's rules (file locks,
+  **Stop**). Its current step, its questions and what it changed (**View
+  changes**) show in the discussion; ask again for the next change, even
+  once the finding is fixed. Questions still go to the read-only agent.
 - **Your team's review process, as lenses.** `/tranchant import [<source>]`
   reads a skill and the agents it starts, an agent or a file, and writes a
   recipe that references them, in the project (`.tranchant/recipe.json`,
@@ -29,6 +36,20 @@ released to the `stable` branch.
   under review; the local recipe and the project's come before the
   settings'. The Settings show the recipe in force, where it comes from, and
   each lens's source and status.
+
+### Fixed
+
+- **An agent's proposed reply is offered once.** On a thread, **Reply with
+  this** stayed under the discussion once the reply was sent, one click
+  from posting it twice. It now hides while the editor holds it, and once a
+  reply from it is on its way or posted, even edited, it turns into a note,
+  like Fix and Drop. A failed reply, or a later answer, offers it again.
+- **Reply on a thread while its fix runs.** Once a comment's finding went
+  to **Fix now**, **Reply on the thread** (and **Reply with this**) was gone
+  while the fix was queued, running or waiting on your answer, and for good
+  after a **Stop**. It is now offered then too: the reply is posted beside
+  the fix, which carries on untouched, and shows in the thread like the
+  others.
 
 ## 0.4.0 - 2026-11-10
 

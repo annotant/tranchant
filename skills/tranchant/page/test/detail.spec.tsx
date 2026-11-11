@@ -14,6 +14,7 @@ import type {
   Ownership,
   Review,
   State,
+  Step,
   Tracker,
 } from '../src/domain'
 import { FindingDetail } from '../src/FindingDetail'
@@ -41,7 +42,9 @@ function renderDetail({
   discussion,
   sent = true,
   tracker,
+  steps = [],
 }: {
+  steps?: Step[]
   tracker?: Tracker
   discussion?: Discussion
   /** What the server answers a message. */
@@ -66,7 +69,7 @@ function renderDetail({
           ? undefined
           : record(state, fields)
       }
-      steps={[]}
+      steps={steps}
       disabled={disabled}
       tracker={tracker}
       onDecide={onDecide}
@@ -818,6 +821,111 @@ test('a reply on a fixed thread shows while on its way, and why it failed', () =
   )
 })
 
+test('a thread is replied on while its fix runs and after a Stop, the fix left be', () => {
+  const fix = { decision: { action: 'fix' as const, at: 'now' } }
+  for (const state of ['queued', 'working', 'asking', 'stopped'] as const) {
+    const { onDecide, onStop } = renderDetail({
+      finding: THREADED,
+      reviewFields: { mr: pullRequest() },
+      state,
+      fields:
+        state === 'asking' ? { ...fix, question: { text: 'Which one?', at: '' } } : fix,
+    })
+    fireEvent.click(button('Reply on the thread')!)
+    fireEvent.change(screen.getByLabelText('Reply on the thread'), {
+      target: { value: 'On it' },
+    })
+    fireEvent.click(button('Reply')!)
+    expect(onDecide).toHaveBeenCalledWith([
+      { id: THREADED.id, action: 'post', comment: 'On it' },
+    ])
+    expect(onStop).not.toHaveBeenCalled()
+    // Beside the fix: its Stop stays while it runs.
+    if (state === 'queued' || state === 'working') expect(button('Stop')).not.toBeNull()
+    cleanup()
+  }
+  // On its way, the reply holds the next one back; the fix runs on.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'working',
+    fields: { ...fix, reply: { text: 'On it', at: '' } },
+  })
+  expect(screen.getByRole('status').closest('li')?.textContent).toContain('On it')
+  expect(button('Reply on the thread')).toBeNull()
+  expect(button('Stop')).not.toBeNull()
+  cleanup()
+  // A post on its way is no fix: nothing beside it.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'queued',
+    fields: { decision: { action: 'post', at: 'now' }, comment: 'Done' },
+  })
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  // A page that sends nothing offers no reply.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'working',
+    fields: fix,
+    disabled: true,
+  })
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  // Without its pull request, there is nothing to reply on.
+  renderDetail({ finding: THREADED, state: 'working', fields: fix })
+  expect(button('Reply on the thread')).toBeNull()
+  cleanup()
+  // Failed beside the fix, the reply is offered again, as written.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'working',
+    fields: { ...fix, reply: { text: 'On it', at: '', failed: 'token expired' } },
+  })
+  fireEvent.click(button('Reply on the thread')!)
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+    'On it',
+  )
+})
+
+test("while a thread's fix runs, the agent's earlier reply is still offered, and only it", () => {
+  const discussion: Discussion = {
+    messages: [
+      asked('Is she right?'),
+      answered('Yes.', { fix: 'Show it.', comment: 'On it.', drop: 'Wrong.' }),
+    ],
+  }
+  for (const state of ['queued', 'working', 'asking'] as const) {
+    const { onDecide } = renderDetail({
+      finding: THREADED,
+      reviewFields: { mr: pullRequest() },
+      state,
+      fields: { decision: { action: 'fix', at: 'now' } },
+      discussion,
+    })
+    expect(button('Fix with this')).toBeNull()
+    expect(button('Drop with this reason')).toBeNull()
+    fireEvent.click(button('Reply with this')!)
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread').value).toBe(
+      'On it.',
+    )
+    expect(onDecide).not.toHaveBeenCalled()
+    cleanup()
+  }
+  // Dropped, the thread reads as it stands: no reply is carried over from it.
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'dropped',
+    fields: { decision: { action: 'drop', at: 'now' } },
+    discussion,
+  })
+  expect(button('Reply with this')).toBeNull()
+})
+
 test("on a thread, the agent's comment is a reply, opened in the editor; a replied thread is still discussed", () => {
   const discussion: Discussion = {
     messages: [
@@ -844,6 +952,114 @@ test("on a thread, the agent's comment is a reply, opened in the editor; a repli
   expect(onDecide).not.toHaveBeenCalled()
 })
 
+test("on a thread, the agent's reply is taken once: a note after it is sent, offered again by a later answer", () => {
+  const proposed = 'You are right, fixing it.'
+  const edited = `${proposed} Thanks!`
+  const from = '2026-11-06T10:01:00Z'
+  const first: Discussion = {
+    messages: [asked('Is she right?'), answered('Yes.', { comment: proposed })],
+  }
+  const posted = { discussionId: 'PRRT_1', url: 'https://x.example/r', at: '' }
+  const sent = [{ text: edited, url: 'https://x.example/2', at: '', proposal: from }]
+  const replied = "You replied with the agent's proposal"
+  const onDecide = vi.fn()
+  const detail = (fields: Partial<FindingRecord>, discussion = first) => (
+    <FindingDetail
+      review={review('ours', { mr: pullRequest() })}
+      finding={THREADED}
+      record={record('posted', { posted, ...fields })}
+      steps={[]}
+      disabled={false}
+      onDecide={onDecide}
+      onAnswer={vi.fn()}
+      onStop={vi.fn()}
+      discussion={discussion}
+      onDiscuss={vi.fn(async () => true)}
+    />
+  )
+  const { rerender } = render(detail({}))
+  fireEvent.click(button('Reply with this')!)
+  // The editor holds the proposal: the card is gone from under it.
+  expect(button('Reply with this')).toBeNull()
+  const editor = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
+  fireEvent.change(editor, { target: { value: edited } })
+  fireEvent.click(button('Reply')!)
+  expect(onDecide).toHaveBeenCalledWith([
+    { id: THREADED.id, action: 'post', comment: edited, proposal: from },
+  ])
+  // Changed before it was sent, it is still the proposal taken: on its way, then posted.
+  rerender(detail({ reply: { text: edited, proposal: from, at: '' } }))
+  expect(button('Reply with this')).toBeNull()
+  expect(screen.getByText(replied)).toBeDefined()
+  rerender(detail({ replies: sent }))
+  expect(button('Reply with this')).toBeNull()
+  expect(screen.getByText(replied)).toBeDefined()
+  // Failed, it is offered again.
+  rerender(
+    detail({ reply: { text: edited, proposal: from, at: '', failed: 'token expired' } }),
+  )
+  expect(button('Reply with this')).not.toBeNull()
+  expect(screen.queryByText(replied)).toBeNull()
+  // A later answer proposes another reply: it is offered again.
+  rerender(
+    detail(
+      { replies: sent },
+      {
+        messages: [
+          ...first.messages,
+          asked('And the tests?'),
+          {
+            ...answered('Missing.', { comment: 'Adding a test.' }),
+            at: '2026-11-06T10:03:00Z',
+          },
+        ],
+      },
+    ),
+  )
+  expect(button('Reply with this')).not.toBeNull()
+  expect(screen.queryByText(replied)).toBeNull()
+  cleanup()
+  // Mounted again, from the files: by the proposal it carries, or by its text.
+  for (const replies of [
+    sent,
+    [{ text: proposed, url: 'https://x.example/2', at: '' }],
+  ]) {
+    renderDetail({
+      finding: THREADED,
+      reviewFields: { mr: pullRequest() },
+      state: 'posted',
+      fields: { posted, replies },
+      discussion: first,
+    })
+    expect(button('Reply with this')).toBeNull()
+    expect(screen.getByText(replied)).toBeDefined()
+    cleanup()
+  }
+})
+
+test("on a thread, a reply written by hand after the proposal was cancelled is the reviewer's own", () => {
+  const { onDecide } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'posted',
+    fields: { posted: { discussionId: 'PRRT_1', url: 'https://x.example/r', at: '' } },
+    discussion: {
+      messages: [asked('Is she right?'), answered('Yes.', { comment: 'You are right.' })],
+    },
+  })
+  fireEvent.click(button('Reply with this')!)
+  fireEvent.click(button('Cancel')!)
+  fireEvent.click(button('Reply on the thread')!)
+  // Opened by hand, the proposal is still offered beside the editor.
+  expect(button('Reply with this')).not.toBeNull()
+  const editor = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
+  fireEvent.change(editor, { target: { value: 'My own words.' } })
+  fireEvent.click(button('Reply')!)
+  expect(onDecide).toHaveBeenCalledWith([
+    { id: THREADED.id, action: 'post', comment: 'My own words.' },
+  ])
+})
+
 test('a reply on its way is only in the thread: no agent to wait for, nothing else to decide', () => {
   renderDetail({
     finding: THREADED,
@@ -864,4 +1080,244 @@ test('a reply on its way is only in the thread: no agent to wait for, nothing el
   })
   expect(screen.getByRole('status').textContent).toBe('Posting on the merge request…')
   expect(button('Stop')).toBeNull()
+})
+
+const CHANGE_AT = '2026-11-06T10:02:00Z'
+const changeAsked = (text: string, at = CHANGE_AT) =>
+  ({ by: 'reviewer', text, at, change: true }) as const
+const changing = (fields: Partial<FindingRecord> = {}): Partial<FindingRecord> => ({
+  decision: {
+    action: 'fix',
+    context: 'Fix it like that',
+    change: CHANGE_AT,
+    at: CHANGE_AT,
+  },
+  runs: [{ id: 'r1', startedAt: CHANGE_AT }],
+  ...fields,
+})
+
+test('on a thread, Change asks the agents for a change, Enter only ever a question; elsewhere none is offered', async () => {
+  const { onDiscuss } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    discussion: { messages: [asked('Is it right?'), answered('Yes: it crashes.')] },
+  })
+  fireEvent.change(box(), { target: { value: 'Fix it like that' } })
+  fireEvent.click(within(thread()!).getByRole('button', { name: 'Change' }))
+  await waitFor(() =>
+    expect(onDiscuss).toHaveBeenCalledWith(THREADED.id, 'Fix it like that', true),
+  )
+  expect(screen.getByText(/Change has an agent make it/)).toBeDefined()
+  cleanup()
+  renderDetail({
+    discussion: { messages: [asked('Is it right?'), answered('Yes: it crashes.')] },
+  })
+  expect(within(thread()!).queryByRole('button', { name: 'Change' })).toBeNull()
+})
+
+test('a change under way shows its step live and Stop; its question is answered in the thread', () => {
+  const { onStop } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'working',
+    fields: changing(),
+    discussion: {
+      messages: [
+        asked('Is it right?'),
+        answered('Yes.'),
+        changeAsked('Fix it like that'),
+      ],
+    },
+    steps: [{ at: 1, kind: 'edit', label: 'src/people/usePeople.ts', state: 'running' }],
+  })
+  const discussion = thread()!
+  expect(within(discussion).getByText('Change asked')).toBeDefined()
+  expect(within(discussion).getByRole('status').textContent).toBe(
+    'Editing src/people/usePeople.ts',
+  )
+  expect(
+    within(discussion).getByText('An agent is making the change: Stop ends it.'),
+  ).toBeDefined()
+  expect(screen.queryByRole('textbox', { name: 'Your message to the agent' })).toBeNull()
+  fireEvent.click(within(discussion).getByRole('button', { name: 'Stop' }))
+  expect(onStop).toHaveBeenCalledWith(THREADED.id)
+  cleanup()
+
+  const { onAnswer } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'asking',
+    fields: changing({
+      question: {
+        text: 'Which test file?',
+        options: [{ label: 'usePeople.test.ts' }, { label: 'people.test.ts' }],
+        at: '2026-11-06T10:03:00Z',
+      },
+    }),
+    discussion: {
+      messages: [
+        changeAsked('Fix it like that'),
+        {
+          by: 'agent',
+          text: 'Which test file?',
+          at: '2026-11-06T10:03:00Z',
+          runs: ['r1'],
+          outcome: 'asking',
+        },
+      ],
+    },
+  })
+  // Asked once, in the thread: the outcome does not ask it again.
+  expect(screen.getAllByRole('form', { name: 'Answer the agent' })).toHaveLength(1)
+  const form = within(thread()!).getByRole('form', { name: 'Answer the agent' })
+  fireEvent.click(within(form).getByLabelText(/usePeople\.test\.ts/))
+  fireEvent.click(within(form).getByRole('button', { name: 'Answer' }))
+  expect(onAnswer).toHaveBeenCalledWith(THREADED.id, '', ['usePeople.test.ts'])
+})
+
+test('a change made shows what changed, its own run; a follow-up on the fixed finding is a new change', async () => {
+  const fetch = vi.fn(
+    async () =>
+      new Response(
+        JSON.stringify({ files: [{ path: 'src/a.ts', since: [] }], diff: '' }),
+        {
+          status: 200,
+        },
+      ),
+  )
+  vi.stubGlobal('fetch', fetch)
+  try {
+    const { onDiscuss } = renderDetail({
+      finding: THREADED,
+      reviewFields: { mr: pullRequest() },
+      state: 'fixed',
+      fields: changing({
+        runs: [
+          {
+            id: 'r1',
+            startedAt: CHANGE_AT,
+            outcome: 'fixed',
+            summary: 'Kept the early return.',
+          },
+        ],
+      }),
+      discussion: {
+        messages: [
+          changeAsked('Fix it like that'),
+          {
+            by: 'agent',
+            text: 'Kept the early return.',
+            at: '2026-11-06T10:05:00Z',
+            runs: ['r1'],
+            outcome: 'fixed',
+          },
+        ],
+      },
+    })
+    const discussion = thread()!
+    expect(within(discussion).getByText('Changed in the working tree')).toBeDefined()
+    fireEvent.click(within(discussion).getByRole('button', { name: 'View changes' }))
+    await within(discussion).findByRole('region', { name: 'Changes of the fix' })
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/changes/${THREADED.id}?run=r1`,
+      expect.anything(),
+    )
+    fireEvent.change(box(), { target: { value: 'Now the test' } })
+    fireEvent.click(within(discussion).getByRole('button', { name: 'Change' }))
+    await waitFor(() =>
+      expect(onDiscuss).toHaveBeenCalledWith(THREADED.id, 'Now the test', true),
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a change that went no further says why, and Try again asks for it again', async () => {
+  const { onDiscuss } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'stopped',
+    fields: changing({ cancellation: { at: '', changed: [], steps: 0 } }),
+    discussion: {
+      messages: [
+        changeAsked('Fix it like that'),
+        {
+          by: 'agent',
+          text: 'You stopped the change.',
+          at: '2026-11-06T10:05:00Z',
+          outcome: 'stopped',
+          failed: true,
+        },
+      ],
+    },
+  })
+  expect(within(thread()!).getByText('You stopped the change.')).toBeDefined()
+  expect(button('Ask again')).toBeNull()
+  fireEvent.click(button('Try again')!)
+  await waitFor(() =>
+    expect(onDiscuss).toHaveBeenCalledWith(THREADED.id, 'Fix it like that', true),
+  )
+})
+
+test('Try again after an answered question asks for the change, never the answer', async () => {
+  const { onDiscuss } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'stopped',
+    fields: changing({ cancellation: { at: '', changed: [], steps: 0 } }),
+    discussion: {
+      messages: [
+        changeAsked('Fix it like that'),
+        {
+          by: 'agent',
+          text: 'Which file?',
+          at: '2026-11-06T10:03:00Z',
+          outcome: 'asking',
+        },
+        changeAsked('usePeople.ts', '2026-11-06T10:04:00Z'),
+        {
+          by: 'agent',
+          text: 'You stopped the change.',
+          at: '2026-11-06T10:05:00Z',
+          outcome: 'stopped',
+          failed: true,
+        },
+      ],
+    },
+  })
+  expect(within(thread()!).getByText('Your answer')).toBeDefined()
+  fireEvent.click(button('Try again')!)
+  await waitFor(() =>
+    expect(onDiscuss).toHaveBeenCalledWith(THREADED.id, 'Fix it like that', true),
+  )
+})
+
+test("a change's question not in the thread yet is answered in the outcome; a result not landed holds nothing", async () => {
+  renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'asking',
+    fields: changing({ question: { text: 'Which test file?', at: CHANGE_AT } }),
+    discussion: { messages: [changeAsked('Fix it like that')] },
+  })
+  expect(screen.getByRole('form', { name: 'Answer the agent' })).toBeDefined()
+  expect(screen.getByText('Which test file?')).toBeDefined()
+  cleanup()
+
+  // Fixed, its result never landed: the next message goes, and the server lands it first.
+  const { onDiscuss } = renderDetail({
+    finding: THREADED,
+    reviewFields: { mr: pullRequest() },
+    state: 'fixed',
+    fields: changing({
+      runs: [{ id: 'r1', startedAt: CHANGE_AT, outcome: 'fixed', summary: 'Done.' }],
+    }),
+    discussion: { messages: [changeAsked('Fix it like that')] },
+  })
+  expect(within(thread()!).queryByRole('status')).toBeNull()
+  fireEvent.change(box(), { target: { value: 'Now the test' } })
+  fireEvent.click(within(thread()!).getByRole('button', { name: 'Change' }))
+  await waitFor(() =>
+    expect(onDiscuss).toHaveBeenCalledWith(THREADED.id, 'Now the test', true),
+  )
 })

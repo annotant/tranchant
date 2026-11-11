@@ -381,10 +381,10 @@ export default function App() {
   )
 
   const discuss = useCallback(
-    async (id: string, text: string) => {
+    async (id: string, text: string, change?: boolean) => {
       let sent = false
       try {
-        await postDiscuss(id, text)
+        await postDiscuss(id, text, change)
         sent = true
         setNotice(undefined)
       } catch (failure) {

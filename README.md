@@ -211,7 +211,12 @@ In the page:
   in place, to edit before it posts) or **Drop with this reason** turn it
   into a decision in one click. A discussion decides nothing; it survives a
   reload, a finding that has one shows its count in the diff and the list,
-  and it reads as it stands once the finding is settled.
+  and it reads as it stands once the finding is settled. On a finding from
+  `/tranchant comments`, **Change** asks for a change instead ("go ahead",
+  "also cover the empty case"): an agent makes it in the working tree with
+  the whole discussion in hand, as a fix does (file locks, **Stop**), its
+  current step, its questions and what it changed (**View changes**) in the
+  thread; ask again for the next change, even once the finding is fixed.
 - The bar at the top selects every finding, a group (To do, Safe to
   auto-fix) or none, then applies one action to the selection (**Issue**
   opens one issue per finding, as drafted); Post all to do posts every open

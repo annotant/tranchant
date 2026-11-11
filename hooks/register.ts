@@ -666,11 +666,46 @@ async function startWorker($: $, watched: Watch, { id, line }: Queued) {
 
 /** A finding needs an agent: once, however many times the server says so. */
 async function dispatch($: $, watched: Watch, next: Queued) {
+  // Asked again while its last agent still ends its turn (a change, an answer): once it ended.
+  if ((await read($, workers))[next.id]?.running) {
+    afterTurn.set(next.id, { ...next, dir: watched.dir })
+    return
+  }
   if (await wasHandedOver($, next.id, next.line)) return
   if (starting.has(next.id) || watched.queue.some((one) => one.id === next.id)) return
-  if ((await read($, workers))[next.id]?.running) return
   watched.queue.push(next)
   await pump($)
+}
+
+/** The lines that came for a finding while its agent ran, by finding id. */
+const afterTurn = new Map<string, Queued & { dir: string }>()
+
+/** The finding's agent ended: a fix asked meanwhile gets its agent, if the finding still waits for one. */
+async function dispatchAfterTurn($: $, id: string) {
+  const next = afterTurn.get(id)
+  if (!next) return
+  afterTurn.delete(id)
+  const watched = watches.get(next.dir)
+  if (watched && (await isQueued($, next.dir, id)))
+    await dispatch($, watched, { id: next.id, line: next.line })
+}
+
+/** Whether finding `id` is queued for an agent; unreadable, it is not. */
+async function isQueued($: $, dir: string, id: string) {
+  try {
+    const decisions: unknown = JSON.parse(await $.fs.read(`${dir}/decisions.json`))
+    const findings =
+      decisions && typeof decisions === 'object' && 'findings' in decisions
+        ? decisions.findings
+        : undefined
+    const entry: unknown =
+      findings && typeof findings === 'object' ? Reflect.get(findings, id) : undefined
+    return (
+      !!entry && typeof entry === 'object' && 'state' in entry && entry.state === 'queued'
+    )
+  } catch {
+    return false
+  }
 }
 
 /** Ends the finding's agent and tells hook.mjs, so the page shows it ended. */
@@ -680,6 +715,7 @@ async function endWorker($: $, id: string, worker: Worker, why: string) {
   await forgetHandOver($, id)
   await ended($, id, worker)
   await debug($, `${tag(id)}: agent ${worker.agent} stopped: ${why}`)
+  await dispatchAfterTurn($, id)
 }
 
 async function stopWorker($: $, watched: Watch, id: string) {
@@ -1148,6 +1184,7 @@ async function workerDone($: $, agent: string, answer: string) {
   const said = answer.trim().split('\n')[0] ?? ''
   await debug($, `${tag(done.id)}: turn ended: ${short(said, 120)}`)
   if (said) $.ui.toast(`${tag(done.id)}: ${short(said, 200)}`)
+  await dispatchAfterTurn($, done.id)
   void pump($)
 }
 
@@ -1500,7 +1537,10 @@ async function endReviewAgent(
   else await unanswered($, one.review, id)
 }
 
-/** Whether finding `id`'s discussion ends on the reviewer's question; unreadable, it does not. */
+/**
+ * Whether finding `id`'s discussion ends on the reviewer's question; unreadable,
+ * it does not. A change they asked for waits for its fix's agent, not this one.
+ */
 async function waitsForAnswer($: $, dir: string, id: string) {
   try {
     const discussion: unknown = JSON.parse(
@@ -1511,7 +1551,13 @@ async function waitsForAnswer($: $, dir: string, id: string) {
         ? discussion.messages
         : undefined
     const last: unknown = Array.isArray(messages) ? messages.at(-1) : undefined
-    return !!last && typeof last === 'object' && 'by' in last && last.by === 'reviewer'
+    return (
+      !!last &&
+      typeof last === 'object' &&
+      'by' in last &&
+      last.by === 'reviewer' &&
+      !('change' in last && last.change)
+    )
   } catch {
     return false
   }

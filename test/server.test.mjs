@@ -955,6 +955,18 @@ test('lists the files a fix wrote and their diff against HEAD; another fix since
 
   const later = await json(await fetch(`${server.base}/api/changes/f-02`))
   assert.deepEqual(later.files, [{ path: 'src/a.ts', since: ['f-03'] }])
+
+  // Runs named, a change its discussion asked for: their writes only, the later runs named.
+  const first = await json(await fetch(`${server.base}/api/changes/f-01?run=r1`))
+  assert.deepEqual(first.files, [{ path: 'src/early.ts', since: [] }])
+  const both = await json(await fetch(`${server.base}/api/changes/f-01?run=r1&run=r2`))
+  assert.deepEqual(
+    both.files.map((/** @type {any} */ one) => one.path),
+    ['src/early.ts', 'src/a.ts', 'src/new file.ts'],
+  )
+  const none = await json(await fetch(`${server.base}/api/changes/f-01?run=r9`))
+  assert.deepEqual(none, { files: [], diff: '' })
+  assert.equal((await fetch(`${server.base}/api/changes/f-01?run=x`)).status, 400)
 })
 
 test('a run with no edit lists no file, and an id that is not one is not found', async (t) => {
@@ -1366,6 +1378,129 @@ test('a question on a finding prints DISCUSS; the agent answers through reply.mj
   assert.deepEqual(await json(queued), {
     error: 'finding f-01 is queued: no discussion now',
   })
+})
+
+test("a change asked in a thread's discussion prints FIX, never DISCUSS; Stop ends it there", async (t) => {
+  const review = await fixture('theirs')
+  const [first, ...rest] = review.findings
+  const thread = {
+    forge: 'gitlab',
+    id: 'd1a2b3c4',
+    url: 'https://gitlab.com/qohash/dashboard-ui/-/merge_requests/5751#note_1',
+    comments: [{ author: 'jfdoe', body: 'Crashes on undefined.', at: '2026-11-10' }],
+  }
+  const server = await startServer(t, {
+    overrides: {
+      id: 'e4f5a6b7-8c9d-4e0f-a1b2-c3d4e5f6a7b8',
+      findings: [{ ...first, thread }, ...rest],
+    },
+  })
+  /** @param {unknown} body */
+  const discuss = (body) =>
+    fetch(`${server.base}/api/discuss`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  let printed = server.output().length
+  assert.equal((await discuss({ id: 'f-01', text: 'Is it right?' })).status, 200)
+  assert.equal(await server.nextLine('DISCUSS f-01', printed), 'DISCUSS f-01')
+  await run(process.execPath, [REPLY, 'f-01', '--review', server.dir], {
+    input: JSON.stringify({ text: 'Yes.' }),
+  })
+
+  printed = server.output().length
+  const changed = await discuss({ id: 'f-01', text: 'Fix it', change: true })
+  assert.equal(changed.status, 200)
+  assert.equal(await server.nextLine('FIX f-01', printed), 'FIX f-01')
+  assert.doesNotMatch(server.output().slice(printed), /DISCUSS/)
+  const refused = await discuss({ id: 'f-02', text: 'Fix it', change: true })
+  assert.equal(refused.status, 409)
+  assert.match((await json(refused)).error, /no PR\/MR thread/)
+
+  const stopped = await fetch(`${server.base}/api/stop`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'f-01' }),
+  })
+  assert.equal(stopped.status, 200)
+  /** The last message of f-01's discussion, as the page reads it. */
+  const lastMessage = async () =>
+    (await json(await fetch(`${server.base}/api/review`))).discussions[
+      'f-01'
+    ].messages.at(-1)
+  let last = await lastMessage()
+  assert.equal(last.outcome, 'stopped')
+  assert.equal(last.failed, true)
+
+  /** @param {string} name @param {string[]} args */
+  const script = (name, args) =>
+    run(process.execPath, [path.join(SCRIPTS, name), ...args, '--review', server.dir], {
+      env: { TRANCHANT_STATE_DIR: stateDir },
+    })
+  /** @param {string} route @param {unknown} body */
+  const send = (route, body) =>
+    fetch(`${server.base}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  // Asked again; its agent asks; the answer joins the thread, and starts the next run.
+  assert.equal((await discuss({ id: 'f-01', text: 'Again', change: true })).status, 200)
+  await script('claim.mjs', ['f-01'])
+  await script('ask.mjs', ['f-01', 'Which file?'])
+  printed = server.output().length
+  assert.equal((await send('/api/answer', { id: 'f-01', text: 'a.ts' })).status, 200)
+  assert.equal(await server.nextLine('FIX f-01', printed), 'FIX f-01')
+  last = await lastMessage()
+  assert.equal(last.by, 'reviewer')
+  assert.equal(last.text, 'a.ts')
+  assert.equal(last.change, true)
+
+  // Skipped before its next agent came: the thread says so, and takes the next message.
+  const skipped = await send('/api/decisions', {
+    decisions: [{ id: 'f-01', action: 'skip' }],
+  })
+  assert.deepEqual((await json(skipped)).applied, ['f-01'])
+  last = await lastMessage()
+  assert.equal(last.outcome, 'skipped')
+  assert.equal(last.failed, true)
+  assert.equal((await discuss({ id: 'f-01', text: 'Why?' })).status, 200)
+})
+
+test("a change's result its script could not write lands when the server starts again", async (t) => {
+  const review = await fixture('theirs')
+  const [first, ...rest] = review.findings
+  const thread = {
+    forge: 'gitlab',
+    id: 'd1a2b3c4',
+    url: 'https://gitlab.com/qohash/dashboard-ui/-/merge_requests/5751#note_1',
+    comments: [{ author: 'jfdoe', body: 'Crashes on undefined.', at: '2026-11-10' }],
+  }
+  const imported = await importReview(t, 'theirs', stateDir, {
+    id: 'f5a6b7c8-9d0e-4f1a-b2c3-d4e5f6a7b8c9',
+    findings: [{ ...first, thread }, ...rest],
+  })
+  const store = createStore(imported.dir)
+  await say(imported.dir, 'f-01', 'Fix it', { change: true })
+  await store.claim('f-01')
+  // The store's move, without its line in the discussion.
+  await store.done('f-01', 'Returned early.')
+  const server = await startServer(t, { dir: imported.dir })
+  // Mended once READY is out, as the server goes over what waited.
+  let last
+  for (let waited = 0; waited < 5000; waited += 25) {
+    const payload = await json(await fetch(`${server.base}/api/review`))
+    last = payload.discussions['f-01'].messages.at(-1)
+    if (last.by === 'agent') break
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.equal(last.text, 'Returned early.')
+  assert.equal(last.outcome, 'fixed')
+  assert.deepEqual(last.runs, ['r1'])
+  assert.doesNotMatch(server.output(), /DISCUSS f-01/)
 })
 
 test('a question left waiting is asked again at start; an agent that ended answers it as failed', async (t) => {

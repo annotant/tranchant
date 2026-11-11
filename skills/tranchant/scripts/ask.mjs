@@ -4,8 +4,9 @@
 // Moves the finding from working to asking: the agent stops, and the
 // reviewer's answer queues the finding again for a new run. With options,
 // the reviewer picks one (several with --multiple) or answers in their own
-// words. Prints `asked`.
-import { questionArgs, textOrStdin } from './lib/cli.mjs'
+// words. A change asked in the finding's discussion gets the question there.
+// Prints `asked`.
+import { closeDiscussion, questionArgs, textOrStdin } from './lib/cli.mjs'
 import { findReview } from './lib/project.mjs'
 import { MAX_OPTIONS, StoreRefusal, createStore } from './lib/store.mjs'
 
@@ -30,6 +31,7 @@ try {
     options: parsed.options,
     multiple: parsed.multiple,
   })
+  await closeDiscussion(dir, id)
   console.log('asked')
 } catch (error) {
   if (!(error instanceof StoreRefusal)) throw error

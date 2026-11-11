@@ -175,8 +175,12 @@ export const postAnswer = (id: string, text: string, choices?: string[]) =>
     body: JSON.stringify(choices?.length ? { id, text, choices } : { id, text }),
   })
 
-export const postDiscuss = (id: string, text: string) =>
-  request<unknown>(DISCUSS, { method: 'POST', body: JSON.stringify({ id, text }) })
+/** A question on the finding, or with `change`, a change to its code an agent makes. */
+export const postDiscuss = (id: string, text: string, change = false) =>
+  request<unknown>(DISCUSS, {
+    method: 'POST',
+    body: JSON.stringify({ id, text, ...(change && { change: true }) }),
+  })
 
 export const postStop = (id: string) =>
   request<unknown>(STOP, { method: 'POST', body: JSON.stringify({ id }) })
@@ -214,8 +218,13 @@ export interface ChangesPayload {
   diff: string
 }
 
-export const fetchChanges = (id: string) =>
-  request<ChangesPayload>(`${CHANGES}${encodeURIComponent(id)}`)
+/** `runs`: those runs' changes, a change the discussion asked for; else the fix's. */
+export const fetchChanges = (id: string, runs: readonly string[] = []) => {
+  const query = new URLSearchParams(runs.map((run) => ['run', run])).toString()
+  return request<ChangesPayload>(
+    `${CHANGES}${encodeURIComponent(id)}${query ? `?${query}` : ''}`,
+  )
+}
 
 /** What `GET /api/account` answers: the username null when the tool cannot say; `tool` absent from older servers. */
 export interface AccountPayload {

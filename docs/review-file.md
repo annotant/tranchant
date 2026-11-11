@@ -11,7 +11,7 @@ folder: nothing is installed in a repository to review it.
 | `runs/<finding id>.jsonl`         | Next to it                            | The steps of the run in progress on that finding                                            | The hooks (`hooks/register.ts`)                                                                                        |
 | `runs/<finding id>.history.jsonl` | Next to it                            | The steps of every run that ended                                                           | The store, when a run ends                                                                                             |
 | `reviewers/<name>.jsonl`          | Next to it                            | The steps of one review agent of `/tranchant review`: `sm-summary`, `rv-<lens>` or `vf-<finding id>`; of a finding's discussing agent: `ds-<finding id>` | The hooks (`hooks/register.ts`, `hook.mjs --reviewer`)                                                                 |
-| `discussions/<finding id>.json`   | Next to it                            | The finding's discussion: the reviewer's questions and the agent's answers                  | `lib/discussion.mjs`, for the server (a question) and `reply.mjs` (an answer)                                          |
+| `discussions/<finding id>.json`   | Next to it                            | The finding's discussion: the reviewer's questions and the agent's answers                  | `lib/discussion.mjs`, for the server (a question, a change, and a change's answer or result on each move the reviewer makes and at start), `reply.mjs` (an answer), and `done.mjs`, `ask.mjs`, `hook.mjs ended` (a change's result) |
 | `lenses.json`                     | Next to it                            | The Lenses step of `/tranchant review`: one row per lens, as it is resolved and built        | `lenses.mjs`                                                                                                           |
 | `lenses/<sha256>.md`              | `<state>/`                            | A lens's prompt as the Lenses step built it, one file per hash, shared by every review       | `lenses.mjs`, once per hash                                                                                            |
 | `imports/<import id>/`            | `<state>/<hash>/`                     | An import of `/tranchant import`: `import.json` (its source, its location, where it stands) and `recipe.json`, the recipe its agent wrote | `import.mjs` and the import agent (`recipe.json` alone); the server, when the user uses it                    |
@@ -180,6 +180,8 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
         "action": "fix",
         "context": "keep the early return, no throw",
         "resolve": true, // a post on a thread: resolve it once replied
+        "proposal": "…", // a post on a thread: the `at` of the agent's message whose proposed reply it started from
+        "change": "…", // a fix asked in its thread's discussion: the `at` of the reviewer's message that asked
         "at": "…",
       },
       "comment": "…", // a post: the text as posted, when the reviewer edited it
@@ -192,8 +194,8 @@ overrides apply); the page groups by bucket, then topic, then `path:line`.
       "answer": { "text": "…", "choices": ["…"], "at": "…" },
       "reason": "…", // dropped: the reviewer's words; failed: the error
       "posted": { "discussionId": "…", "url": "…", "at": "…", "resolved": true }, // `unresolved`: why resolving the thread failed
-      "reply": { "text": "…", "resolve": true, "at": "…", "failed": "…" }, // a reply on a settled finding's thread: on its way, or why it failed
-      "replies": [{ "text": "…", "url": "…", "at": "…", "resolved": true }], // the replies posted on its thread, shown in it until an import holds them
+      "reply": { "text": "…", "resolve": true, "proposal": "…", "at": "…", "failed": "…" }, // a reply on its thread aside from the moves (settled, or its fix under way): on its way, or why it failed
+      "replies": [{ "text": "…", "url": "…", "at": "…", "resolved": true, "proposal": "…" }], // the replies posted on its thread, shown in it until an import holds them
       "issue": { "title": "…", "body": "…", "url": "…", "ref": "#12", "at": "…" }, // an issue: url, ref, at once created
       "runs": [/* Run */],
       "events": [/* Event */],
@@ -216,7 +218,7 @@ and `events` is optional.
 | State     | Meaning                                                                   | Moved by                            |
 | --------- | ------------------------------------------------------------------------- | ----------------------------------- |
 | `open`    | Nothing decided yet                                                       |                                     |
-| `queued`  | A fix, a post or an issue is decided; waiting for an agent, glab or gh    | reviewer (`fix`, `post`, `issue`, an answer) |
+| `queued`  | A fix, a post or an issue is decided; waiting for an agent, glab or gh    | reviewer (`fix`, `post`, `issue`, `change`, an answer) |
 | `working` | An agent is on it                                                         | agent (`claim.mjs`)                 |
 | `asking`  | The agent asked the reviewer something; it stopped                        | agent (`ask.mjs`)                   |
 | `fixed`   | The working tree holds the fix                                            | agent (`done.mjs`)                  |
@@ -230,18 +232,19 @@ and `events` is optional.
 Moves the store accepts:
 
 - `fix`: from `open`, `dropped`, `skipped`, `failed`, `stopped` → `queued`. An `asking` finding leaves only through `answer`.
-- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs. On a `fixed` or `posted` thread finding, a reply is no move: it is kept in `reply` while `post.mjs` runs, the state stays, `posted` records it once on the thread and `reply` goes, a failure leaves `reply.failed`; one at a time, again as often as the thread is answered back. On GitHub, `postBlocker` refuses any post but a reply.
+- `post`: from `open`, `dropped`, `skipped`, `failed` → `queued`; refused unless `mr.diffRefs` is set and its `headSha` is the review's, whatever the `ownership`, and unless the decision or the finding carries a `comment`. On a finding with a `thread`, a reply: it needs an `mr` and the decision's `comment` (the reviewer writes every reply), never the diff refs. On a `fixed` or `posted` thread finding, or one whose `fix` decision is under way (`queued`, `working`, `asking`, `stopped`), a reply is no move: it is kept in `reply` while `post.mjs` runs, the state and the fix (its run, its Stop) stay, `posted` records it once on the thread and `reply` goes, a failure leaves `reply.failed` (`store.fail` with `reply`); one at a time, refused while a post is `queued` or a reply on its way, again as often as the thread is answered back. On GitHub, `postBlocker` refuses any post but a reply.
 - `issue`: from `open`, `dropped`, `skipped`, `failed` → `queued`, with `issue.title` and `issue.body` (the title cut to one line of 255 characters, the body to 60,000); refused when either is empty. Any ownership, with or without an MR.
 - `drop`, `skip`: from `open`, `queued`, `asking`, `failed`, `stopped`, or from each other → `dropped`, `skipped`. Never from `working`, `fixed`, `posted` or `moved`.
 - `posted`, `moved`: the server's, from `queued` → `posted`, `moved`.
 - `answer`: from `asking` → `queued`, with `answer` set; the server prints `FIX <id>` again.
 - `stop`: from `queued`, `working` → `stopped`.
+- `change`: from `open`, `skipped`, `failed`, `stopped`, `fixed` → `queued`, a `fix` decision whose `context` is the reviewer's request and `change` the `at` of their message, asked in the discussion of a finding with a `thread` only (see [a discussion](#a-discussion)); a `question` and `answer` an earlier run left go. The one move that leaves `fixed`: a follow-up change.
 - `claim`: from `queued` → `working`, starting a run; refused on a finding queued for a post or an issue.
 - `done`: from `working` → `fixed`. `ask`: from `working` → `asking`. `hook.mjs ended` moves a `working` finding whose agent ended without either to `failed` (`reason`: `the agent ended without done.mjs or ask.mjs`).
 
 A `fixed`, `posted` or `moved` finding is final: no move leaves it (the
-reviewer reverts by hand, or asks for a follow-up in a new review); a reply
-on its thread is no move.
+reviewer reverts by hand, or asks for a follow-up in a new review), but a
+`change` its thread's discussion asks for; a reply on its thread is no move.
 
 The page's one-shot button (Post all to do) acts on the `open` findings (To do
 on the page) only, in list order; a selection may apply any move the table
@@ -284,7 +287,8 @@ rewritten.
 
 `discussions/<finding id>.json`: the reviewer asks about a finding, an agent
 answers. A discussion is not a decision: no move of the finding goes through
-it.
+it, but a change the reviewer asks for on a thread (see
+[change requests](#change-requests)).
 
 ```jsonc
 {
@@ -303,6 +307,8 @@ it.
       },
     },
     { "by": "agent", "text": "The agent ended without answering: ask again.", "at": "…", "failed": true },
+    { "by": "reviewer", "text": "Go ahead, keep the early return", "at": "…", "change": true },
+    { "by": "agent", "text": "Returned early in the hook.", "at": "…", "runs": ["r1"], "outcome": "fixed" },
   ],
 }
 ```
@@ -312,14 +318,22 @@ it.
 | `messages[].by`       | `reviewer` or `agent`. A last message by the `reviewer` waits for the agent's answer: no other question until it comes.        |
 | `messages[].text`     | The reviewer's up to 4,000 characters, plain; the agent's up to 8,000, Markdown.                                              |
 | `messages[].proposal` | The agent's: `fix`, `comment`, `drop`, each up to 4,000 characters. The page offers **Fix with this** (a `fix` decision, `fix` its `context`), **Post this** (`comment` in an editor in the thread, then a `post` with what it holds) and **Drop with this reason** (a `drop`, `drop` its `reason`) on the last answer, when the finding's state allows the move. |
-| `messages[].failed`   | `true`: its agent ended, was stopped or could not start before it answered, or `/tranchant stop` ended the wait.                                                                  |
+| `messages[].failed`   | `true`: its agent ended, was stopped or could not start before it answered, or `/tranchant stop` ended the wait; or the change asked for went no further (its `outcome` says how).                                                                  |
+| `messages[].change`   | The reviewer's, `true`: it asks for a change to the code, or answers the question that change's agent asked.                                                |
+| `messages[].runs`, `messages[].outcome` | The agent's, after a change: the runs it took since it was asked (answers included), when any started, and the state they left the finding in: `fixed` (its text the last run's summary), `asking` (the question), `failed`, `stopped`, `dropped`, `skipped`, or another state with `you decided otherwise` when another decision replaced the change (all but `fixed` and `asking` with `failed`). |
 
 The reviewer may write while the finding is `open`, `skipped`, `failed` or
 `stopped`: nothing settled, no agent on it; on a finding with a `thread`,
 also once `fixed` or `posted`, the thread living on until it is resolved.
 In any other state the discussion reads as it stands. On a thread, the
 agent's `comment` is a reply: **Reply with this** opens the reply editor
-with it, for the reviewer to change and send. A discussion holds 60 messages at most.
+with it, for the reviewer to change and send, and the `post` carries the
+answer's `at` as its `proposal`. While the finding's fix is under way
+(`queued`, `working`, `asking`), the discussion reads as it stands but the
+last answer's reply is still offered. A reply on its way or sent with that
+`proposal`, or with the proposal's text, takes it: the page says so under the
+answer instead of offering it again; a failed one offers it again. A
+discussion holds 60 messages at most.
 
 Each question starts one agent (`tranchant:ds-<id>-<review>`,
 `agents/discuss.md`), which reads the whole discussion again: one agent per
@@ -335,6 +349,40 @@ agent. A question asked again while the previous agent ends its turn waits for
 it, then gets an agent of its own; one still waiting when the server starts
 again is asked again. A discussion file this Tranchant cannot read (another
 `version`, not JSON) reads as none and is never written over.
+
+### Change requests
+
+On a finding with a `thread`, the reviewer may ask for a change to the code
+instead of asking a question (`POST /api/discuss` with `change`, the page's
+**Change**), while the store's `change` move allows it: `open`, `skipped`,
+`failed`, `stopped`, and `fixed` for a follow-up. The message lands with
+`change: true`, the finding moves to `queued` with a `fix` decision, and the
+server prints `FIX <id>`, never `DISCUSS`: no discussing agent reads it. The
+agent is a fix's (`agents/worker.md`), with its locks, steps and **Stop**;
+`claim.mjs` prints it the whole discussion, fenced with the finding, as
+`discussion`, the request also its `context`; a `cancellation` a stop left
+on a `fixed` finding goes with the change. Only the reviewer's messages
+ask for a change: the discussing agent writes nothing, and a thread's
+comments are data to both.
+
+The message waits until the run ends, then the agent's result lands after
+it, its `runs` and `outcome` set: `done.mjs` its summary, `ask.mjs` its
+question, `hook.mjs ended` why it failed, the server's stop, drop, skip or
+other decision why it went no further. The reviewer answers a question with
+the asking form under it (`POST /api/answer`): the answer joins the
+discussion with `change: true` and waits for the next run. Each of these
+syncs (`syncChange`) mends what an earlier one could not write, as does the
+next message and the server's start: one that failed never leaves the
+discussion waiting for good.
+
+While the change is queued or its agent at work, the discussion takes no
+other message and shows the run's last step and **Stop**; while it asks,
+the question and its form. A `fixed` result offers **View changes**, the
+files its runs wrote (`GET /api/changes/<id>?run=<run>&run=…`) with their
+diff as the working tree has them now, a later run of the finding on the
+same file named in `since`. Each request is one more change on the same
+finding: a `fixed` one queues again, and a `cancellation` an earlier stop
+left goes, the run that fixed it having finished it.
 
 ## The run files
 
@@ -474,7 +522,8 @@ reviewers' comments of your own change into the page:
 Each finding is then settled like any other. **Fix now** starts its agent,
 the comment its brief, fenced as data as every finding is. **Reply on the
 thread** opens an editor, empty, or after a fix prefilled with what changed,
-on any thread not settled otherwise, again once it is answered back;
+on any thread not settled otherwise, beside its fix while that runs or
+once stopped (the fix carries on), again once it is answered back;
 **Resolve the thread once replied** is a separate choice, never made for the
 reviewer. `post.mjs` replies (`addPullRequestReviewThreadReply`, or a note
 on the GitLab discussion), then resolves when asked (`resolveReviewThread`,
@@ -503,7 +552,7 @@ locks and show no progress.
 | Line                                                       | When                                                                             |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `READY http://127.0.0.1:<port> review=<id> project=<root>` | Listening. First line on success.                                                |
-| `FIX <id>`                                                 | The reviewer asked for a fix (or answered a question): the hooks start an agent. |
+| `FIX <id>`                                                 | The reviewer asked for a fix (or answered a question, or asked for a change in a thread's discussion): the hooks start an agent. |
 | `STOP <id>`                                                | The reviewer stopped the finding's agent: the hooks end it.                      |
 | `POSTED <id>`, `POST_FAILED <id> <reason>`                 | The server ran `post.mjs` itself; informational.                                 |
 | `MOVED <id>`, `ISSUE_FAILED <id> <reason>`                 | The server ran `issue.mjs` itself; informational.                                |
@@ -531,10 +580,10 @@ locks and show no progress.
 | `GET /api/lines?path=&from=&to=` | `{ path, from, to, total, lines }`: lines `from` to `to` (1-based, `to` cut at the file's end) of `path` at the diff's head commit (`git cat-file blob <headSha>:./<path>`), and how many lines it has: what the diff view unfolds around its hunks. Only a path the diff names, not binary, is read: 404 for any other. Answers 400 when `from` or `to` is not a line number or `to` comes before `from`; 416 `{ error, total }` when `from` is past the file's end; 409 with the reason when the diff is unavailable or git cannot read the file (a file the change deletes). |
 | `GET /api/events`     | Server-sent events: `changed` with `{ ids }` when a finding landed, was verified or removed, or its record or run changed (`ids` empty when the review's `status`, a review agent's file or `lenses.json` changed); `page` when the bundle was rebuilt; `settings` when the settings file changed (a page's `PUT`, another server's, an editor's), or an import of the project did.                                                                                 |
 | `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "issue" \| "drop" \| "skip", "context"?, "comment"?, "reason"?, "title"?, "body"? } ] }` (`title` and `body`: an issue's). Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
-| `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                     |
-| `POST /api/discuss`   | `{ "id", "text" }`: a question on finding `id`, refused (409) when `id` is not a finding of the review, its state allows no discussion, a question still waits, the text is empty, the discussion holds 60 messages, or its file is one this Tranchant cannot read; answers `{ discussion }` and prints `DISCUSS <id>`. |
-| `POST /api/stop`      | `{ "id" }`; answers `{ ok: true }`.                                                                                                                                                                                                                                                                                                                                |
-| `GET /api/changes/<id>` | `{ files, diff }`: what finding `id`'s fix changed. `files`, each `{ path, since }`, are the paths of the `edit` and `write` steps (not `failed`) of its run that ended `fixed` (else its last run that ended), in `.history.jsonl`: their `file` (their `label` in runs recorded before it), relative to `project`, those outside it left out; `since` names the other findings whose runs, ended or in progress, wrote that file after this run last did: the diff then shows their changes too. `diff` is their unified diff against `HEAD` on the working tree, run in `project` (`git diff HEAD` for the tracked files, from `/dev/null` for an untracked regular file whose real path is in `project` and not in `.git`; anything else untracked left out). A finding with no run, or whose run wrote nothing, answers `{ files: [], diff: "" }`; an id not in the review, 404. Answers 409 with the reason when git is missing, `project` is not a git repository or has no commit, the diff is past `TRANCHANT_MAX_DIFF_MIB`, or git fails. |
+| `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ finding }`. The answer to a change's question joins its discussion.                                                                                                                                                                                                                                                                                     |
+| `POST /api/discuss`   | `{ "id", "text", "change"? }`: a question on finding `id`, refused (409) when `id` is not a finding of the review, its state allows no discussion, a message still waits, the text is empty, the discussion holds 60 messages, or its file is one this Tranchant cannot read; answers `{ discussion }` and prints `DISCUSS <id>`. With `change: true`, a change to the code instead (see [change requests](#change-requests)), refused too on a finding with no `thread` or a state the `change` move does not leave; prints `FIX <id>`. |
+| `POST /api/stop`      | `{ "id" }`; answers `{ finding }`. A change asked in the discussion gets its `stopped` result there.                                                                                                                                                                                                                                                                                                                                |
+| `GET /api/changes/<id>` | `{ files, diff }`: what finding `id`'s fix changed. `files`, each `{ path, since }`, are the paths of the `edit` and `write` steps (not `failed`) of its run that ended `fixed` (else its last run that ended; with `?run=<run>`, repeated up to 50 times, those runs once they ended, none otherwise, 400 for a value that is no run id; this finding's other runs that wrote a file later are then in its `since`, as `<id> (<run>)`), in `.history.jsonl`: their `file` (their `label` in runs recorded before it), relative to `project`, those outside it left out; `since` names the other findings whose runs, ended or in progress, wrote that file after this run last did: the diff then shows their changes too. `diff` is their unified diff against `HEAD` on the working tree, run in `project` (`git diff HEAD` for the tracked files, from `/dev/null` for an untracked regular file whose real path is in `project` and not in `.git`; anything else untracked left out). A finding with no run, or whose run wrote nothing, answers `{ files: [], diff: "" }`; an id not in the review, 404. Answers 409 with the reason when git is missing, `project` is not a git repository or has no commit, the diff is past `TRANCHANT_MAX_DIFF_MIB`, or git fails. |
 | `GET /api/runs/<id>`  | `{ progress, history }`: the steps of the run in progress, then those of the runs that ended, each a list.                                                                                                                                                                                                                                                         |
 
 Everything is same-origin; the server refuses a request whose `Origin` is not
@@ -552,9 +601,9 @@ server's.
 
 | Script                                                                                                                      | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claim.mjs <id>`                                                                                                            | `queued` → `working`; starts a run; prints the finding as JSON, fenced, for the agent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `done.mjs <id> "<summary>"`                                                                                                 | `working` → `fixed`, with the files the run changed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `ask.mjs <id> "<question>" [--option "<label>: <description>"]… [--multiple]`                                               | `working` → `asking`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `claim.mjs <id>`                                                                                                            | `queued` → `working`; starts a run; prints the finding as JSON, fenced, for the agent, with its `discussion` when a change asked there.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `done.mjs <id> "<summary>"`                                                                                                 | `working` → `fixed`, with the files the run changed; a change asked in the discussion gets the summary there.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `ask.mjs <id> "<question>" [--option "<label>: <description>"]… [--multiple]`                                               | `working` → `asking`; a change asked in the discussion gets the question there.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `comments.mjs [<url>]`                                                                                                      | Run from the session's folder: writes the review of a pull or merge request's unresolved threads to `<state>/inbox/<id>.json` and prints `INBOX <file>`; notes on stderr (`note: …`). See [`/tranchant comments`](#tranchant-comments). |
 | `post.mjs <id>`                                                                                                             | Posts `comment` (the reviewer's edit when there is one) as a positioned discussion on the MR: `glab api --method POST --header 'Content-Type: application/json' --input -` with a JSON body (`position` of type `text`, the three `diffRefs` SHAs, `old_path` and `new_path` both set to `path`, `new_line`), run from `project` so glab picks the host from the remote; then `queued` → `posted` with `posted.url`, or `failed` with glab's first error line. On a finding with a `thread`, replies on it instead: on GitHub `gh api graphql --method POST --hostname <the PR's host> --input -` (`addPullRequestReviewThreadReply`), on GitLab `glab api --method POST … projects/<project>/merge_requests/<iid>/discussions/<id>/notes` with `{ body }`; then, with the decision's `resolve`, `resolveReviewThread` or a `PUT` of the discussion with `{ resolved: true }`. A resolve that fails leaves the reply `posted`, its reason in `posted.unresolved`. Run by the server on a `post` decision, never by an agent.                                                                                                  |
 | `issue.mjs <id>`                                                                                                            | Opens the issue the reviewer wrote (`issue.title`, `issue.body`) on the project `/api/tracker` names (the settings' `postWith` naming the forge for a host neither tool recognises), run from `project`: on GitHub `gh api --method POST --hostname <host> --header 'Content-Type: application/json' --input - repos/<owner>/<repo>/issues` with `{ title, body }`; on GitLab `glab api --method POST --hostname <host> … projects/<the remote's path, encoded>/issues` with `{ title, description }`. The tool has 60 seconds (`TRANCHANT_TOOL_TIMEOUT_MS`). Then `queued` → `moved` with `issue.url` and `issue.ref` (`#<number>`, `#<iid>`, absent when the answer has none), or `failed` with the tool's first error line; an answer without the issue's url fails saying where to check, since the issue may be open. Prints `moved <url>` or `failed <reason>`. Run by the server on an `issue` decision, never by an agent; a run that ends without a reason (a crash) is failed by the server, as a post is. |

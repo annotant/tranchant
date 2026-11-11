@@ -6,8 +6,9 @@
 // error. A finding from a PR/MR thread (`thread`) gets a reply on that
 // thread instead, with `gh api graphql` on GitHub, `glab api` on GitLab, then
 // the thread resolved when the reviewer asked: a resolve that fails leaves
-// the reply posted, and says why. A finding settled already (`fixed`, or
-// `posted` and answered back) keeps its state: its `reply` records the post.
+// the reply posted, and says why. A reply aside from the moves (the finding
+// settled already, or its fix under way) keeps the state and the fix: its
+// `reply` records the post.
 // Prints `posted <url>` or `failed <reason>`.
 // The server runs it on each post decision, one at a time; never an agent.
 // TRANCHANT_GLAB and TRANCHANT_GH name other executables (the tests' fakes).
@@ -39,10 +40,10 @@ const { review, decisions } = await store.readAll()
 const finding = review.findings.find((one) => one.id === id)
 if (!finding) failed(`no finding ${id} in the review`)
 const entry = decisions.findings[id]
-const settled = !!entry && replyPending(entry)
+const aside = !!entry && replyPending(entry)
 if (
   !finding ||
-  (!settled && (entry?.state !== 'queued' || entry.decision?.action !== 'post'))
+  (!aside && (entry?.state !== 'queued' || entry.decision?.action !== 'post'))
 ) {
   failed(`finding ${id} is not queued for a post`)
 }
@@ -54,7 +55,7 @@ if (
  */
 async function give(reason) {
   const short = reason.slice(0, MAX_REASON)
-  await store.fail(id, short).catch((error) => {
+  await store.fail(id, short, { reply: aside }).catch((error) => {
     if (!(error instanceof StoreRefusal)) throw error
     console.error(error.message)
   })
@@ -137,7 +138,7 @@ async function landed(where) {
   // Posted already: whatever the store says, never a failure the reviewer would retry into a duplicate.
   for (let attempt = 1; ; attempt++) {
     try {
-      await store.posted(id, where)
+      await store.posted(id, where, { reply: aside })
       break
     } catch (error) {
       if (!(error instanceof StoreRefusal) && attempt < 3) continue
@@ -155,10 +156,10 @@ async function landed(where) {
 const { mr } = review
 const thread = finding?.thread
 if (thread) {
-  const body = settled ? entry?.reply?.text : entry?.comment
+  const body = aside ? entry?.reply?.text : entry?.comment
   if (!mr) await give('the review has no PR/MR to reply on')
   if (!body) await give(`the reply on ${id}'s thread is empty`)
-  const resolve = settled
+  const resolve = aside
     ? entry?.reply?.resolve === true
     : entry?.decision?.resolve === true
   if (thread.forge === 'github') {
