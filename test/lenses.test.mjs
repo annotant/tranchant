@@ -4,14 +4,7 @@
 // review, refusing the review when a source cannot be resolved; prepare.mjs
 // reads the project's recipe at BASE.
 import assert from 'node:assert/strict'
-import {
-  mkdir,
-  open as openFile,
-  readFile,
-  readdir,
-  stat,
-  writeFile,
-} from 'node:fs/promises'
+import { mkdir, open as openFile, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import {
@@ -235,7 +228,10 @@ test('a build run twice gives the same hash, and writes nothing the second time'
   assert.equal(first.hash, second.hash)
   const stored = await storeLens(first.text, first.hash, lenses)
   assert.deepEqual(stored, { file: path.join(lenses, `${first.hash}.md`), written: true })
-  const written = (await stat(stored.file)).mtimeMs
+  // Handles, never a stat by path: the file checked is the file read.
+  const stamp = await openFile(stored.file)
+  t.after(() => stamp.close())
+  const written = await stamp.stat()
   // Twice at once, then again: one file, never rewritten, no temp file left.
   const again = await Promise.all([
     storeLens(second.text, second.hash, lenses),
@@ -246,11 +242,11 @@ test('a build run twice gives the same hash, and writes nothing the second time'
     [false, false],
   )
   assert.deepEqual(await readdir(lenses), [`${first.hash}.md`])
-  // One handle for both checks: the file stat-ed is the file read.
-  const handle = await openFile(stored.file)
-  t.after(() => handle.close())
-  assert.equal((await handle.stat()).mtimeMs, written)
-  assert.equal(await handle.readFile('utf8'), first.text)
+  const reread = await openFile(stored.file)
+  t.after(() => reread.close())
+  const now = await reread.stat()
+  assert.deepEqual([now.ino, now.mtimeMs], [written.ino, written.mtimeMs])
+  assert.equal(await reread.readFile('utf8'), first.text)
 })
 
 test('lenses.mjs builds every lens, records them, and prints one LENS line each', async (t) => {
