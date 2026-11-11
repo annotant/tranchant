@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-11
+
 ### Added
 
 - **Ask for a change from a comment's discussion.** On a finding from
@@ -32,10 +34,10 @@ released to the `stable` branch.
 
 ### Changed
 
-- The project's recipe is read at the review's base, never from the change
-  under review; the local recipe and the project's come before the
-  settings'. The Settings show the recipe in force, where it comes from, and
-  each lens's source and status.
+- **The project's recipe first.** It is read at the review's base, never
+  from the change under review; the local recipe and the project's come
+  before the settings'. The Settings show the recipe in force, where it
+  comes from, and each lens's source and status.
 
 ### Fixed
 
