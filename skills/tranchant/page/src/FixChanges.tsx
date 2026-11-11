@@ -8,11 +8,13 @@ import { languageOfFile } from './syntax'
 
 interface Props {
   id: string
+  /** Those runs' files: a change its discussion asked for. */
+  runs?: readonly string[] | undefined
   disabled: boolean
 }
 
 /** A fixed finding's files and their diff against HEAD, read on demand. */
-export function FixChanges({ id, disabled }: Props) {
+export function FixChanges({ id, runs, disabled }: Props) {
   const [changes, setChanges] = useState<ChangesPayload>()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
@@ -21,7 +23,7 @@ export function FixChanges({ id, disabled }: Props) {
     setLoading(true)
     setError(undefined)
     try {
-      setChanges(await fetchChanges(id))
+      setChanges(await fetchChanges(id, runs))
     } catch (failure) {
       setError(
         failure instanceof Error ? failure.message : 'The changes could not be read.',

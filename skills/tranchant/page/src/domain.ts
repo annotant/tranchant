@@ -221,7 +221,14 @@ interface SentReply {
 
 export interface FindingRecord {
   state: State
-  decision?: { action: Action; context?: string; proposal?: string; at: string }
+  /** `change`: the `at` of the discussion's message that asked for this fix. */
+  decision?: {
+    action: Action
+    context?: string
+    proposal?: string
+    change?: string
+    at: string
+  }
   comment?: string
   question?: Question
   answer?: { text: string; choices?: string[]; at: string }
@@ -289,8 +296,13 @@ export interface Message {
   text: string
   at: string
   proposal?: Proposal
-  /** The agent ended, was stopped or never started before it answered. */
+  /** The agent ended, was stopped or never started before it answered; or a change went no further. */
   failed?: true
+  /** The reviewer's: it asks for a change to the code, or answers the question its agent asked. */
+  change?: true
+  /** The result of a change: the runs it took, if any started, and the state they left the finding in. */
+  runs?: string[]
+  outcome?: State
 }
 
 /** A finding's discussion with an agent, as `/api/review` sends it. */
@@ -684,9 +696,20 @@ const THREAD_DISCUSS_IN = new Set<State>([...DISCUSS_IN, ...REPLY_IN])
 export const discussable = (state: State, finding?: Pick<Finding, 'thread'>) =>
   (finding?.thread ? THREAD_DISCUSS_IN : DISCUSS_IN).has(state)
 
-/** The reviewer's last message waits for the agent's answer. */
+/** The reviewer's last message waits for the agent's answer, or for the change it asked for. */
 export const isWaiting = (discussion: Discussion | undefined) =>
   discussion?.messages.at(-1)?.by === 'reviewer'
+
+/** The reviewer's last message waits for the change it asked for. */
+export const waitsForChange = (discussion: Discussion | undefined) =>
+  isWaiting(discussion) && !!discussion?.messages.at(-1)?.change
+
+// As lib/format.mjs's `change`: a thread's discussion asks for a change, again once fixed.
+const CHANGE_FROM = new Set<State>(['open', 'skipped', 'failed', 'stopped', 'fixed'])
+
+/** Whether the reviewer may ask, in the finding's discussion, for a change to the code. */
+export const changeable = (state: State, finding?: Pick<Finding, 'thread'>) =>
+  !!finding?.thread && CHANGE_FROM.has(state)
 
 /** Whether a post may leave `state`, the review aside. */
 export const postsFrom = (state: State) => POST_FROM.has(state)

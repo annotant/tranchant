@@ -16,7 +16,8 @@
 // note: the hooks module's steps (what the agent says), as JSON lines on stdin.
 // ended: the hooks module, once the agent's turn ended: a finding it left
 //      working, neither done nor asked about, fails, so the reviewer can
-//      send it again. Prints `AGENT_ENDED <id>` when it did.
+//      send it again, and a change asked in its discussion gets its result
+//      there. Prints `AGENT_ENDED <id>` when it failed.
 //
 // `--reviewer`: a review agent's (the summary agent, `sm-summary`, a lens's
 // reviewer, `rv-<lens>`, a finding's verifier, `vf-<id>`, or the agent
@@ -30,6 +31,7 @@
 import { realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { syncChange } from './lib/discussion.mjs'
 import { withFileLock } from './lib/filelock.mjs'
 import { currentRun, parseDecisions } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
@@ -734,6 +736,10 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
     /** Whether the finding, left working by the agent, failed. */
     async ended() {
       const failed = await createStore(review).abandon(finding, agent)
+      // A change asked in the discussion gets its result there, failed or not.
+      await syncChange(review, finding).catch((error) =>
+        log(`the discussion is left waiting: ${String(error)}`),
+      )
       if (!failed) return false
       const released = await releaseAll()
       await log(

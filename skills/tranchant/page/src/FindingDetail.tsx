@@ -8,6 +8,7 @@ import {
   draftReply,
   BUCKET_LABELS,
   type DecisionInput,
+  changeable,
   discussable,
   type Discussion as Thread,
   draftIssue,
@@ -53,8 +54,8 @@ interface Props {
   onDecide: (decisions: DecisionInput[]) => void
   onAnswer: (id: string, text: string, choices: string[]) => void
   onStop: (id: string) => void
-  /** Resolves to whether the server took the message. */
-  onDiscuss: (id: string, text: string) => Promise<boolean>
+  /** Resolves to whether the server took the message; `change`: a change to the code it asks for. */
+  onDiscuss: (id: string, text: string, change?: boolean) => Promise<boolean>
 }
 
 type Mode = 'idle' | 'editing' | 'dropping' | 'issuing'
@@ -168,10 +169,13 @@ function CopyAnchor({ text }: { text: string }) {
 function AskForm({
   record,
   disabled,
+  bare = false,
   onAnswer,
 }: {
   record: FindingRecord
   disabled: boolean
+  /** Under the question in the discussion: the question is not said again. */
+  bare?: boolean
   onAnswer: (text: string, choices: string[]) => void
 }) {
   const question = record.question
@@ -200,7 +204,7 @@ function AskForm({
 
   return (
     <form className="tr-ask" onSubmit={submit} aria-label="Answer the agent">
-      <p className="tr-ask-text">{question.text}</p>
+      {!bare && <p className="tr-ask-text">{question.text}</p>}
       {options.length > 0 && (
         <ul className="tr-options" role={multiple ? 'group' : 'radiogroup'}>
           {options.map((option) => (
@@ -296,6 +300,12 @@ export function FindingDetail({
   const thread = finding.thread
   const tag = tagOf(finding)
   const writable = discussable(state, finding)
+  // A change asked in the discussion: its run, its question and its result show there.
+  const changing =
+    !!record?.decision?.change && ['queued', 'working', 'asking'].includes(state)
+  // Its question shows in the thread once it landed there; until then, in the outcome.
+  const askedInThread =
+    changing && state === 'asking' && discussion?.messages.at(-1)?.outcome === 'asking'
   const hasThread = !!discussion?.messages.length
   const threadShown = folded === undefined ? hasThread : !folded
   const answer = discussion?.messages.findLast((one) => one.by === 'agent')
@@ -324,9 +334,13 @@ export function FindingDetail({
     ? undefined
     : posting
       ? 'The comment is on its way: the thread reads as it stands.'
-      : ['queued', 'working', 'asking'].includes(state)
-        ? 'An agent is on the finding: the thread reads as it stands.'
-        : 'The finding is settled: the thread reads as it stands.'
+      : changing
+        ? state === 'asking'
+          ? 'Answer the question above: the change goes on with it.'
+          : 'An agent is making the change: Stop ends it.'
+        : ['queued', 'working', 'asking'].includes(state)
+          ? 'An agent is on the finding: the thread reads as it stands.'
+          : 'The finding is settled: the thread reads as it stands.'
   const lastRun = record?.runs.at(-1)
 
   const decide = (input: Omit<DecisionInput, 'id'>) => {
@@ -538,7 +552,7 @@ export function FindingDetail({
               : '.'}
           </p>
         )}
-        {state === 'asking' && record && (
+        {state === 'asking' && record && !askedInThread && (
           <AskForm
             key={record.question?.at}
             record={record}
@@ -829,6 +843,7 @@ export function FindingDetail({
 
       {threadShown && (
         <Discussion
+          id={finding.id}
           discussion={discussion}
           writable={writable}
           closed={closed}
@@ -839,7 +854,26 @@ export function FindingDetail({
           canDrop={can('drop')}
           replyOn={reply}
           replyAside={reply && repliesAside(record)}
-          onSend={(text) => onDiscuss(finding.id, text)}
+          canChange={!disabled && changeable(state, finding)}
+          steps={steps}
+          underway={changing && state !== 'asking'}
+          canStop={can('stop')}
+          asking={
+            askedInThread &&
+            record && (
+              <AskForm
+                key={record.question?.at}
+                record={record}
+                disabled={disabled}
+                bare
+                onAnswer={(text, choices) => onAnswer(finding.id, text, choices)}
+              />
+            )
+          }
+          onSend={(text, asksChange) =>
+            asksChange ? onDiscuss(finding.id, text, true) : onDiscuss(finding.id, text)
+          }
+          onStop={() => onStop(finding.id)}
           onFix={(proposed) => decide({ action: 'fix', context: proposed })}
           onPost={(proposed) =>
             reply ? replyWith(proposed) : decide({ action: 'post', comment: proposed })

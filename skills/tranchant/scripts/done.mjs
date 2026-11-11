@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // done.mjs <id> --review <dir> "<summary>"   (or the summary on stdin)
 // Moves the finding from working to fixed: the working tree holds the fix.
-// The run records the summary and the files its steps wrote. Prints `done`.
+// The run records the summary and the files its steps wrote, and a change
+// asked in the finding's discussion gets the summary there. Prints `done`.
 import { parseArgs } from 'node:util'
-import { textOrStdin } from './lib/cli.mjs'
+import { closeDiscussion, textOrStdin } from './lib/cli.mjs'
 import { findReview } from './lib/project.mjs'
 import { StoreRefusal, createStore } from './lib/store.mjs'
 
@@ -26,6 +27,7 @@ if (!id || !dir || !summary) {
 
 try {
   await createStore(dir).done(id, summary)
+  await closeDiscussion(dir, id)
   console.log('done')
 } catch (error) {
   if (!(error instanceof StoreRefusal)) throw error
