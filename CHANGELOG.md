@@ -7,6 +7,14 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Fixed
+
+- **An agent's proposed reply is offered once.** On a thread, **Reply with
+  this** stayed under the discussion once the reply was sent, one click
+  from posting it twice. It now hides while the editor holds it, and once a
+  reply from it is on its way or posted, even edited, it turns into a note,
+  like Fix and Drop. A failed reply, or a later answer, offers it again.
+
 ## 0.4.0 - 2026-11-10
 
 ### Added
