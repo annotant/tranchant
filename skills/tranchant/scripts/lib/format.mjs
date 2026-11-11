@@ -46,9 +46,9 @@ export const STATES = [
 
 /**
  * The moves of a finding: a reviewer's decision (`fix`, `post`, `issue`,
- * `drop`, `skip`, `answer`, `stop`), an agent's (`claim`, `done`, `ask`) or
- * the server's (`posted`, `moved`, `fail`).
- * @typedef {'fix' | 'post' | 'issue' | 'drop' | 'skip' | 'answer' | 'stop' | 'claim' | 'done' | 'ask' | 'posted' | 'moved' | 'fail'} Move
+ * `drop`, `skip`, `answer`, `stop`, or `change`, asked in its discussion), an
+ * agent's (`claim`, `done`, `ask`) or the server's (`posted`, `moved`, `fail`).
+ * @typedef {'fix' | 'post' | 'issue' | 'drop' | 'skip' | 'answer' | 'stop' | 'change' | 'claim' | 'done' | 'ask' | 'posted' | 'moved' | 'fail'} Move
  */
 
 /** The states a reviewer may still drop or skip from: nothing has landed yet. */
@@ -63,8 +63,8 @@ const UNDECIDED = /** @type {readonly State[]} */ ([
 /**
  * Each move, the states it leaves and the one it reaches. A `fixed`,
  * `posted` or `moved` finding is final: no move leaves it (a reply on its
- * thread is no move: see `Reply`). A question is answered with `answer`,
- * never with another `fix`.
+ * thread is no move: see `Reply`), but a `change` its thread's discussion
+ * asks for. A question is answered with `answer`, never with another `fix`.
  * @type {Readonly<Record<Move, { from: readonly State[], to: State }>>}
  */
 export const MOVES = {
@@ -75,6 +75,7 @@ export const MOVES = {
   skip: { from: [...UNDECIDED, 'dropped'], to: 'skipped' },
   answer: { from: ['asking'], to: 'queued' },
   stop: { from: ['queued', 'working'], to: 'stopped' },
+  change: { from: ['open', 'skipped', 'failed', 'stopped', 'fixed'], to: 'queued' },
   claim: { from: ['queued'], to: 'working' },
   done: { from: ['working'], to: 'fixed' },
   ask: { from: ['working'], to: 'asking' },
@@ -256,6 +257,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} [context] `fix`: the reviewer's constraint or choice.
  * @property {boolean} [resolve] `post` on a thread: resolve it once replied.
  * @property {string} [proposal] `post` on a thread: the `at` of the agent's message whose proposed reply it started from.
+ * @property {string} [change] `fix` asked in the thread's discussion: the `at` of the reviewer's message that asked.
  * @property {string} at
  */
 

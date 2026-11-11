@@ -515,6 +515,10 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-msg--you { align-items: flex-end; padding-left: 48px; }
 .tr-msg--agent { align-items: stretch; }
 .tr-msg-who { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tr-muted); }
+.tr-msg-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--tr-muted); }
+.tr-msg-change { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.tr-msg-change > .tr-fix-changes { align-self: stretch; }
+.tr-msg--agent > .tr-btn { align-self: flex-start; }
 /* Long words, URLs and code break inside the bubble rather than spilling out of it. */
 .tr-bubble { max-width: 100%; padding: 8px 14px; border-radius: 14px; overflow-wrap: anywhere; }
 .tr-bubble--you { background: var(--tr-accent); color: var(--tr-on-accent); border-bottom-right-radius: 4px; white-space: pre-wrap; }
@@ -550,6 +554,7 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-composer textarea { flex: 1; min-width: 0; min-height: 36px; max-height: 160px; padding: 7px 0; border: 0; outline: none; resize: none; overflow-y: auto; background: transparent; font: inherit; font-size: 15px; line-height: 1.45; color: var(--tr-text); }
 .tr-composer textarea::placeholder { color: var(--tr-muted); }
 .tr-send { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: var(--tr-accent); color: var(--tr-on-accent); cursor: pointer; }
+.tr-change { flex-shrink: 0; height: 36px; }
 .tr-send:disabled { background: var(--tr-accent-weak); color: var(--tr-muted); cursor: default; }
 .tr-composer-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; font-size: 12px; color: var(--tr-muted); }
 .tr-composer-foot kbd { font: inherit; font-weight: 600; color: var(--tr-text); }

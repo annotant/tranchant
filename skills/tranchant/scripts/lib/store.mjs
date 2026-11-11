@@ -819,6 +819,32 @@ export function createStore(dir) {
     },
 
     /**
+     * The reviewer asks, in the discussion of a finding from a PR/MR thread,
+     * for a change to the code: a fix whose agent reads that discussion, its
+     * request the `context`. Again once `fixed`, for a follow-up change.
+     * @param {string} id
+     * @param {{ text: string, message: string }} request `message`: the `at` of the reviewer's message that asks.
+     * @returns {Promise<Entry>}
+     */
+    change(id, { text, message }) {
+      return changeOne(id, (entry, finding) => {
+        if (!repliesOn(finding))
+          throw new StoreRefusal(`change refused: finding ${id} has no PR/MR thread`)
+        const request = text.trim().slice(0, MAX_TEXT)
+        if (!request) throw new StoreRefusal('change refused: the request is empty')
+        // A stop's leftovers were finished by the run that fixed it: the next agent must not revert them.
+        if (entry.state === 'fixed') delete entry.cancellation
+        const at = apply(id, entry, 'change', { by: 'reviewer' })
+        entry.decision = { action: 'fix', context: request, change: message, at }
+        delete entry.reason
+        // A question an earlier run asked is not this change's.
+        delete entry.question
+        delete entry.answer
+        return entry
+      })
+    },
+
+    /**
      * The reviewer stops the finding: its agent ends, and `cancellation`
      * lists what the run left changed.
      * @param {string} id

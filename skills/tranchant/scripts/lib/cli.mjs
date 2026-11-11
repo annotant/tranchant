@@ -1,5 +1,7 @@
-// What the agents' scripts share: the text on stdin, and a question's arguments.
+// What the agents' scripts share: the text on stdin, a question's arguments,
+// and the discussion a run's end answers.
 import { parseArgs } from 'node:util'
+import { syncChange } from './discussion.mjs'
 import { MAX_OPTIONS } from './store.mjs'
 
 const MAX_LABEL = 80
@@ -9,6 +11,24 @@ async function readStdin() {
   let text = ''
   for await (const chunk of process.stdin) text += chunk
   return text
+}
+
+/**
+ * The run of a change asked in finding `id`'s discussion ended: its result
+ * lands there. A failure is said on stderr, never the script's: the run's
+ * end is recorded, and the next sync (the hooks', the server's, the next
+ * message's) lands it.
+ * @param {string} dir
+ * @param {string} id
+ */
+export async function closeDiscussion(dir, id) {
+  try {
+    await syncChange(dir, id)
+  } catch (error) {
+    console.error(
+      `the discussion of ${id} is left waiting: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 }
 
 /**

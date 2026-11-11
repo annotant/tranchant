@@ -26,7 +26,7 @@ import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
-import { isWaiting, readDiscussions, say } from './lib/discussion.mjs'
+import { readDiscussions, say, syncChange, waitsForAnswer } from './lib/discussion.mjs'
 import {
   DEFAULTS,
   SETTINGS_DIR,
@@ -150,6 +150,8 @@ async function readJson(req) {
 }
 
 const ID = /^[\w-]{1,64}$/
+const RUN_ID = /^r\d{1,6}$/
+const MAX_RUNS = 50
 const MAX_TEXT = 4000
 const MAX_DECISIONS = 500
 const ACTIONS = new Set(['fix', 'post', 'issue', 'drop', 'skip'])
@@ -619,19 +621,27 @@ function writtenPath(step) {
 }
 
 /**
- * By path, the last time finding `id`'s run that fixed it (else its last run
- * that ended) wrote it.
+ * By path, the last time finding `id`'s runs `wanted` that ended (with none
+ * named, its run that fixed it, else its last run that ended) wrote it.
  * @param {string} id
+ * @param {string[]} [wanted]
  */
-async function writtenBy(id) {
+async function writtenBy(id, wanted = []) {
   const { findings } = await store.readDecisions()
   const runs = findings[id]?.runs ?? []
-  const run =
+  const fallback =
     runs.findLast((one) => one.outcome === 'fixed') ?? runs.findLast((one) => one.endedAt)
+  const chosen = wanted.length
+    ? new Set(
+        runs.filter((one) => one.endedAt && wanted.includes(one.id)).map((one) => one.id),
+      )
+    : new Set(fallback ? [fallback.id] : [])
+  // Runs named that are not there, or still running, wrote nothing yet.
+  if (wanted.length && !chosen.size) return new Map()
   /** @type {Map<string, number>} */
   const last = new Map()
   for (const step of await readProgress(dir, id, undefined, { history: true })) {
-    if (run && step.run && step.run !== run.id) continue
+    if (chosen.size && step.run && !chosen.has(step.run)) continue
     const file = writtenPath(step)
     if (file) last.set(file, Math.max(last.get(file) ?? 0, step.at ?? 0))
   }
@@ -640,11 +650,13 @@ async function writtenBy(id) {
 
 /**
  * By path of `last`, the other findings whose runs, ended or in progress,
- * wrote it after `last` says this one did.
+ * wrote it after `last` says this one did; with `runs`, this finding's other
+ * runs too.
  * @param {string} id
  * @param {Map<string, number>} last
+ * @param {string[]} [runs]
  */
-async function writtenSince(id, last) {
+async function writtenSince(id, last, runs = []) {
   /** @type {Map<string, Set<string>>} */
   const since = new Map([...last.keys()].map((file) => [file, new Set()]))
   /** @type {string[]} */
@@ -661,6 +673,25 @@ async function writtenSince(id, last) {
       return other && other !== id ? [other] : []
     }),
   )
+  // Runs named: this finding's later runs show in the diff too, as `<id> (<run>)`.
+  if (runs.length) {
+    const mine = [
+      ...(await readProgress(dir, id)),
+      ...(await readProgress(dir, id, undefined, { history: true })),
+    ]
+    for (const step of mine) {
+      const file = writtenPath(step)
+      const at = file === undefined ? undefined : last.get(file)
+      if (
+        file &&
+        at !== undefined &&
+        step.run &&
+        !runs.includes(step.run) &&
+        (step.at ?? 0) > at
+      )
+        since.get(file)?.add(`${id} (${step.run})`)
+    }
+  }
   for (const other of others) {
     const steps = [
       ...(await readProgress(dir, other)),
@@ -789,15 +820,17 @@ async function newFileDiff(args, file) {
 }
 
 /**
- * What `GET /api/changes/<id>` answers: the files finding `id`'s fix wrote
- * and their diff against HEAD as the working tree has them now.
+ * What `GET /api/changes/<id>` answers: the files finding `id`'s fix (its
+ * runs `runs` when named: one change its discussion asked for) wrote and
+ * their diff against HEAD as the working tree has them now.
  * @param {string} id
+ * @param {string[]} [runs]
  * @returns {Promise<{ files: ChangedFile[], diff: string }>}
  */
-async function changesOf(id) {
-  const last = await writtenBy(id)
+async function changesOf(id, runs) {
+  const last = await writtenBy(id, runs)
   if (!last.size) return { files: [], diff: '' }
-  const since = await writtenSince(id, last)
+  const since = await writtenSince(id, last, runs)
   const paths = [...last.keys()]
   return {
     files: paths.map((file) => ({
@@ -881,7 +914,7 @@ async function handle(req, res) {
       discussions: Object.fromEntries(
         Object.entries(discussions).map(([id, discussion]) => {
           // While it answers: its agent's last step, the page's progress line.
-          const steps = isWaiting(discussion)
+          const steps = waitsForAnswer(discussion)
             ? agents.find((agent) => agent.name === `ds-${id}`)?.steps
             : undefined
           // The file holds every agent the thread had: an end is a past one's.
@@ -974,8 +1007,11 @@ async function handle(req, res) {
   if (req.method === 'GET' && changed !== undefined) {
     const known = (await store.readReview()).findings.some((one) => one.id === changed)
     if (!ID.test(changed) || !known) return send(res, 404, { error: 'not found' })
+    const ofRuns = url.searchParams.getAll('run')
+    if (ofRuns.length > MAX_RUNS || ofRuns.some((one) => !RUN_ID.test(one)))
+      return send(res, 400, { error: `run is a run id (r1, r2…), ${MAX_RUNS} at most` })
     try {
-      return send(res, 200, await changesOf(changed))
+      return send(res, 200, await changesOf(changed, ofRuns))
     } catch (error) {
       if (!(error instanceof DiffUnavailable)) throw error
       console.error(`tranchant server: /api/changes/${changed}: ${error.message}`)
@@ -1006,6 +1042,8 @@ async function handle(req, res) {
         continue
       }
       applied.push(decision.id)
+      // A change dropped, skipped or replaced: the discussion says so.
+      await settleDiscussion(decision.id)
       decided(decision.id, decision.action)
     }
     return send(res, 200, { applied, refused })
@@ -1020,6 +1058,7 @@ async function handle(req, res) {
       ? input.choices.filter((choice) => typeof choice === 'string')
       : []
     const entry = await store.answer(input.id, { text: text(input.text), choices })
+    await settleDiscussion(input.id)
     print(`FIX ${input.id}`)
     return send(res, 200, { finding: entry })
   }
@@ -1029,8 +1068,10 @@ async function handle(req, res) {
     if (typeof input?.id !== 'string' || !ID.test(input.id)) {
       return send(res, 400, { error: 'id is required' })
     }
-    const discussion = await say(dir, input.id, text(input.text) ?? '')
-    print(`DISCUSS ${input.id}`)
+    // A change asked for is a fix: an agent that writes, never the discussing one.
+    const change = input.change === true
+    const discussion = await say(dir, input.id, text(input.text) ?? '', { change })
+    print(`${change ? 'FIX' : 'DISCUSS'} ${input.id}`)
     return send(res, 200, { discussion })
   }
 
@@ -1040,6 +1081,7 @@ async function handle(req, res) {
       return send(res, 400, { error: 'id is required' })
     }
     const entry = await store.stop(input.id)
+    await settleDiscussion(input.id)
     print(`STOP ${input.id}`)
     return send(res, 200, { finding: entry })
   }
@@ -1080,6 +1122,21 @@ function writeSettingsInTurn(res, input) {
   })
   settingsWriting = turn.catch(() => undefined)
   return turn
+}
+
+/**
+ * Brings finding `id`'s discussion in line with its decision once the store
+ * moved it: a failure is the server's to say, never the move's, which stands.
+ * @param {string} id
+ */
+async function settleDiscussion(id) {
+  try {
+    await syncChange(dir, id)
+  } catch (error) {
+    console.error(
+      `tranchant server: the discussion of ${id} is left as it is: ${oneLine(String(error))}`,
+    )
+  }
 }
 
 /**
@@ -1531,7 +1588,9 @@ async function resumeQueued() {
     return {}
   })
   for (const [id, discussion] of Object.entries(discussions)) {
-    if (isWaiting(discussion)) print(`DISCUSS ${id}`)
+    if (waitsForAnswer(discussion)) print(`DISCUSS ${id}`)
+    // What a change left while no server ran, or a script failed to write.
+    else await settleDiscussion(id)
   }
 }
 

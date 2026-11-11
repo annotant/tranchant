@@ -1,12 +1,21 @@
 import { type FormEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { activityOf } from './activity'
-import { type Discussion as Thread, isWaiting, type Message } from './domain'
+import {
+  type Discussion as Thread,
+  isWaiting,
+  type Message,
+  type Step,
+  waitsForChange,
+} from './domain'
+import { FixChanges } from './FixChanges'
 import { Markdown } from './markdown'
 
 /** What the reviewer did with the agent's last proposal, said under it once taken. */
 export type Taken = 'fix' | 'drop' | 'reply'
 
 interface Props {
+  /** The finding's: what its changes are read by. */
+  id: string
   discussion: Thread | undefined
   /** The reviewer may write, and carry a proposal over: else the thread reads as it stands. */
   writable: boolean
@@ -21,8 +30,19 @@ interface Props {
   replyOn?: boolean
   /** Read as it stands while its fix runs, the thread still takes the agent's reply. */
   replyAside?: boolean
+  /** The reviewer may ask for a change to the code: an agent makes it in the working tree. */
+  canChange?: boolean
+  /** The steps of the run making the change asked for, the last one shown live. */
+  steps?: readonly Step[]
+  /** A change asked for is under way: queued or its agent at work. */
+  underway?: boolean
+  /** The change under way may be stopped. */
+  canStop?: boolean
+  /** The form answering the question the change's agent asked, shown under it. */
+  asking?: ReactNode
   /** Resolves to whether the server took the message: the draft stays until it does. */
-  onSend: (text: string) => Promise<boolean>
+  onSend: (text: string, change?: boolean) => Promise<boolean>
+  onStop?: () => void
   onFix: (context: string) => void
   onPost: (comment: string) => void
   onDrop: (reason: string) => void
@@ -64,6 +84,12 @@ function Icon({ children, size = 16 }: { children: ReactNode; size?: number }) {
 }
 
 const BUBBLE = <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" />
+const WRENCH = (
+  <>
+    <path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3.4-3.4 8-8-1.3-1.3a4 4 0 0 0-5-5Z" />
+    <path d="m3 21 6.6-6.6" />
+  </>
+)
 
 /** The comment the agent proposes, rewritten in place before it is posted. */
 function CommentEditor({
@@ -171,12 +197,7 @@ function Proposals({
     <div className="tr-proposals" aria-label="What the agent proposes">
       {fix && canFix && (
         <Proposal
-          icon={
-            <>
-              <path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3.4-3.4 8-8-1.3-1.3a4 4 0 0 0-5-5Z" />
-              <path d="m3 21 6.6-6.6" />
-            </>
-          }
+          icon={WRENCH}
           label="Fix"
           action={
             <button
@@ -268,16 +289,23 @@ function Composer({
   value,
   placeholder,
   waiting,
+  changing,
   blocked,
+  canChange,
   onChange,
   onSubmit,
+  onChangeSubmit,
 }: {
   value: string
   placeholder: string
   waiting: boolean
+  /** What waits is a change, not an answer. */
+  changing: boolean
   blocked: boolean
+  canChange: boolean
   onChange: (value: string) => void
   onSubmit: () => void
+  onChangeSubmit: () => void
 }) {
   const box = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
@@ -309,6 +337,19 @@ function Composer({
             event.currentTarget.form?.requestSubmit()
           }}
         />
+        {canChange && (
+          // Never Enter's: a change writes in the working tree, only ever asked for on purpose.
+          <button
+            type="button"
+            className="tr-btn tr-btn--small tr-change"
+            title="An agent makes this change in the working tree"
+            disabled={blocked}
+            onClick={onChangeSubmit}
+          >
+            <Icon size={14}>{WRENCH}</Icon>
+            Change
+          </button>
+        )}
         <button
           type="submit"
           className="tr-send"
@@ -324,8 +365,12 @@ function Composer({
       <div className="tr-composer-foot">
         <span>
           {waiting
-            ? 'One question at a time: the next waits for this answer.'
-            : 'The agent reads the code, never changes it.'}
+            ? changing
+              ? 'The agent makes the change: the next message waits for it.'
+              : 'One question at a time: the next waits for this answer.'
+            : canChange
+              ? 'Send asks a read-only agent; Change has an agent make it.'
+              : 'The agent reads the code, never changes it.'}
         </span>
         <span>
           <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> new line
@@ -335,21 +380,46 @@ function Composer({
   )
 }
 
-/** A finding's discussion with an agent: the reviewer asks, a read-only agent answers. */
+/**
+ * A finding's discussion: the reviewer asks, a read-only agent answers; on a
+ * thread, a change they ask for is made by a fix's agent, its result here.
+ */
 export function Discussion(props: Props) {
-  const { discussion, writable, closed, taken, disabled, replyOn, replyAside, onSend } =
-    props
+  const {
+    discussion,
+    writable,
+    closed,
+    taken,
+    disabled,
+    replyOn,
+    replyAside,
+    canChange = false,
+    steps = [],
+    underway = false,
+    canStop = false,
+    asking,
+    onSend,
+    onStop,
+  } = props
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const messages = discussion?.messages ?? []
-  const waiting = isWaiting(discussion)
+  // A change whose result did not land is no wait: the next message lands it first.
+  const changing = waitsForChange(discussion) && underway
+  const waiting = isWaiting(discussion) && (changing || !waitsForChange(discussion))
   const last = messages.at(-1)
   const lastQuestion = messages.findLast((message) => message.by === 'reviewer')
+  // Asked again, a change is its request, never the answer to its agent's question.
+  const lastRequest = messages.findLast(
+    (message, i) => message.change && messages[i - 1]?.outcome !== 'asking',
+  )
+  const step = changing ? steps.at(-1) : discussion?.step
 
-  async function send(text: string) {
+  async function send(text: string, change = false) {
     if (!writable || disabled || waiting || sending || !text.trim()) return
+    if (change && !canChange) return
     setSending(true)
-    const sent = await onSend(text.trim())
+    const sent = await onSend(text.trim(), change)
     setSending(false)
     if (sent) setDraft('')
   }
@@ -358,7 +428,11 @@ export function Discussion(props: Props) {
     <section className="tr-dsc" aria-label="Discussion">
       <div className="tr-dsc-head">
         <h3>Discussion</h3>
-        <span className="tr-dsc-note">Read-only agent · decides nothing</span>
+        <span className="tr-dsc-note">
+          {canChange || changing
+            ? 'Questions: read-only agent · Change: makes it'
+            : 'Read-only agent · decides nothing'}
+        </span>
       </div>
 
       {messages.length === 0 && writable && (
@@ -374,7 +448,9 @@ export function Discussion(props: Props) {
           </p>
           <p className="tr-muted">
             {replyOn
-              ? 'Ask an agent. It reads the comment and the code, never changes them; nothing is posted until you reply.'
+              ? canChange
+                ? 'Ask an agent: it reads the comment and the code, never changes them. Ask for a change with Change: an agent makes it in the working tree. Nothing is posted until you reply.'
+                : 'Ask an agent. It reads the comment and the code, never changes them; nothing is posted until you reply.'
               : 'Ask an agent. It reads the code and never changes it; the finding stays as it is until you decide.'}
           </p>
           <div className="tr-suggest">
@@ -398,6 +474,14 @@ export function Discussion(props: Props) {
                 <>
                   <span className="tr-sr">You</span>
                   <div className="tr-bubble tr-bubble--you">{message.text}</div>
+                  {message.change && (
+                    <span className="tr-msg-tag">
+                      <Icon size={12}>{WRENCH}</Icon>
+                      {messages[messages.indexOf(message) - 1]?.outcome === 'asking'
+                        ? 'Your answer'
+                        : 'Change asked'}
+                    </span>
+                  )}
                 </>
               ) : (
                 <>
@@ -410,18 +494,34 @@ export function Discussion(props: Props) {
                       </Icon>
                       <div className="tr-unanswered-body">
                         <span>{message.text}</span>
-                        {writable && message === last && lastQuestion && (
-                          <div>
-                            <button
-                              type="button"
-                              className="tr-btn tr-btn--small"
-                              disabled={disabled || sending}
-                              onClick={() => void send(lastQuestion.text)}
-                            >
-                              Ask again
-                            </button>
-                          </div>
-                        )}
+                        {writable &&
+                          message === last &&
+                          (message.outcome
+                            ? lastRequest &&
+                              canChange && (
+                                <div>
+                                  <button
+                                    type="button"
+                                    className="tr-btn tr-btn--small"
+                                    disabled={disabled || sending}
+                                    onClick={() => void send(lastRequest.text, true)}
+                                  >
+                                    Try again
+                                  </button>
+                                </div>
+                              )
+                            : lastQuestion && (
+                                <div>
+                                  <button
+                                    type="button"
+                                    className="tr-btn tr-btn--small"
+                                    disabled={disabled || sending}
+                                    onClick={() => void send(lastQuestion.text)}
+                                  >
+                                    Ask again
+                                  </button>
+                                </div>
+                              ))}
                       </div>
                     </div>
                   ) : (
@@ -429,6 +529,24 @@ export function Discussion(props: Props) {
                       <Markdown source={message.text} headings={false} />
                     </div>
                   )}
+                  {message.outcome === 'fixed' && (
+                    <div className="tr-msg-change">
+                      <span className="tr-msg-tag">
+                        <Icon size={12}>
+                          <path d="M20 6 9 17l-5-5" />
+                        </Icon>
+                        Changed in the working tree
+                      </span>
+                      {message.runs && message.runs.length > 0 && (
+                        <FixChanges
+                          id={props.id}
+                          runs={message.runs}
+                          disabled={disabled}
+                        />
+                      )}
+                    </div>
+                  )}
+                  {message === last && message.outcome === 'asking' && asking}
                   {writable && message === last && !message.failed && (
                     <Proposals message={message} {...props} />
                   )}
@@ -464,12 +582,18 @@ export function Discussion(props: Props) {
                     <path d="M14 3v5h5" />
                   </Icon>
                 </span>
-                <span>
-                  {discussion?.step
-                    ? activityOf(discussion.step)
-                    : 'An agent is starting…'}
-                </span>
+                <span>{step ? activityOf(step) : 'An agent is starting…'}</span>
               </div>
+              {changing && canStop && onStop && (
+                <button
+                  type="button"
+                  className="tr-btn tr-btn--small"
+                  disabled={disabled}
+                  onClick={onStop}
+                >
+                  Stop
+                </button>
+              )}
             </li>
           )}
         </ol>
@@ -480,15 +604,22 @@ export function Discussion(props: Props) {
           value={draft}
           placeholder={
             waiting
-              ? 'The agent is answering…'
+              ? changing
+                ? 'The agent is making the change…'
+                : 'The agent is answering…'
               : messages.length
-                ? 'Ask a follow-up…'
+                ? canChange
+                  ? 'Ask a follow-up, or for a change…'
+                  : 'Ask a follow-up…'
                 : 'Ask about this finding…'
           }
           waiting={waiting}
+          changing={changing}
           blocked={disabled || waiting || sending || !draft.trim()}
+          canChange={canChange}
           onChange={setDraft}
           onSubmit={() => void send(draft)}
+          onChangeSubmit={() => void send(draft, true)}
         />
       ) : (
         <div className="tr-dsc-closed">

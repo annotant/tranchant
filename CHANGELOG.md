@@ -7,6 +7,16 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Ask for a change from a comment's discussion.** On a finding from
+  `/tranchant comments`, **Change** sends your message ("go ahead", "also
+  cover the empty case") to an agent that makes the change in the working
+  tree, with the whole discussion in hand, under a fix's rules (file locks,
+  **Stop**). Its current step, its questions and what it changed (**View
+  changes**) show in the discussion; ask again for the next change, even
+  once the finding is fixed. Questions still go to the read-only agent.
+
 ### Fixed
 
 - **An agent's proposed reply is offered once.** On a thread, **Reply with
