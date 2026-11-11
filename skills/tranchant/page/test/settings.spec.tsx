@@ -377,6 +377,7 @@ test('the recipe in force says where it comes from, and each lens its source and
   )
   const recipe = row('Recipe in force')
   expect(recipe.getByText(/the project's \.tranchant\/recipe\.json/)).toBeTruthy()
+  expect(recipe.getByText('Preview').title).toMatch(/Being tested/)
   const lenses = within(recipe.getByRole('list')).getAllByRole('listitem')
   expect(lenses.map((one) => one.textContent)).toEqual([
     'abacworkflow:code-reviewer-abacready',
@@ -420,6 +421,7 @@ test('an imported recipe shows its lenses and what it left out before Use this r
       onUseRecipe={onUseRecipe}
     />,
   )
+  expect(screen.getByRole('heading', { name: 'Imported recipes Preview' })).toBeTruthy()
   const imported = screen.getByRole('listitem', {
     name: 'Recipe imported from workflow:code-review',
   })

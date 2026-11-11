@@ -189,6 +189,7 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-chip--ours { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--theirs { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--warn { background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-preview { height: 18px; margin-left: 6px; vertical-align: middle; text-transform: none; letter-spacing: normal; cursor: help; }
 .tr-chip--live { background: var(--tr-accent-weak); color: var(--tr-accent); gap: 6px; }
 .tr-chip--live .tr-spinner { width: 8px; height: 8px; border-width: 1.5px; }
 .tr-unverified { opacity: 0.55; }

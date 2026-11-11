@@ -13,7 +13,8 @@ released to the `stable` branch.
   reads a skill and the agents it starts, an agent or a file, and writes a
   recipe that references them, in the project (`.tranchant/recipe.json`,
   shared) or for you alone; the page's Settings show it, with what could not
-  become a lens, before **Use this recipe** puts it in force.
+  become a lens, before **Use this recipe** puts it in force. A preview:
+  marked as such in the Settings, it may change before it is stable.
 - **Lenses rebuilt at every review.** `/tranchant review` builds each lens
   from its source (a plugin's skill or agent, a path, or one of Tranchant's,
   with an add-on), wrapped in a shared contract, before any reviewer starts:

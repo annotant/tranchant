@@ -30,6 +30,18 @@ interface Props {
 
 const IGNORE = () => undefined
 
+/** Marks a part of the settings still being tested: it may change before it is stable. */
+function Preview() {
+  return (
+    <span
+      className="tr-chip tr-chip--warn tr-preview"
+      title="Being tested: how it works, and the recipe's format, may change before it is stable."
+    >
+      Preview
+    </span>
+  )
+}
+
 const FROM_WORDS: Record<RecipeFrom, string> = {
   run: 'this run',
   local: 'your local recipe, outside the repository',
@@ -45,7 +57,7 @@ function RecipeInForce({ settings }: { settings: SettingsPayload }) {
     <div className="tr-setting">
       <div>
         <div className="tr-setting-label" id="tr-setting-in-force">
-          Recipe in force
+          <span>Recipe in force</span> <Preview />
         </div>
         <p className="tr-setting-help">
           From {FROM_WORDS[settings.recipeFrom ?? 'plugin']}:{' '}
@@ -528,7 +540,9 @@ export function SettingsView({
       </section>
       {(settings.imports ?? []).length > 0 && (
         <section className="tr-section" aria-labelledby="tr-settings-imports">
-          <h3 id="tr-settings-imports">Imported recipes</h3>
+          <h3 id="tr-settings-imports">
+            Imported recipes <Preview />
+          </h3>
           <p className="tr-muted">
             /tranchant import wrote these from a review process; none is used until you
             say so.
