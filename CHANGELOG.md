@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.5.1 - 2026-11-11
+
 ### Fixed
 
 - **Fix after commenting.** Once a comment was posted on the MR, or a
