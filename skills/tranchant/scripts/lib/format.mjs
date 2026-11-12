@@ -71,21 +71,28 @@ const UNDECIDED = /** @type {readonly State[]} */ ([
 ])
 
 /**
- * Each move, the states it leaves and the one it reaches. A `fixed`,
- * `posted` or `moved` finding is final: no move leaves it (a reply on its
- * thread is no move: see `Reply`), but a `change` its thread's discussion
- * asks for. A question is answered with `answer`, never with another `fix`.
+ * Each move, the states it leaves and the one it reaches. A `fixed` or
+ * `moved` finding is final: no move leaves it (a reply on its thread is no
+ * move: see `Reply`), but a `change` its thread's discussion asks for. A
+ * `posted` one may still be fixed: commenting never rules out the change.
+ * A question is answered with `answer`, never with another `fix`.
  * @type {Readonly<Record<Move, { from: readonly State[], to: State }>>}
  */
 export const MOVES = {
-  fix: { from: ['open', 'dropped', 'skipped', 'failed', 'stopped'], to: 'queued' },
+  fix: {
+    from: ['open', 'posted', 'dropped', 'skipped', 'failed', 'stopped'],
+    to: 'queued',
+  },
   post: { from: ['open', 'dropped', 'skipped', 'failed'], to: 'queued' },
   issue: { from: ['open', 'dropped', 'skipped', 'failed'], to: 'queued' },
   drop: { from: [...UNDECIDED, 'skipped'], to: 'dropped' },
   skip: { from: [...UNDECIDED, 'dropped'], to: 'skipped' },
   answer: { from: ['asking'], to: 'queued' },
   stop: { from: ['queued', 'working'], to: 'stopped' },
-  change: { from: ['open', 'skipped', 'failed', 'stopped', 'fixed'], to: 'queued' },
+  change: {
+    from: ['open', 'posted', 'skipped', 'failed', 'stopped', 'fixed'],
+    to: 'queued',
+  },
   claim: { from: ['queued'], to: 'working' },
   done: { from: ['working'], to: 'fixed' },
   ask: { from: ['working'], to: 'asking' },
