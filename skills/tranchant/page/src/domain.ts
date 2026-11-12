@@ -4,8 +4,42 @@
 export type Ownership = 'ours' | 'theirs'
 export type Bucket = 'review' | 'auto'
 export type Tag = 'concern' | 'question' | 'suggestion'
-/** `reviewing` while the producer still adds findings; `complete` once done. */
-type Status = 'reviewing' | 'complete'
+/** `preparing` while the lenses build, `reviewing` while findings land, then `complete`; `refused` when a lens could not be built. */
+type Status = 'preparing' | 'reviewing' | 'complete' | 'refused'
+
+/** A lens a review ran, as review.json records it. */
+interface LensRecord {
+  name: string
+  source: string
+  version?: string
+  hash: string
+}
+
+/** Why a review was refused: the lens, its source, the reason, and what fixes it. */
+interface Refusal {
+  lens: string
+  source: string
+  reason: string
+  fix?: string
+}
+
+/** One row of the Lenses step, as lenses.mjs writes it. */
+export interface LensRow {
+  name: string
+  source: string
+  state: 'resolving' | 'ready' | 'failed'
+  /** With `ready`: against the project's previous review. */
+  change?: 'unchanged' | 'updated' | 'new'
+  version?: string
+  reason?: string
+  fix?: string
+}
+
+/** The Lenses step's progress: lenses.json. */
+export interface LensesProgress {
+  state: 'resolving' | 'ready' | 'refused'
+  lenses: LensRow[]
+}
 
 /** The seven topics, in the order the page lists them within a bucket. */
 const TOPICS = [
@@ -127,6 +161,10 @@ export interface Review {
   ownership: Ownership
   /** `complete` when absent: the producer wrote the review whole. */
   status?: Status
+  /** The lenses `/tranchant review` ran. */
+  lenses?: LensRecord[]
+  /** With `refused`. */
+  refusal?: Refusal
   title: string
   mr?: MergeRequest
   jira?: { key: string; url: string }
@@ -320,6 +358,8 @@ export interface ReviewPayload {
   runs: Record<string, Step[]>
   /** The review's agents, in the order they started; absent from older servers. */
   reviewers?: ReviewAgent[]
+  /** The Lenses step of a `/tranchant review` review, once it started. */
+  lenses?: LensesProgress
   /** By finding id; absent from older servers. */
   discussions?: Record<string, Discussion>
   head: { reviewed: string; current: string | null }
@@ -405,7 +445,7 @@ export const unverifiedIds = (review: Pick<Review, 'verify' | 'findings'>) =>
 
 /** Whether findings may still land: the page then shows the review in progress. */
 export const isReviewing = (review: Pick<Review, 'status'>) =>
-  review.status === 'reviewing'
+  review.status === 'reviewing' || review.status === 'preparing'
 
 export const plural = (count: number, noun: string, many = `${noun}s`) =>
   `${count} ${count === 1 ? noun : many}`

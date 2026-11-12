@@ -88,18 +88,21 @@ const prepare = (cwd, args = [], env = {}) =>
     },
   })
 
-/** The envelope and the lenses prepare.mjs printed. @param {string} stdout */
+/** The envelope prepare.mjs wrote, and its plan: the recipe and the lenses. @param {string} stdout */
 async function prepared(stdout) {
-  const lines = stdout.trim().split('\n')
-  const inbox = lines[0]?.replace(/^INBOX /, '') ?? ''
+  const [first = '', second = ''] = stdout.trim().split('\n')
+  const inbox = first.replace(/^INBOX /, '')
+  const plan = JSON.parse(await readFile(second.replace(/^PLAN /, ''), 'utf8'))
   return {
     inbox,
     envelope: JSON.parse(await readFile(inbox, 'utf8')),
-    lenses: lines.slice(1).map((line) => JSON.parse(line.replace(/^LENS /, ''))),
+    recipe: plan.recipe,
+    /** @type {any[]} */
+    lenses: plan.lenses,
   }
 }
 
-test('prepare.mjs writes the current branch against the default one, reviewing, outside the repository', async (t) => {
+test('prepare.mjs writes the current branch against the default one, preparing, outside the repository', async (t) => {
   const { dir, git } = await repository(t)
   // A file no front-end lens claims: bugs and docs, which read every file, take it too.
   await mkdir(path.join(dir, 'scripts'), { recursive: true })
@@ -127,7 +130,7 @@ test('prepare.mjs writes the current branch against the default one, reviewing, 
       base: 'main',
       headSha: await git('rev-parse', 'HEAD'),
       ownership: 'ours',
-      status: 'reviewing',
+      status: 'preparing',
       verify: true,
       title: 'feature/cart',
       summary: '',
@@ -150,15 +153,18 @@ test('prepare.mjs writes the current branch against the default one, reviewing, 
       'docs',
     ],
   )
-  for (const lens of lenses)
-    assert.match(lens.prompt, new RegExp(`/agents/review/${lens.name}\\.md$`))
+  for (const lens of lenses) assert.equal(lens.prompt, `tranchant:${lens.name}`)
   assert.ok(lenses[0].paths.includes('**/*.js'))
   assert.deepEqual(lenses.find((lens) => lens.name === 'bugs')?.paths, ['**'])
   // Nothing written in the repository; and open.mjs imports what it wrote.
   assert.equal(await git('status', '--porcelain'), '')
-  const opened = await run(process.execPath, [path.join(SCRIPTS, 'open.mjs'), inbox], {
-    env: { TRANCHANT_STATE_DIR: stateDir },
-  })
+  const opened = await run(
+    process.execPath,
+    [path.join(SCRIPTS, 'open.mjs'), inbox, '--verify'],
+    {
+      env: { TRANCHANT_STATE_DIR: stateDir },
+    },
+  )
   assert.match(opened.stdout, /^REVIEW /, opened.stdout + opened.stderr)
 })
 
@@ -181,12 +187,11 @@ test('prepare.mjs reviews a named branch with a recipe of its own, its lenses fi
   )
   const ran = await prepare(dir, ['feature/cart', '--recipe', recipe])
   assert.equal(ran.code, 0, ran.stdout + ran.stderr)
-  const { envelope, lenses } = await prepared(ran.stdout)
+  const { envelope, lenses, recipe: used } = await prepared(ran.stdout)
   assert.equal(envelope.branch, 'feature/cart')
   assert.equal(envelope.headSha, await git('rev-parse', 'feature/cart'))
-  assert.deepEqual(lenses, [
-    { name: 'js', prompt: path.join(recipes, 'js.md'), paths: ['src/**/*.js'] },
-  ])
+  assert.deepEqual(used, { file: recipe, from: 'run' })
+  assert.deepEqual(lenses, [{ name: 'js', prompt: 'js.md', paths: ['src/**/*.js'] }])
 })
 
 test('prepare.mjs reads the recipe the settings name, --recipe still first, and leaves the lenses turned off out', async (t) => {
@@ -756,4 +761,37 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
   )
   // No finding's decisions were touched: a review agent holds none.
   assert.deepEqual((await createStore(dir).readDecisions()).findings, {})
+})
+
+test("a review agent's git takes no option that runs a program, however abbreviated", async (t) => {
+  const { dir } = await live(t, 'agent-git')
+  const project = await tempDir(t)
+  const hook = async (/** @type {string} */ command) => {
+    const ran = await run(
+      process.execPath,
+      [HOOK, 'pre', '--reviewer', 'rv-git', '--review', dir, '--project', project],
+      {
+        input: JSON.stringify({ agent_id: 'a1', ...bash(command) }),
+        env: { TRANCHANT_STATE_DIR: stateDir },
+      },
+    )
+    return ran.stdout
+      ? JSON.parse(ran.stdout).hookSpecificOutput.permissionDecisionReason
+      : undefined
+  }
+  // git takes a long option's prefix, and -O in a cluster of short ones.
+  for (const command of [
+    "git grep --open='sh -c id' cart",
+    'git grep --open-files=vi cart',
+    'git diff --ou=src/cart.js main',
+    'git diff --ext main',
+    'git grep -iO cart',
+  ])
+    assert.match(
+      (await hook(command)) ?? '',
+      /^Refused: a git option that writes or runs a program/,
+      command,
+    )
+  // An option that only starts like one reads.
+  assert.equal(await hook('git log --oneline -5 && git grep --text -n total'), undefined)
 })

@@ -12,6 +12,9 @@ folder: nothing is installed in a repository to review it.
 | `runs/<finding id>.history.jsonl` | Next to it                            | The steps of every run that ended                                                           | The store, when a run ends                                                                                             |
 | `reviewers/<name>.jsonl`          | Next to it                            | The steps of one review agent of `/tranchant review`: `sm-summary`, `rv-<lens>` or `vf-<finding id>`; of a finding's discussing agent: `ds-<finding id>` | The hooks (`hooks/register.ts`, `hook.mjs --reviewer`)                                                                 |
 | `discussions/<finding id>.json`   | Next to it                            | The finding's discussion: the reviewer's questions and the agent's answers                  | `lib/discussion.mjs`, for the server (a question, a change, and a change's answer or result on each move the reviewer makes and at start), `reply.mjs` (an answer), and `done.mjs`, `ask.mjs`, `hook.mjs ended` (a change's result) |
+| `lenses.json`                     | Next to it                            | The Lenses step of `/tranchant review`: one row per lens, as it is resolved and built        | `lenses.mjs`                                                                                                           |
+| `lenses/<sha256>.md`              | `<state>/`                            | A lens's prompt as the Lenses step built it, one file per hash, shared by every review       | `lenses.mjs`, once per hash                                                                                            |
+| `imports/<import id>/`            | `<state>/<hash>/`                     | An import of `/tranchant import`: `import.json` (its source, its location, where it stands) and `recipe.json`, the recipe its agent wrote | `import.mjs` and the import agent (`recipe.json` alone); the server, when the user uses it                    |
 
 `<state>` is `TRANCHANT_STATE_DIR`, else `$XDG_CACHE_HOME/tranchant`, else
 `~/.cache/tranchant`. `<hash>` is the first 12 hex digits of the SHA-1 of the
@@ -52,7 +55,7 @@ arrives. A producer that writes the whole review at once needs none of this:
   "base": "origin/master",
   "headSha": "3552e3ef0c…", // what was reviewed; a fix on another HEAD is refused
   "ownership": "ours", // the default action: "ours" fix first, "theirs" post first
-  "status": "reviewing", // optional: "reviewing" while findings still land; absent, "complete"
+  "status": "reviewing", // optional: "preparing", "reviewing", "complete" or "refused"; absent, "complete"
   "title": "Classification overview page",
   "mr": {
     // optional; required to post, whatever the ownership
@@ -78,13 +81,15 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `project`     | string                    | Absolute. The git repository it lies in is the lock root.                                           |
 | `headSha`     | string                    | Full SHA. The page shows a warning when the checkout moved; a fix still runs, on the current files. |
 | `ownership`   | `ours` or `theirs`        | Decides the default action: `ours`, fix first; `theirs`, post first. Either may post with `mr.diffRefs`. |
-| `status`      | `reviewing` or `complete` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`.  |
+| `status`      | `preparing`, `reviewing`, `complete` or `refused` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`. `preparing`: `/tranchant review` builds its lenses (`lenses.mjs`), then makes it `reviewing`. `refused`: a lens could not be built, no reviewer started, `refusal` says why; nothing lands, nothing completes it. |
+| `lenses`      | array, optional           | The lenses `/tranchant review` ran, as the Lenses step built them: `{ name, source, version?, hash }`, `source` as the recipe names it, `version` a plugin's, `hash` the SHA-256 of the prompt built (`<state>/lenses/<hash>.md`). |
+| `refusal`     | object, optional          | With `refused`: `{ lens, source, reason, fix? }`, the lens that could not be built, its source, why, and what fixes it. |
 | `mr.forge`    | `github` or `gitlab`, optional | `gitlab` when absent. On GitHub (`/tranchant comments`), `mr.project` is `owner/repo` and `mr.iid` the pull request's number; it has no `diffRefs` (refused there): its findings are replied on, never posted as comments of their own. `mr.url` names no user or password before its host, the host a reply's token goes to. |
 | `mr.viewer`   | string, optional          | Who imported its threads (`/tranchant comments`: GitHub's `viewer`, `glab api user`): the page marks their comments in a thread as theirs. |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
 | `summary`     | string                    | Markdown, shown above the findings. May be blank: with no `strengths` either, the page hides the section. While the review is `reviewing`, `summarize.mjs` writes it and `strengths`; the page shows them as they land. |
 | `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
-| `findings`    | Finding[]                 | At least one, unless `status` is `reviewing`. Ids unique within the review.                         |
+| `findings`    | Finding[]                 | At least one, unless the review is not `complete`. Ids unique within the review.                    |
 
 ### A finding
 
@@ -414,9 +419,9 @@ keeps showing running.
 reviews a change with no producer of your own:
 
 1. `prepare.mjs` runs in the session's folder, or in `<folder>` (a path
-   starting with `.` or `/`, another repository), reads the recipe
-   (`--recipe`, else the [settings'](settings.md), else the plugin's) and
-   finds the change: the
+   starting with `.` or `/`, another repository), finds the change and reads
+   the recipe in force ([where it comes from](#where-the-recipe-comes-from)):
+   the
    current branch, or `<branch>`, against
    the repository's default branch (`origin/HEAD`, else the first of
    `origin/main`, `origin/master`, `main`, `master` that exists),
@@ -425,11 +430,24 @@ reviews a change with no producer of your own:
    glab missing or logged out: no `mr`, a line on stderr says why, and the
    review goes on); or a merge request read with `glab mr view <url> -F
    json` (its `diff_refs`, its head fetched when the checkout lacks it),
-   `ownership: "theirs"`. It writes the envelope, `status: "reviewing"`,
-   `verify: true`, no finding, to `<state>/inbox/<id>.json`.
+   `ownership: "theirs"`. It writes the envelope, `status: "preparing"`,
+   `verify: true`, no finding, to `<state>/inbox/<id>.json`, and the lenses
+   the change touches, with the recipe they come from, to `<id>.plan.json`
+   next to it.
 2. The hooks open it as any review file: the server starts and the page
    opens before any agent does.
-3. The summary agent (`tranchant:sm-summary-<review>`,
+3. The Lenses step: `lenses.mjs` resolves each lens's source, builds the
+   prompt its reviewer runs ([the lenses](#the-lenses-built-at-every-review))
+   and writes its progress to `lenses.json`, which the page shows above the
+   reviewers, one row per lens: `resolving`, then `ready` (`unchanged`,
+   `updated since the last review` or `new`, against the project's previous
+   review that recorded its lenses) or `failed` with the reason and the fix.
+   Every lens built: the review becomes `reviewing`, with its `lenses`, and
+   one `LENS` line per lens tells the hooks what to start. One source that
+   cannot be resolved refuses the review: `refused`, its `refusal`, no
+   reviewer starts; the page shows the reason and the fix, the terminal says
+   it in one line.
+4. The summary agent (`tranchant:sm-summary-<review>`,
    `agents/review/summary.md`) queues first, beside the reviewers: it reads
    the diff and writes, with `summarize.mjs`, the review's `summary` (what
    the change does, then its Change Map: API surface, data and migrations,
@@ -438,7 +456,7 @@ reviews a change with no producer of your own:
    read it later, as the findings are: the lenses', the verifier's and the
    discussing agent's prompts say so, and a fix's agent is handed only its
    finding. One that ends with the summary still blank is said in a toast.
-4. One reviewer per lens the change touches (`tranchant:rv-<lens>-<review>`,
+5. One reviewer per lens the change touches (`tranchant:rv-<lens>-<review>`,
    `<review>` the review id's first 8 characters, the lens's prompt its
    instructions; see [the recipe](#the-recipe)) reads the diff and the files
    and calls `add.mjs` once per finding. As each finding lands, the server
@@ -447,10 +465,11 @@ reviews a change with no producer of your own:
    then confirms it (`verify.mjs`), amends it (`verify.mjs --amend`) or
    removes it (`remove.mjs`), a duplicate of a finding that landed before it
    included. Three review agents run at a time (the settings' `maxReviewAgents`),
-   in the order they queued, each on the model the settings choose for its
-   kind (`reviewModel`, `verifyModel`), else the session's; a lens the
-   settings turn off (`disabledLenses`) is not run.
-5. Once the summary agent, every reviewer and every verifier ended, the hooks start a verifier for any
+   in the order they queued, each on the model its lens names (`model`),
+   else the one the settings choose for its kind (`reviewModel`,
+   `verifyModel`), else the session's (`TRANCHANT_MODEL` wins over all); a
+   lens the settings turn off (`disabledLenses`) is not run.
+6. Once the summary agent, every reviewer and every verifier ended, the hooks start a verifier for any
    finding still unverified that had none (`verify.mjs --pending`), then call
    `complete.mjs`. `/tranchant stop` ends the review agents and completes the
    review too.
@@ -553,13 +572,14 @@ locks and show no progress.
 | `GET /`               | The page.                                                                                                                                                                                                                                                                                                                                                          |
 | `GET /page.js`        | Its bundle.                                                                                                                                                                                                                                                                                                                                                        |
 | `GET /api/health`     | `{ ok: true, review: "<id>", version: "<plugin version>" }`.                                                                                                                                                                                                                                                                                                       |
-| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head }`: the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
+| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head, lenses? }`: `lenses` the Lenses step's `lenses.json` once it started (`{ state: "resolving" \| "ready" \| "refused", lenses: [ { name, source, state: "resolving" \| "ready" \| "failed", change?, version?, reason?, fix? } ] }`); the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
 | `GET /api/account`    | `{ username, tool }`: the account `tool` posts as, `glab api user`'s `username` or `gh api user`'s `login`, run from `project` and kept once known; `null` when the tool cannot say (not installed, not logged in, an error), asked again next time. `tool` is `?tool=glab` or `?tool=gh` when the query names one (the batch bar asks for glab's: MR comments go through glab), else the settings' `postWith`, or with `auto` `gh` on a GitHub tracker and `glab` otherwise. The page names it in a post's confirmation, or says "your glab account", and in the Settings. |
-| `GET /api/settings`, `PUT /api/settings` | The user's settings file, read and written: see [the settings file](settings.md). |
+| `GET /api/settings`, `PUT /api/settings` | The user's settings file, read and written, with the recipe in force for the review's project and the recipes imported for it: see [the settings file](settings.md). |
+| `POST /api/recipe/use` | `{ "id" }`: Use this recipe, on an import of the project that is `ready`: its recipe checked again and written to its location (the project's `.tranchant/recipe.json`, or the local recipe); answers `{ target, to, settings }`. 409 `{ error }` when it is not ready, failed its check or is in use already. |
 | `GET /api/tracker`    | `{ kind, web, prefix }`: where the project's issues go, from its `origin` remote, as `issue.mjs` reads it (both name the same project): `kind` `github` for `github.com`, `*.ghe.com` and `github.<domain>` hosts, `gitlab` for a host that names gitlab or any host when the review has an `mr`, and the settings' `postWith` (`glab` or `gh`) for a host neither names (one the other forge owns is refused, with the reason); an SSH endpoint (`ssh.github.com`, `altssh.gitlab.com`) or an account alias (`github.com-work`) names the forge itself. `web` the project's page; `prefix` the project's folder in its repository (the page links an issue's anchor to `<web>/blob/<ref>/<prefix><path>#L<line>`, `/-/blob/` on GitLab, `<ref>` the commit reviewed when it is the MR's head, else the branch). `{ kind: null, reason }` when there is none (no `origin`, not a url, another forge, git failing); a failure is read again on the next request. |
 | `GET /api/diff`       | `{ base, head, files, diff }`: the change's unified diff, `git diff <base>...<headSha>` run in `project` (`baseSha..headSha` with `mr.diffRefs` at the review's `headSha`; on `theirs`, refs at another head are refused, on `ours` the branch's own range is used), its paths relative to `project` like the findings', and its files, each `{ path, oldPath?, additions, deletions, binary }`. Computed once; a failure is computed again on the next request. Answers 409 with the reason when git is missing, `project` is not a git repository, a commit is not there, `base` is not a revision, the diff is empty or past `TRANCHANT_MAX_DIFF_MIB` (32), or git fails; the server logs git's words on stderr, and the page shows its list view. |
 | `GET /api/lines?path=&from=&to=` | `{ path, from, to, total, lines }`: lines `from` to `to` (1-based, `to` cut at the file's end) of `path` at the diff's head commit (`git cat-file blob <headSha>:./<path>`), and how many lines it has: what the diff view unfolds around its hunks. Only a path the diff names, not binary, is read: 404 for any other. Answers 400 when `from` or `to` is not a line number or `to` comes before `from`; 416 `{ error, total }` when `from` is past the file's end; 409 with the reason when the diff is unavailable or git cannot read the file (a file the change deletes). |
-| `GET /api/events`     | Server-sent events: `changed` with `{ ids }` when a finding landed, was verified or removed, or its record or run changed (`ids` empty when the review's `status` or a review agent's file changed); `page` when the bundle was rebuilt; `settings` when the settings file changed (a page's `PUT`, another server's, an editor's).                                                                                 |
+| `GET /api/events`     | Server-sent events: `changed` with `{ ids }` when a finding landed, was verified or removed, or its record or run changed (`ids` empty when the review's `status`, a review agent's file or `lenses.json` changed); `page` when the bundle was rebuilt; `settings` when the settings file changed (a page's `PUT`, another server's, an editor's), or an import of the project did.                                                                                 |
 | `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "issue" \| "drop" \| "skip", "context"?, "comment"?, "reason"?, "title"?, "body"? } ] }` (`title` and `body`: an issue's). Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
 | `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ finding }`. The answer to a change's question joins its discussion.                                                                                                                                                                                                                                                                                     |
 | `POST /api/discuss`   | `{ "id", "text", "change"? }`: a question on finding `id`, refused (409) when `id` is not a finding of the review, its state allows no discussion, a message still waits, the text is empty, the discussion holds 60 messages, or its file is one this Tranchant cannot read; answers `{ discussion }` and prints `DISCUSS <id>`. With `change: true`, a change to the code instead (see [change requests](#change-requests)), refused too on a finding with no `thread` or a state the `change` move does not leave; prints `FIX <id>`. |
@@ -591,8 +611,9 @@ server's.
 | `open.mjs <review.json> [--verify \| --refresh]`                                                                                         | Validates and imports a review: the envelope into `review.json`, each inline finding into `findings/<id>.json`; prints `REVIEW <dir>`. `verify` and `verified` are dropped; `--verify`, which `/tranchant review` passes, keeps `verify`. Review and finding ids match `[\w-]{1,64}`: they become folder names and words on protocol lines. An id already imported with the same envelope (`status`, `verify` and `findings` aside: a review grows) is reused, decisions kept, its inline findings not there yet added; with another envelope, or a finding of other content, it is refused (`REVIEW_REFUSED id <id> exists with other content`, `REVIEW_REFUSED finding <id> exists with other content`): the producer mints a new id. `--refresh`, which `/tranchant comments` passes, takes the same PR/MR of the same project again: the envelope replaced (its `createdAt` kept), the findings new or changed written (their `addedAt` kept), the decisions untouched. |
 | `add.mjs --review <dir> [--file <finding.json>]`                                                                            | Adds one finding, from the file or stdin, to a review still `reviewing`: checked as a review's are (id, anchor, `comment` when `theirs`), written to `findings/<id>.json` with `addedAt`; prints `ADDED <id>`. The same finding again is accepted silently; another one under the same id, an unsound one, or any once the review is complete prints `ADD_REFUSED <reason>` and exits 2.                                                                                                                                                                                                                                   |
 | `complete.mjs --review <dir>`                                                                                               | Sets `status` to `complete`; prints `COMPLETE`. On a review complete already, `COMPLETE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `prepare.mjs [<branch> \| <mr url>] [--recipe <file>]`                                                                      | Run from the session's folder: writes the envelope of `/tranchant review` to `<state>/inbox/<id>.json`, prints `INBOX <file>`, then `LENS <json>` (`{ name, prompt, paths }`) per lens the change touches (the recipe: `--recipe`, else the settings' `recipe` with its `disabledLenses` left out, else the plugin's; a settings file it cannot read is said on stderr and read as none). `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying (or every one turned off), a merge request glab cannot read (glab's reason).                                                                                                                                                                                                                                                                                                                    |
-| `prepare.mjs [<branch> \| <mr url>] [--recipe <file>]`                                                                      | Run from the session's folder: writes the envelope of `/tranchant review` to `<state>/inbox/<id>.json`, prints `INBOX <file>`, then `LENS <json>` (`{ name, prompt, paths }`) per lens the change touches. `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying, a merge request glab cannot read (glab's reason).                                                                                                                                                                                                                                                                                                                    |
+| `prepare.mjs [<branch> \| <mr url>] [--recipe <file>]` | Run from the session's folder: writes the envelope of `/tranchant review`, `preparing`, to `<state>/inbox/<id>.json` and prints `INBOX <file>`, then the plan, `{ recipe, lenses }`, the lenses the change touches with the recipe in force ([where it comes from](#where-the-recipe-comes-from); the settings' `disabledLenses` left out unless `--recipe`; a settings file it cannot read is said on stderr and read as none), to `<id>.plan.json` and prints `PLAN <file>`. `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying (or every one turned off), a merge request glab cannot read (glab's reason). |
+| `lenses.mjs --review <dir> --plan <file>` | The Lenses step, once the page is open: builds each lens of the plan, writing `lenses.json` as it goes; every lens built, the review becomes `reviewing` with its `lenses` and it prints one `LENS <json>` per lens (`{ name, prompt, paths, model?, topics? }`, `prompt` the built file). A source that cannot be resolved makes the review `refused` and prints `REVIEW_REFUSED lens <name> (<source>): <reason>; <fix>`, exit 2, no `LENS` line. |
+| `import.mjs --find \| --prepare <source> --to <project \| local> \| --check <folder>` | `/tranchant import`'s, run from the session's folder. `--find`: `CANDIDATE <path>` per `.claude/skills/*review*` and `.claude/agents/*review*` of the project, else `NO_CANDIDATE`. `--prepare`: finds the source, makes the import's folder and prints `IMPORT <json>` (`{ id, dir, recipe, source, file, folder, version?, to, target, project }`). `--check`: the agent's recipe checked as `prepare.mjs` reads one, each lens built from its location; prints `IMPORTED <target>`. `IMPORT_REFUSED <reason>`, exit 2. |
 | `summarize.mjs` | The summary agent's: `{ "summary": "<Markdown>", "strengths": ["…"] }` on stdin replaces the review's `summary` (non-blank, 12,000 characters at most) and `strengths` (10 at most, 500 characters each) while it is `reviewing`; prints `SUMMARIZED`. An unsound one, or any once the review is complete, prints `SUMMARY_REFUSED <reason>`, exit 2. |
 | `verify.mjs <id> [--file <finding.json> \| --amend]`, `verify.mjs --pending`                                                                         | A verifier's verdict: `VERIFIED <id>` sets `verified: true`; with the finding whole (same id) from the file or stdin, `AMENDED <id>` replaces it, verified, its `addedAt` kept. Amending a finding the reviewer decided on is refused. `--pending` prints `UNVERIFIED <id>` per finding not verified. A refusal prints `VERIFY_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                   |
 | `reply.mjs <id> [--ended]`                                                                                                  | A discussing agent's answer to the question that waits on finding `id`, as JSON on stdin: `{ "text", "fix"?, "comment"?, "drop"? }`; prints `REPLIED <id>`. No question waiting, not JSON, a `text` missing, or a proposal that is not a text: `REPLY_REFUSED <reason>`, exit 2. `--ended`, the hooks' once its agent ended: a question left waiting gets a `failed` answer and `UNANSWERED <id>` is printed. |
@@ -603,35 +624,126 @@ server's.
 
 `/tranchant review` runs one reviewer agent per lens of a recipe, a JSON
 file; the plugin's default is
-[`agents/review/recipe.json`](../agents/review/recipe.json), and `--recipe
-<path>` replaces it with one of the same shape, as does the settings'
-`recipe` for every run that names none ([the settings file](settings.md)).
+[`agents/review/recipe.json`](../agents/review/recipe.json).
 
 ```jsonc
 {
   "version": 1,
+  "extends": "tranchant", // optional: Tranchant's own lenses run beside these; one of the same name is replaced
   "lenses": [
     {
       "name": "correctness", // [\w-]{1,40}, unique; the agents' finding ids start with it
-      "prompt": "correctness.md", // the lens's prompt, relative to the recipe file
+      "prompt": "correctness.md", // a whole prompt, relative to the recipe file; or tranchant:<lens>
       "paths": ["**/*.ts", "**/*.tsx"], // the lens runs when a changed file matches one; ["**"] when absent
     },
-    { "name": "bugs", "prompt": "bugs.md", "paths": ["**"] }, // every changed file
+    {
+      "name": "abac",
+      "source": "workflow:code-reviewer-abac", // a plugin's skill or agent, or a path: the lens's domain
+      "skills": ["workflow:abac-rules"], // optional: references passed to the lens, never through the Skill tool
+      "topics": ["Security & Permissions"], // optional: the topics its findings file under
+      "model": "claude-opus-5-5", // optional: its reviewer's model
+    },
+    { "name": "bugs", "use": "tranchant:bugs", "add": "../checks/money.md" }, // an add-on to a lens of Tranchant's
     { "name": "rest", "prompt": "rest.md", "otherwise": true }, // or: the files no other lens matched
   ],
+  "imported": { "source": "workflow:code-review", "leftOut": [{ "what": "…", "why": "…" }] }, // optional, /tranchant import's
 }
 ```
 
-A glob is a git `:(glob)` pathspec, matched against each changed file's path
-relative to the repository, with `**` crossing folders and `*` staying within
-a name. A lens runs once per review, when at least one changed file matches
-one of its globs; the lens with `otherwise` (one at most, no `paths`) runs
-when a changed file matches no other lens's globs, its `PATHS` those files.
-A recipe has 12 lenses at most. The lens's prompt, its frontmatter left out,
-is its agent's instructions, whole: it says how to read the change, anchor,
-word and report a finding. The agent's prompt gives `LENS`, `REVIEW`,
-`SKILL`, `PROJECT`, `BASE`, `HEAD`, `RANGE` (the git range of the change),
-`OWNERSHIP` and `PATHS`; it adds its findings with `add.mjs`, their ids
-`<name>-<n>`. The verifier (`agents/review/verifier.md`) gets the finding's
-id on its first line, then the same but `LENS` and `PATHS`, and runs once per
-finding as they land.
+A lens names one of `prompt`, `source`, or `use` with `add`. A glob is a git
+`:(glob)` pathspec, matched against each changed file's path relative to the
+repository, with `**` crossing folders and `*` staying within a name. A lens
+runs once per review, when at least one changed file matches one of its
+globs; the lens with `otherwise` (one at most, no `paths`) runs when a
+changed file matches no other lens's globs, its `PATHS` those files. A
+recipe has 12 lenses at most, Tranchant's included when it `extends` them.
+The agent's prompt gives `LENS`, `REVIEW`, `SKILL`, `PROJECT`, `BASE`,
+`HEAD`, `RANGE` (the git range of the change), `OWNERSHIP`, `PATHS` and,
+when the lens declares them, `TOPICS`; it adds its findings with `add.mjs`,
+their ids `<name>-<n>`. The verifier (`agents/review/verifier.md`) gets the
+finding's id on its first line, then the same but `LENS`, `PATHS` and
+`TOPICS`, and runs once per finding as they land.
+
+### Where the recipe comes from
+
+The first given: `--recipe <path>` on the run; the local recipe, when its
+file exists,
+`$XDG_CONFIG_HOME/tranchant/projects/<project hash>/recipe.json` (else
+`~/.config/…`), the user's alone, outside the repository, its paths read
+from the working tree; the project's, when it exists at BASE,
+`.tranchant/recipe.json`, **read at BASE** (`git show BASE:.tranchant/recipe.json`)
+with every source it names inside the repository, so the change under review
+cannot rewrite the lenses that review it, on someone else's merge request
+included; the settings' `recipe`; the plugin's. A recipe given whose file is
+missing refuses the review: nothing falls through to the next. `/tranchant
+import` writes the local and the project's. An add-on (`use`) with no
+`paths` or `topics` keeps those of its lens of Tranchant's. The page's Settings show the recipe in force: where it comes
+from, its lenses, each lens's source and whether it builds now.
+
+### The lenses, built at every review
+
+The Lenses step (`lenses.mjs`) builds each lens anew from its sources, so a
+lens follows its source's later changes (a new version of its plugin, a
+sharpened checklist) without a copy to update:
+
+1. **It resolves the source.** `tranchant:<lens>` is one of the plugin's
+   lenses; `plugin:name` (`plugin:folder:name`) a skill
+   (`<plugin>/skills/<name>/SKILL.md`) or an agent
+   (`<plugin>/agents/<name>.md`) of a plugin Claude Code installed for the
+   project (`~/.claude/plugins/installed_plugins.json`, `CLAUDE_CONFIG_DIR`
+   when set) and did not turn off (`enabledPlugins`, in the user's and the
+   project's settings); anything else a path, from the recipe's folder, a
+   folder meaning its `SKILL.md`.
+2. **It reads it**, and each skill the lens lists, 64 KiB each at most, its
+   frontmatter checked and left out.
+3. **It builds the prompt.** A `prompt` is the prompt, whole. A `source` is
+   the shared contract ([`agents/review/contract.md`](../agents/review/contract.md):
+   the inputs, the change as data, `PATHS` as the only file filter, how to
+   anchor, word and report through `add.mjs`), then the source, fenced as
+   the lens's domain, with its folder for its relative links; the contract
+   wins over the source's own process and output. An add-on is the lens of
+   Tranchant's, then the source fenced as its addition. The skills follow,
+   fenced, as references.
+
+No model takes part: the same sources, skills and contract give the same
+prompt, byte for byte. Each is stored once under `<state>/lenses/<sha256>.md`
+(a temp file, then linked into place): a prompt there already is reused and
+nothing is written, so two reviews at once, or the step run twice, change
+nothing.
+
+**A source that cannot be resolved refuses the review**: a plugin not
+installed or turned off, a file missing, a frontmatter that cannot be read,
+a skill the lens lists that is missing, an add-on whose lens of Tranchant's
+does not exist, a source over 64 KiB. Each says what fixes it: install the
+plugin, re-import, or edit the recipe.
+
+## `/tranchant import`
+
+`/tranchant import [<source>] [--to project | local]` turns a team's review
+process (a skill and the agents it starts, an agent, a file or a folder)
+into a recipe that **references** it:
+
+1. With no source, `import.mjs --find` lists the project's
+   `.claude/skills/*review*` and `.claude/agents/*review*`; the user names
+   one. Nothing picks a source for them.
+2. With no location, the two are offered: `project`
+   (`<repository>/.tranchant/recipe.json`, committed and shared with the
+   team) or `local` (outside the repository, the user's alone). Nothing is
+   written before the user chooses.
+3. `import.mjs --prepare` finds the source, then the import agent
+   (`tranchant:im-<import>`, [`agents/import.md`](../agents/import.md)),
+   started by the hooks in the background, reads it and writes the recipe:
+   each reviewer a lens of its own or an add-on to a lens of Tranchant's, by
+   name or path (a project recipe's inside the repository), never a copy of
+   its text nor a whole `prompt`; what cannot become a lens
+   (orchestration, scripts, MCP calls, posting, questions to the user) in
+   `imported.leftOut`, with the reason. `hook.mjs --importer` lets it write
+   that one file and run reading commands only, git none; its hook refuses
+   on any error.
+4. When it ends, `import.mjs --check` checks the recipe as a review reads
+   it (12 lenses at most, Tranchant's included; a project recipe's paths
+   inside the repository; no `prompt`), each lens built from its location;
+   one that fails is checked again when used. The page's Settings show it whole (its lenses, their
+   sources, what was left out); **Use this recipe** puts it in force at its
+   location. The import alone never does. A project recipe is read at the
+   base of each review: it reviews the changes made after it is committed.

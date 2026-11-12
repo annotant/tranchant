@@ -4,32 +4,32 @@
 // change (the current branch, or <branch>, against the repository's default
 // branch, `ours`, with the branch's open merge request when glab finds one;
 // a merge request read with `glab mr view`, `theirs`), reads
-// the recipe (--recipe, else the settings' `recipe`, else the plugin's
-// agents/review/recipe.json; without --recipe, the settings' `disabledLenses`
-// are left out), writes
-// the review's envelope, `reviewing` with no finding yet, to
-// <state>/inbox/<id>.json and prints `INBOX <file>`, then one `LENS <json>`
-// per lens whose paths the change touches: `{ name, prompt, paths }`, `prompt`
-// the lens's instructions file, absolute; the `otherwise` lens's paths are the
-// changed files no other lens's globs match, when there are any. Any refusal prints `REVIEW_REFUSED <reason>` and exits 2.
+// the recipe in force (--recipe, else the local recipe, else the project's
+// .tranchant/recipe.json at BASE, else the settings' `recipe`, else the
+// plugin's agents/review/recipe.json; without --recipe, the settings'
+// `disabledLenses` are left out), writes the review's envelope, `preparing`
+// with no finding yet, to <state>/inbox/<id>.json and prints `INBOX <file>`,
+// then the lenses whose paths the change touches to <id>.plan.json next to
+// it, with the recipe they come from, and prints `PLAN <file>`: lenses.mjs
+// builds them once the page is open. The `otherwise` lens's paths are the
+// changed files no other lens's globs match, when there are any. Any refusal
+// prints `REVIEW_REFUSED <reason>` and exits 2.
 // Nothing is written in the reviewed working tree; an MR's head is fetched.
 // TRANCHANT_GLAB names another glab executable (the tests' fake one).
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs, promisify } from 'node:util'
 import { REVIEW_VERSION, oneLine } from './lib/format.mjs'
 import { STATE_ROOT } from './lib/project.mjs'
-import { loadSettings, readRecipeFile, recipeInForce } from './lib/settings.mjs'
+import { RecipeRefusal, findRecipe, readRecipe } from './lib/lens.mjs'
+import { loadSettings } from './lib/settings.mjs'
 
-/** @typedef {{ name: string, prompt: string, paths: string[], otherwise?: boolean }} Lens */
+/** @typedef {import('./lib/lens.mjs').LensSpec} Lens */
 
-const LENS_NAME = /^[\w-]{1,40}$/
 // The branch's MR is optional: an unreachable GitLab must not hold the review.
 const GLAB_TIMEOUT_MS = 20_000
-const MAX_LENSES = 12
 const run = promisify(execFile)
 
 /**
@@ -72,54 +72,6 @@ const gitOr = (cwd, args) => git(cwd, args).catch(() => undefined)
 /** The commit `revision` names, or undefined. @param {string} cwd @param {string} revision */
 const commitOf = (cwd, revision) =>
   gitOr(cwd, ['rev-parse', '--verify', '--quiet', `${revision}^{commit}`])
-
-/**
- * The recipe's lenses, each prompt file absolute, or the refusal.
- * @param {string} file
- * @returns {Promise<Lens[]>}
- */
-async function readRecipe(file) {
-  let recipe
-  try {
-    recipe = await readRecipeFile(file)
-  } catch (error) {
-    return refuse(`recipe ${file}: ${message(error)}`)
-  }
-  const lenses = recipe?.lenses
-  if (recipe?.version !== 1 || !Array.isArray(lenses) || !lenses.length) {
-    return refuse(`recipe ${file}: version 1 and at least one lens are required`)
-  }
-  if (lenses.length > MAX_LENSES) {
-    return refuse(`recipe ${file}: ${MAX_LENSES} lenses at most`)
-  }
-  const names = new Set()
-  let otherwise = false
-  return lenses.map((lens, i) => {
-    const where = `recipe ${file}: lenses[${i}]`
-    if (typeof lens?.name !== 'string' || !LENS_NAME.test(lens.name))
-      refuse(`${where}.name: letters, digits, - and _ only`)
-    if (names.has(lens.name)) refuse(`${where}.name: ${lens.name} is used twice`)
-    names.add(lens.name)
-    if (typeof lens.prompt !== 'string' || !lens.prompt)
-      refuse(`${where}.prompt: the lens's instructions file is required`)
-    const prompt = path.resolve(path.dirname(file), lens.prompt)
-    if (!existsSync(prompt)) refuse(`${where}.prompt: no file ${prompt}`)
-    if (lens.otherwise === true) {
-      if (lens.paths !== undefined) refuse(`${where}: an otherwise lens has no paths`)
-      if (otherwise) refuse(`${where}: one otherwise lens at most`)
-      otherwise = true
-      return { name: lens.name, prompt, paths: [], otherwise: true }
-    }
-    const paths = lens.paths ?? ['**']
-    if (
-      !Array.isArray(paths) ||
-      !paths.length ||
-      paths.some((one) => typeof one !== 'string' || !one || one.startsWith('-'))
-    )
-      refuse(`${where}.paths: a list of path globs is required`)
-    return { name: lens.name, prompt, paths }
-  })
-}
 
 /**
  * The repository's default branch, as `origin/HEAD` names it, else the
@@ -307,15 +259,29 @@ const project = path.resolve(top)
 const { values: settings, problem } = await loadSettings()
 // Read as none, as the server does: the review still runs, on the defaults.
 if (problem) console.error(`settings: ${oneLine(problem)}`)
-const lenses = await readRecipe(
-  values.recipe ? path.resolve(cwd, values.recipe) : recipeInForce(settings),
-)
-// The lenses turned off are the recipe in force's: a run's own recipe runs whole.
-const disabled = new Set(values.recipe ? [] : settings.disabledLenses)
 const theirs = target !== undefined && /^https?:\/\//.test(target)
 const change = theirs
   ? await mergeRequest(project, target)
   : await branchChange(project, target)
+// Read at BASE when it is the project's: the change cannot rewrite the lenses that review it.
+const recipe = await findRecipe({
+  ...(values.recipe && { flag: path.resolve(cwd, values.recipe) }),
+  project,
+  base: change.base,
+  settings: settings.recipe,
+})
+const recipeName =
+  recipe.from === 'project' ? `${change.base}:${recipe.file}` : recipe.file
+/** @type {Lens[]} */
+const lenses = await readRecipe(recipe).then(
+  (read) => read.lenses,
+  (error) => {
+    if (!(error instanceof RecipeRefusal)) throw error
+    return refuse(`recipe ${recipeName}: ${error.message}`)
+  },
+)
+// The lenses turned off are the recipe in force's: a run's own recipe runs whole.
+const disabled = new Set(values.recipe ? [] : settings.disabledLenses)
 // The server's range: the MR's own refs, else what reached the head since the base.
 const range = theirs
   ? `${change.base}..${change.headSha}`
@@ -354,12 +320,9 @@ const uncovered = changed.filter((file) => !covered.has(file))
 const applied = lenses.flatMap((lens) => {
   // Turned off in the settings: not run, and its files reviewed by no other lens.
   if (disabled.has(lens.name)) return []
-  if (lens.otherwise)
-    return uncovered.length
-      ? [{ name: lens.name, prompt: lens.prompt, paths: uncovered }]
-      : []
+  if (lens.otherwise) return uncovered.length ? [{ ...lens, paths: uncovered }] : []
   const paths = matched.get(lens)
-  return paths ? [{ name: lens.name, prompt: lens.prompt, paths }] : []
+  return paths ? [{ ...lens, paths }] : []
 })
 if (!applied.length)
   refuse(
@@ -378,7 +341,8 @@ const envelope = {
   base: change.base,
   headSha: change.headSha,
   ownership: theirs ? 'theirs' : 'ours',
-  status: 'reviewing',
+  // reviewing once lenses.mjs built every lens; refused when one cannot be.
+  status: 'preparing',
   verify: true,
   title: change.title,
   ...('mr' in change && { mr: change.mr }),
@@ -391,5 +355,7 @@ const inbox = path.join(STATE_ROOT, 'inbox')
 await mkdir(inbox, { recursive: true })
 const file = path.join(inbox, `${id}.json`)
 await writeFile(file, `${JSON.stringify(envelope, null, 2)}\n`)
+const plan = path.join(inbox, `${id}.plan.json`)
+await writeFile(plan, `${JSON.stringify({ recipe, lenses: applied }, null, 2)}\n`)
 console.log(`INBOX ${file}`)
-for (const lens of applied) console.log(`LENS ${JSON.stringify(lens)}`)
+console.log(`PLAN ${plan}`)

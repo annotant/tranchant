@@ -84,9 +84,12 @@ test('each lens of the recipe has its prompt, named after it', async () => {
     .toSorted((a, b) => a.localeCompare(b))
   assert.deepEqual(
     files,
-    [...recipe.lenses.map((lens) => lens.prompt), 'summary.md', 'verifier.md'].toSorted(
-      (a, b) => a.localeCompare(b),
-    ),
+    [
+      ...recipe.lenses.map((lens) => lens.prompt),
+      'contract.md',
+      'summary.md',
+      'verifier.md',
+    ].toSorted((a, b) => a.localeCompare(b)),
   )
   for (const lens of recipe.lenses) {
     const { name, description, body } = await prompt(lens.prompt)

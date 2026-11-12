@@ -104,7 +104,11 @@ code, and `bugs` and `docs` read every file. Every lens follows the
 execution chain past the changed lines: the server route a request reaches,
 and the dependencies in `node_modules` at the version the lockfile installs,
 whose source settles how a library behaves.
-`--recipe <path>` runs your own, in the same shape. See
+`--recipe <path>` runs your own, in the same shape. A team that has a
+review process of its own (a skill and the agents it starts, a project's
+`.claude/agents/*-reviewer.md`) imports it with `/tranchant import`: the
+recipe references its sources, and each review rebuilds the lenses from them,
+so they follow the sources' later changes. See
 [the review file](docs/review-file.md#the-recipe).
 
 ## Install
@@ -145,6 +149,7 @@ run script.
 /tranchant review feature/cart        # another branch, against the default branch
 /tranchant review <merge request url> # someone else's MR, read with glab
 /tranchant review ../other-repo       # another repository, at its current branch
+/tranchant import [<source>] [--to project|local]  # a team's review process as a recipe, shown before it is used
 /tranchant comments                   # the unresolved review threads of the current branch's PR/MR
 /tranchant comments <PR or MR url>    # those of another one
 /tranchant <review.json>              # import a review and open its page

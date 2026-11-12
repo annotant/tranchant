@@ -2019,3 +2019,71 @@ test('a tool forced on the other forge\u2019s host is refused: no token goes to 
     /glab cannot open issues there/,
   )
 })
+
+// The recipe in force, the imports, and the Lenses step's progress.
+
+test('the review carries its Lenses step; Use this recipe puts an import in force', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, { env: { XDG_CONFIG_HOME: config } })
+  const step = {
+    state: 'ready',
+    lenses: [{ name: 'docs', source: 'tranchant:docs', state: 'ready', change: 'new' }],
+  }
+  await writeFile(path.join(server.dir, 'lenses.json'), JSON.stringify(step))
+  assert.deepEqual((await json(await fetch(`${server.base}/api/review`))).lenses, step)
+  const { hashOf } = await import('../skills/tranchant/scripts/lib/project.mjs')
+  const target = path.join(
+    config,
+    'tranchant',
+    'projects',
+    hashOf(server.project),
+    'recipe.json',
+  )
+  const folder = path.join(stateDir, hashOf(server.project), 'imports', 'imp-1')
+  await mkdir(folder, { recursive: true })
+  const recipe = { version: 1, lenses: [{ name: 'mine', source: 'tranchant:docs' }] }
+  await writeFile(path.join(folder, 'recipe.json'), JSON.stringify(recipe))
+  await writeFile(
+    path.join(folder, 'import.json'),
+    JSON.stringify({
+      id: 'imp-1',
+      createdAt: '2026-11-10T00:00:00Z',
+      project: server.project,
+      source: 'tranchant:docs',
+      file: '/x',
+      folder: '/',
+      to: 'local',
+      target,
+      state: 'ready',
+    }),
+  )
+  const settings = await json(await fetch(`${server.base}/api/settings`))
+  assert.equal(settings.recipeFrom, 'plugin')
+  assert.deepEqual(
+    settings.imports.map((/** @type {any} */ one) => [
+      one.id,
+      one.state,
+      one.lenses.length,
+    ]),
+    [['imp-1', 'ready', 1]],
+  )
+  const use = (/** @type {unknown} */ id) =>
+    fetch(`${server.base}/api/recipe/use`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+  assert.equal((await use('../x')).status, 400)
+  const unknown = await use('imp-2')
+  assert.equal(unknown.status, 409)
+  assert.match((await json(unknown)).error, /no import imp-2/)
+  const used = await use('imp-1')
+  assert.equal(used.status, 200)
+  const answer = await json(used)
+  assert.equal(answer.target, target)
+  assert.equal(answer.settings.recipeFrom, 'local')
+  assert.deepEqual(answer.settings.lenses, ['mine'])
+  assert.deepEqual(answer.settings.imports, [])
+  assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), recipe)
+  assert.equal((await use('imp-1')).status, 409)
+})

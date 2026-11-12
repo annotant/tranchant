@@ -26,15 +26,21 @@ pattern, read how annotant does it.
   summary and strengths with `summarize.mjs`, one reviewer per
   lens (`tranchant:rv-<lens>-<review>`), one verifier per finding
   (`tranchant:vf-<id>-<review>`), `<review>` the review id's first 8
-  characters. A question asked in a finding's discussion starts one
+  characters, once `lenses.mjs` built each lens of the recipe in force (the
+  page opens first, and shows that step). A question asked in a finding's
+  discussion starts one
   read-only agent among those (`tranchant:ds-<id>-<review>`), which answers
-  with `reply.mjs`.
+  with `reply.mjs`. `/tranchant import` starts one import agent
+  (`tranchant:im-<import>`), which `hook.mjs --importer` lets write its
+  recipe file alone.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
-  `agents/discuss.md`, the discussing agent's;
+  `agents/discuss.md`, the discussing agent's; `agents/import.md`, the
+  import agent's;
   `agents/review/`, the default recipe of `/tranchant review`, its lenses'
-  prompts (each a reviewer's whole instructions), the summary agent's and
+  prompts (each a reviewer's whole instructions), `contract.md` (what wraps
+  a lens built from a team's source), the summary agent's and
   the verifier's. Hidden
   from the model.
 - `skills/tranchant/SKILL.md`: the skill itself, a prompt. Keep it short:
@@ -44,7 +50,9 @@ pattern, read how annotant does it.
   read; `lib/store.mjs` owns `decisions.json`, `lib/discussion.mjs` the
   discussions; `lib/format.mjs` is the files' reference; `lib/settings.mjs`
   owns the user's settings file (`~/.config/tranchant/settings.json`), which
-  the hooks read on their own by the same rules.
+  the hooks read on their own by the same rules; `lib/lens.mjs` finds the
+  recipe in force and builds its lenses from their sources;
+  `lib/imports.mjs` owns the imports of `/tranchant import`.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.

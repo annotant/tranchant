@@ -31,7 +31,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Lens, ReviewAgent, ReviewJob, ReviewRun, Served, Worker } from '../types'
+import type {
+  Importing,
+  Lens,
+  ReviewAgent,
+  ReviewJob,
+  ReviewRun,
+  Served,
+  Worker,
+} from '../types'
 
 type $ = EngineInterface
 /**
@@ -86,6 +94,8 @@ const reviewAgents = atom(
 )
 const noDiscussing: Record<string, string[]> = {}
 const discussing = atom({ plugin: 'tranchant', key: 'discussing' } as const, noDiscussing)
+const noImporting: Record<string, Importing> = {}
+const importing = atom({ plugin: 'tranchant', key: 'importing' } as const, noImporting)
 
 /** The plugin's agent file, whose instructions every finding's agent gets. */
 const WORKER = 'tranchant:worker'
@@ -98,6 +108,12 @@ const DISCUSS_FILE_AGENT = 'tranchant:discuss'
 /** The review agents' types: `sm-summary`, `rv-<lens>`, `vf-<id>`, `ds-<id>`, with the review's id. */
 const REVIEW_AGENT = /^tranchant:(?:sm|rv|vf|ds)-[\w-]+$/
 const REVIEW_TOOLS = ['Read', 'Bash', 'Grep', 'Glob']
+/** The import agent's type: `im-` and its import's id. */
+const IMPORT_AGENT = /^tranchant:im-[\w-]+$/
+/** The import agent's file, agents/import.md: loaded as the plugin's agent too. */
+const IMPORT_FILE_AGENT = 'tranchant:import'
+/** It writes its recipe, which hook.mjs holds it to, and reads. */
+const IMPORT_TOOLS = ['Read', 'Grep', 'Glob', 'Write', 'Bash']
 const OPEN_TOOL = 'mcp__tranchant__open'
 const INHERIT = 'inherit'
 const TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']
@@ -207,6 +223,8 @@ type Settings = {
   verifyModel?: string
   maxFixAgents: number
   maxReviewAgents: number
+  /** TRANCHANT_MODEL: every agent's model, a lens's own included. */
+  forced?: string
 }
 const DEFAULT_SETTINGS: Settings = {
   maxFixAgents: DEFAULT_CAP,
@@ -284,6 +302,7 @@ async function readSettings($: $): Promise<Settings> {
     verifyModel: forced ?? text('verifyModel'),
     maxFixAgents: cap('maxFixAgents'),
     maxReviewAgents: cap('maxReviewAgents'),
+    ...(forced && { forced }),
   }
 }
 
@@ -1064,8 +1083,12 @@ async function openCommand($: $, args: string) {
     const parsed = reviewArgs(rest)
     return 'error' in parsed ? parsed.error : startReview($, parsed.target, parsed.recipe)
   }
+  if (first === 'import') {
+    const parsed = importArgs(rest)
+    return 'error' in parsed ? parsed.error : startImport($, parsed.source, parsed.to)
+  }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] | comments [<pull request or merge request url>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] | import [<skill, agent or path>] [--to project | local] | comments [<pull request or merge request url>] | status | stop'
   return openReview($, word)
 }
 
@@ -1130,6 +1153,7 @@ async function ownReport($: $, from: string | undefined, text: string) {
     const report = reportOf(text)
     await workerDone($, spawned.agent, report)
     await reviewAgentDone($, spawned.agent, report)
+    await importDone($, spawned.agent, report)
   }
   return `${from}'s report: the page and its toast have it`
 }
@@ -1143,7 +1167,11 @@ async function spawnedBy($: $, name: string) {
   const reviewing = Object.values(await read($, reviewAgents)).find(
     (one) => spawnName(one.name, one.review) === name,
   )
-  return reviewing && { agent: reviewing.agent, running: reviewing.running }
+  if (reviewing) return { agent: reviewing.agent, running: reviewing.running }
+  const importer = Object.values(await read($, importing)).find(
+    (one) => spawnName(one.name, one.dir) === name,
+  )
+  return importer && { agent: importer.agent, running: importer.running }
 }
 
 /** A finding's agent ended its run: its one line for the person, and the next in line. */
@@ -1253,9 +1281,10 @@ async function reviewNote(
 
 /**
  * The agent type of one review agent: its instructions, `prompt` (a lens's
- * file, or the verifier's), on the model the settings choose for its kind
- * (a discusser reads as a reviewer does; none, the session's), read-only
- * tools, and hook.mjs around them, recording its steps.
+ * file, or the verifier's), on TRANCHANT_MODEL, else the model its lens asks
+ * for, else the one the settings choose for its kind (a discusser reads as a
+ * reviewer does; none, the session's), read-only tools, and hook.mjs around
+ * them, recording its steps.
  */
 async function registerReviewAgent(
   $: $,
@@ -1263,6 +1292,7 @@ async function registerReviewAgent(
   name: string,
   kind: ReviewAgent['kind'],
   prompt: string,
+  lensModel?: string,
 ) {
   const run = (mode: string) => [
     {
@@ -1277,7 +1307,11 @@ async function registerReviewAgent(
     name: reviewAgentType(name, review),
     description: `Tranchant: ${kind} ${tag(name)}. Only the plugin's hooks start it.`,
     prompt: (await $.fs.read(prompt)).replace(FRONTMATTER, ''),
-    model: (kind === 'verifier' ? settings.verifyModel : settings.reviewModel) ?? INHERIT,
+    model:
+      settings.forced ??
+      lensModel ??
+      (kind === 'verifier' ? settings.verifyModel : settings.reviewModel) ??
+      INHERIT,
     tools: REVIEW_TOOLS,
     hooks: {
       PreToolUse: [{ matcher: 'Bash', hooks: run('pre') }],
@@ -1304,9 +1338,12 @@ function reviewPrompt($: $, review: Review, job: ReviewJob) {
   ]
   if (job.kind === 'summarizer') return paths.join('\n')
   if (job.kind !== 'reviewer') return [job.id, ...paths].join('\n')
-  return [`LENS=${job.lens.name}`, ...paths, `PATHS=${job.lens.paths.join(' ')}`].join(
-    '\n',
-  )
+  return [
+    `LENS=${job.lens.name}`,
+    ...paths,
+    `PATHS=${job.lens.paths.join(' ')}`,
+    ...(job.lens.topics?.length ? [`TOPICS=${job.lens.topics.join(', ')}`] : []),
+  ].join('\n')
 }
 
 /**
@@ -1403,9 +1440,17 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
   const instructions = reviewInstructions($, job)
   startingReview.set(key, { dir, since: Date.now(), stop: false })
   const label = spawnName(name, dir)
+  const lensModel = job.kind === 'reviewer' ? job.lens.model : undefined
   const started = await (async () =>
     $.agent.spawn({
-      subagentType: await registerReviewAgent($, review, name, kind, instructions),
+      subagentType: await registerReviewAgent(
+        $,
+        review,
+        name,
+        kind,
+        instructions,
+        lensModel,
+      ),
       name: label,
       description: `Tranchant ${kind} ${tag(name)}`,
       prompt:
@@ -1447,6 +1492,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     running: true,
     since: meanwhile?.since ?? Date.now(),
     model,
+    ...(lensModel && { lensModel }),
   }
   await setReviewAgent($, key, one)
   await reviewNote($, one, agent, [
@@ -1703,12 +1749,18 @@ async function registerReviewAgentsAgain($: $) {
     if (!one.running) continue
     const review = await loadReview($, one.review).catch(() => undefined)
     if (review)
-      await registerReviewAgent($, review, one.name, one.kind, one.prompt).catch(
-        (error: unknown) =>
-          debug(
-            $,
-            `${tag(one.name)}: could not register its agent type: ${message(error)}`,
-          ),
+      await registerReviewAgent(
+        $,
+        review,
+        one.name,
+        one.kind,
+        one.prompt,
+        one.lensModel,
+      ).catch((error: unknown) =>
+        debug(
+          $,
+          `${tag(one.name)}: could not register its agent type: ${message(error)}`,
+        ),
       )
   }
 }
@@ -1723,10 +1775,18 @@ function reviewArgs(words: string[]) {
   return { target: rest[0], recipe }
 }
 
+const linesOf = (stdout: string) =>
+  stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
 /**
- * `/tranchant review`: prepare.mjs writes the envelope, it opens through the
- * same path as a review file, so the server and the page start first; then
- * the summary agent and the reviewers queue, one per lens.
+ * `/tranchant review`: prepare.mjs writes the envelope, `preparing`, and the
+ * plan; it opens through the same path as a review file, so the server and
+ * the page start first; then lenses.mjs builds each lens of the plan, the
+ * page showing its progress, and refuses the review when one cannot be
+ * built; then the summary agent and the reviewers queue, one per lens.
  */
 async function startReview($: $, target: string | undefined, recipe: string | undefined) {
   const cwd = normalize(await $.session.cwd())
@@ -1745,26 +1805,13 @@ async function startReview($: $, target: string | undefined, recipe: string | un
       { cwd: folder ?? cwd },
     )
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
-  const lines = ran.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
+  const lines = linesOf(ran.stdout)
   const refused = lines.find((line) => line.startsWith('REVIEW_REFUSED '))
   if (refused)
     return `Tranchant cannot review: ${refused.slice('REVIEW_REFUSED '.length)}`
   const inbox = lines.find((line) => line.startsWith('INBOX '))?.slice('INBOX '.length)
-  const unread: string[] = []
-  const lenses = lines.flatMap((line): Lens[] => {
-    if (!line.startsWith('LENS ')) return []
-    try {
-      const lens: Lens = JSON.parse(line.slice('LENS '.length))
-      return [lens]
-    } catch {
-      unread.push(short(line, 80))
-      return []
-    }
-  })
-  if (!inbox || !lenses.length)
+  const plan = lines.find((line) => line.startsWith('PLAN '))?.slice('PLAN '.length)
+  if (!inbox || !plan)
     return `Tranchant could not prepare the review: ${short(ran.stderr.trim() || `prepare.mjs exited ${ran.exitCode}`, 300)}`
   // A settings file prepare.mjs could not read: the review ran on the defaults, said.
   const settingsNote = ran.stderr
@@ -1776,9 +1823,46 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   const { dir } = found
   const served = await startServing($, dir)
   const watched = watches.get(dir)
+  const lensesScript = `${skillDir($)}/scripts/lenses.mjs`
+  // Left `preparing`, the review would show its lenses building for ever.
+  const abandon = (why: string) =>
+    $.process
+      .run(['node', lensesScript, '--review', dir, '--abandon', why])
+      .catch((error: unknown) =>
+        debug($, `${dir}: lenses.mjs --abandon failed: ${message(error)}`),
+      )
   // A server that could not start, its watch gone already: no page to stream to.
-  if (!watched || (watched.first !== undefined && !watched.first.startsWith('READY')))
+  if (!watched || (watched.first !== undefined && !watched.first.startsWith('READY'))) {
+    await abandon("Tranchant's server did not start")
     return served
+  }
+  const built = await $.process
+    .run(['node', lensesScript, '--review', dir, '--plan', plan])
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const said = linesOf(built.stdout)
+  const notBuilt = said.find((line) => line.startsWith('REVIEW_REFUSED '))
+  // The page shows the lens and the fix; the terminal says it in one line.
+  if (notBuilt)
+    return [
+      `Tranchant cannot review: ${notBuilt.slice('REVIEW_REFUSED '.length)}`,
+      served,
+    ].join('\n')
+  const unread: string[] = []
+  const lenses = said.flatMap((line): Lens[] => {
+    if (!line.startsWith('LENS ')) return []
+    try {
+      const lens: Lens = JSON.parse(line.slice('LENS '.length))
+      return [lens]
+    } catch {
+      unread.push(short(line, 80))
+      return []
+    }
+  })
+  if (!lenses.length) {
+    const why = short(built.stderr.trim() || `lenses.mjs exited ${built.exitCode}`, 300)
+    await abandon(`lenses.mjs printed no lens: ${why}`)
+    return [`Tranchant could not build the lenses: ${why}`, served].join('\n')
+  }
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
@@ -1794,13 +1878,216 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   return [
     `Reviewing with ${lenses.length} lens(es): ${lenses.map((lens) => lens.name).join(', ')}. The summary of the change and the findings land on the page as the agents write them, each finding verified in turn.`,
     ...(unread.length
-      ? [`prepare.mjs printed lenses that are not JSON, left out: ${unread.join('; ')}`]
+      ? [`lenses.mjs printed lenses that are not JSON, left out: ${unread.join('; ')}`]
       : []),
     ...(settingsNote
       ? [`The settings were not read, the defaults apply: ${short(settingsNote, 300)}`]
       : []),
     served,
   ].join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// `/tranchant import`: one agent reads a team's review process and writes a
+// recipe of references to it; the page shows it before anything uses it.
+
+const IMPORT_USAGE =
+  'Usage: /tranchant import [<skill, agent or path>] [--to project | local]'
+
+/** The words of `/tranchant import`: its source and `--to <location>`, or what is wrong. */
+function importArgs(words: string[]) {
+  const at = words.indexOf('--to')
+  const to = at === -1 ? undefined : words[at + 1]
+  if (at !== -1 && !to) return { error: IMPORT_USAGE }
+  const rest = at === -1 ? words : words.filter((_, i) => i !== at && i !== at + 1)
+  if (rest.length > 1) return { error: IMPORT_USAGE }
+  return { source: rest[0], to }
+}
+
+/** What import.mjs --prepare prints: the import's folder, its source and its recipe file. */
+type Prepared = {
+  id: string
+  dir: string
+  recipe: string
+  source: string
+  file: string
+  folder: string
+  to: string
+  target: string
+  project: string
+}
+
+/** The import agent's type: its instructions, read-only tools and Write, hook.mjs holding it to its recipe. */
+async function registerImporter($: $, one: Importing) {
+  const settings = await settingsOf($)
+  const pre = [
+    'node',
+    `${skillDir($)}/scripts/hook.mjs`,
+    'pre',
+    '--importer',
+    one.name,
+    '--recipe',
+    one.recipe,
+  ]
+  const { agent } = await $.agent.register({
+    name: one.name,
+    description: `Tranchant: imports ${short(one.source, 60)}. Only the plugin's hooks start it.`,
+    prompt: await readAgentPrompt($, 'import'),
+    model: settings.forced ?? settings.reviewModel ?? INHERIT,
+    tools: IMPORT_TOOLS,
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: '*',
+          hooks: [{ type: 'command', command: pre.map(shellQuote).join(' ') }],
+        },
+      ],
+    },
+  })
+  return agent
+}
+
+/** Where a page of the project already shows the imports: a served review of it, ready. */
+function pageOf(project: string) {
+  for (const watched of watches.values())
+    if (watched.review?.project === project && watched.first?.startsWith('READY'))
+      return watched.first.split(' ')[1]
+  return undefined
+}
+
+/**
+ * `/tranchant import`: with no source, the project's review processes to
+ * name one of; with no location, the two to choose from; with both, the
+ * import agent, in the background. The user names or confirms the source:
+ * nothing picks one for them.
+ */
+async function startImport($: $, source: string | undefined, to: string | undefined) {
+  const cwd = normalize(await $.session.cwd())
+  const script = `${skillDir($)}/scripts/import.mjs`
+  if (!source) {
+    const ran = await $.process
+      .run(['node', script, '--find'], { cwd })
+      .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+    const found = linesOf(ran.stdout)
+      .filter((line) => line.startsWith('CANDIDATE '))
+      .map((line) => line.slice('CANDIDATE '.length))
+    return found.length
+      ? [
+          'Tranchant found these review processes in the project; name the one to import:',
+          ...found.map((one) => `  /tranchant import ${one} --to project | local`),
+          "A plugin's skill or agent works too: /tranchant import <plugin:name> --to project | local.",
+        ].join('\n')
+      : "Tranchant found no review process in the project's .claude/skills or .claude/agents. Name one, a plugin's skill or agent (plugin:name) or a path: /tranchant import <source> --to project | local."
+  }
+  if (!to)
+    return [
+      `Where should the recipe imported from ${source} go?`,
+      '  project: <repository>/.tranchant/recipe.json, committed and shared with the team;',
+      '  local: outside the repository, for you alone.',
+      `Run /tranchant import ${source} --to project, or --to local.`,
+    ].join('\n')
+  if (to !== 'project' && to !== 'local') return IMPORT_USAGE
+  const ran = await $.process
+    .run(['node', script, '--prepare', source, '--to', to], { cwd })
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const lines = linesOf(ran.stdout)
+  const refused = lines.find((line) => line.startsWith('IMPORT_REFUSED '))
+  if (refused)
+    return `Tranchant cannot import ${source}: ${refused.slice('IMPORT_REFUSED '.length)}`
+  const line = lines.find((one) => one.startsWith('IMPORT '))
+  let made: Prepared
+  try {
+    made = JSON.parse(line?.slice('IMPORT '.length) ?? '')
+  } catch {
+    return `Tranchant could not prepare the import: ${short(ran.stderr.trim() || `import.mjs exited ${ran.exitCode}`, 300)}`
+  }
+  const name = `im-${made.id.replace(/[^\w-]/g, '').slice(0, 8)}`
+  const one: Importing = {
+    agent: '',
+    name,
+    dir: made.dir,
+    recipe: made.recipe,
+    source: made.source,
+    target: made.target,
+    project: made.project,
+    running: true,
+  }
+  const started = await (async () =>
+    $.agent.spawn({
+      subagentType: await registerImporter($, one),
+      name: spawnName(name, made.dir),
+      description: `Tranchant import of ${short(source, 40)}`,
+      prompt: [
+        `SOURCE=${made.source}`,
+        `SOURCE_FILE=${made.file}`,
+        `SOURCE_FOLDER=${made.folder}`,
+        `PROJECT=${made.project}`,
+        `TO=${made.to}`,
+        `TARGET=${made.target}`,
+        `RECIPE=${made.recipe}`,
+      ].join('\n'),
+    }))().catch((error: unknown) => ({
+    deny: message(error),
+    agentId: undefined,
+    teammateId: undefined,
+    model: undefined,
+  }))
+  const agent =
+    started.agentId ??
+    (started.deny === undefined
+      ? (await $.agent.list().catch(() => [])).findLast(
+          (listed) => listed.name === spawnName(name, made.dir),
+        )?.id
+      : undefined)
+  if (!agent) {
+    // Else the page lists it as being written, for ever: its check fails it.
+    await $.process.run(['node', script, '--check', made.dir]).catch(ignore)
+    return `Tranchant could not start the import agent: ${started.deny ?? 'no agent started'}`
+  }
+  await update($, importing, (all) => ({ ...all, [made.dir]: { ...one, agent } }))
+  const page = pageOf(made.project)
+  return [
+    `Importing ${source}: an agent reads it and writes a recipe that references it, without copying it.`,
+    page
+      ? `Once it ends, the recipe shows in the Settings of ${page}, where Use this recipe puts it in force at ${made.target}.`
+      : `Once it ends, the recipe shows in the Settings of Tranchant's page (/tranchant review opens one), where Use this recipe puts it in force at ${made.target}.`,
+  ].join('\n')
+}
+
+/** The import agent ended: its recipe checked, and said. */
+async function importDone($: $, agent: string, answer: string) {
+  const found = Object.values(await read($, importing)).find(
+    (one) => one.agent === agent && one.running,
+  )
+  if (!found) return
+  await update($, importing, (all) => ({
+    ...all,
+    [found.dir]: { ...found, running: false },
+  }))
+  const ran = await $.process
+    .run(['node', `${skillDir($)}/scripts/import.mjs`, '--check', found.dir])
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const lines = linesOf(ran.stdout)
+  const refused = lines.find((line) => line.startsWith('IMPORT_REFUSED '))
+  const said = short(answer.trim().split('\n')[0] ?? '', 160)
+  if (lines.some((line) => line.startsWith('IMPORTED ')))
+    $.ui.toast(
+      `Tranchant imported ${short(found.source, 60)}${said ? ` (${said})` : ''}: read the recipe in the page's Settings, then Use this recipe.`,
+    )
+  else
+    $.ui.toast(
+      `Tranchant could not use the recipe imported from ${short(found.source, 60)}: ${refused ? refused.slice('IMPORT_REFUSED '.length) : short(ran.stderr.trim() || `import.mjs exited ${ran.exitCode}`, 200)}`,
+    )
+}
+
+/** After a reload, the import agents at work get their hooks back. */
+async function registerImportersAgain($: $) {
+  for (const one of Object.values(await read($, importing))) {
+    if (!one.running) continue
+    await registerImporter($, one).catch((error: unknown) =>
+      debug($, `${one.name}: could not register its agent type: ${message(error)}`),
+    )
+  }
 }
 
 /**
@@ -1879,7 +2166,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: 'open',
       description:
-        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with comments, opens the unresolved review threads of a pull request or merge request; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
+        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with import, turns a team's review process into a recipe the page shows before it is used; with comments, opens the unresolved review threads of a pull request or merge request; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -1913,6 +2200,17 @@ export const register: Register = (on) => {
             description:
               "With run: a recipe file to use instead of the plugin's default one.",
           },
+          import: {
+            type: 'string',
+            description:
+              "Imports a team's review process as a recipe instead: a plugin's skill or agent (plugin:name) or a path; empty, the project's review processes are listed to choose from. review is then left out.",
+          },
+          to: {
+            type: 'string',
+            enum: ['project', 'local'],
+            description:
+              'With import: where the recipe goes, as the user chose it: project (<repository>/.tranchant/recipe.json, shared) or local (outside the repository, theirs alone). Absent, the choices are answered: ask the user.',
+          },
           comments: {
             type: 'boolean',
             description:
@@ -1928,11 +2226,12 @@ export const register: Register = (on) => {
       description:
         'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, the comments of a PR/MR, status, or stop)',
       argumentHint:
-        '<review.json> | review [<branch> | <mr url>] | comments [<pr/mr url>] | status | stop',
+        '<review.json> | review [<branch> | <mr url>] | import [<source>] [--to project|local] | comments [<pr/mr url>] | status | stop',
       immediate: true,
     })
     await registerRunning($)
     await registerReviewAgentsAgain($)
+    await registerImportersAgain($)
     // The review agents queued before a reload start once places free.
     void pumpReviews($)
     await rearm($)
@@ -1946,6 +2245,11 @@ export const register: Register = (on) => {
   on('tool.call', { tool: OPEN_TOOL }, async ($, e) => {
     if (e.stop === true) return { result: await stopServing($) }
     if (e.status === true) return { result: await statusText($) }
+    if (typeof e.import === 'string') {
+      const source = e.import.trim() || undefined
+      const to = typeof e.to === 'string' && e.to.trim() ? e.to.trim() : undefined
+      return { result: await startImport($, source, to) }
+    }
     if (e.comments === true) {
       const target =
         typeof e.target === 'string' && e.target.trim() ? e.target.trim() : undefined
@@ -1974,6 +2278,8 @@ export const register: Register = (on) => {
   on('agent.offer', async ($, e, next) =>
     e.agent === WORKER ||
     e.agent === DISCUSS_FILE_AGENT ||
+    e.agent === IMPORT_FILE_AGENT ||
+    IMPORT_AGENT.test(e.agent) ||
     FINDING_AGENT.test(e.agent) ||
     REVIEW_FILE_AGENT.test(e.agent) ||
     REVIEW_AGENT.test(e.agent)
@@ -2032,6 +2338,7 @@ export const register: Register = (on) => {
     if (e.agentId) {
       await workerDone($, e.agentId, e.answer)
       await reviewAgentDone($, e.agentId, e.answer)
+      await importDone($, e.agentId, e.answer)
     }
     return next(e)
   })
