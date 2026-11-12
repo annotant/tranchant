@@ -7,6 +7,14 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Fixed
+
+- **Fix after commenting.** Once a comment was posted on the MR, or a
+  reply on a comment's thread, the finding was settled: **Fix now**, **Fix
+  with this** and **Change** were gone, even when the reply promised the
+  fix. They are now offered then too; the comment or the reply stays, with
+  its link.
+
 ## 0.5.0 - 2026-11-11
 
 ### Added
@@ -52,11 +60,6 @@ released to the `stable` branch.
   after a **Stop**. It is now offered then too: the reply is posted beside
   the fix, which carries on untouched, and shows in the thread like the
   others.
-- **Fix after commenting.** Once a comment was posted on the MR, or a
-  reply on a comment's thread, the finding was settled: **Fix now**, **Fix
-  with this** and **Change** were gone, even when the reply promised the
-  fix. They are now offered then too; the comment or the reply stays, with
-  its link.
 
 ## 0.4.0 - 2026-11-10
 
