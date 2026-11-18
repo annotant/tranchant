@@ -22,7 +22,8 @@
 //
 // `--reviewer`: a review agent's (the summary agent, `sm-summary`, a lens's
 // reviewer, `rv-<lens>`, a finding's verifier, `vf-<id>`, or the agent
-// discussing a finding with the reviewer, `ds-<id>`): it has no writing tool
+// discussing a finding with the reviewer, `ds-<id>`, or answering their
+// question on lines of the diff, `qs-<question id>`): it has no writing tool
 // and takes no lock; its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
@@ -128,6 +129,7 @@ const SCRIPTS_OF = /** @type {Record<string, string[]>} */ ({
   rv: ['add'],
   vf: ['verify', 'remove'],
   ds: ['reply'],
+  qs: ['reply'],
   sm: ['summarize'],
 })
 // A Bash command that writes files takes no lock: refused, the agent must use
@@ -347,9 +349,10 @@ function reviewArgRefusal(args, review) {
  * Why review agent `name` may not run `command`, or undefined when it may: a
  * chain of reading commands, and the agent's own script (a reviewer's
  * add.mjs; a verifier's verify.mjs or remove.mjs, a discussing agent's
- * reply.mjs, on its own finding; the summary agent's summarize.mjs), by its
- * path, on its own review.
- * @param {string} name `rv-<lens>`, `vf-<finding id>`, `ds-<finding id>` or `sm-summary`.
+ * reply.mjs, on its own finding; an asking agent's reply.mjs --question, on
+ * its own question; the summary agent's summarize.mjs), by its path, on its
+ * own review.
+ * @param {string} name `rv-<lens>`, `vf-<finding id>`, `ds-<finding id>`, `qs-<question id>` or `sm-summary`.
  * @param {string} command
  * @param {string} review The agent's review folder.
  */
@@ -377,9 +380,16 @@ function reviewerRefusal(name, command, review) {
               : `a verifier gives its verdict, ${script}.mjs is not its script`
             : kind === 'sm'
               ? `the summary agent writes the summary, ${script}.mjs is not its script`
-              : `a discussing agent answers with reply.mjs, ${script}.mjs is not its script`
-      if ((kind === 'vf' || kind === 'ds') && args[1] !== name.slice(3))
+              : `it answers with reply.mjs, ${script}.mjs is not its script`
+      if ((kind === 'vf' || kind === 'ds' || kind === 'qs') && args[1] !== name.slice(3))
         return `${kind === 'vf' ? 'a verifier gives its verdict' : 'it answers'} on ${name.slice(3)} only`
+      // A question's id may also be a finding's: the flag says which thread it answers.
+      if (kind === 'qs' && !args.includes('--question'))
+        return 'it answers the question with reply.mjs <id> --question'
+      if (kind === 'ds' && args.includes('--question'))
+        return 'it answers the finding’s discussion, without --question'
+      // After `--` every word is positional: `-- --question` would read as no flag at all.
+      if (args.includes('--')) return 'a review script takes no --'
       const outside = reviewArgRefusal(args.slice(1), review)
       if (outside) return outside
       continue

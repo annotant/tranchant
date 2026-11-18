@@ -229,6 +229,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
  * @property {boolean} [verified] Set by verify.mjs once a verifier confirmed or amended it; read only when the review's `verify` is true.
  * @property {Thread} [thread] The PR/MR thread it comes from: a post replies on it.
+ * @property {true} [asked] Born from the reviewer's question on lines of the diff: no verifier checks it.
  */
 
 /**
@@ -716,6 +717,9 @@ function checkFinding(finding, where, theirs, problems, forge) {
   }
   if (finding.verified !== undefined && typeof finding.verified !== 'boolean') {
     problems.push(`${where}.verified: true or false`)
+  }
+  if (finding.asked !== undefined && finding.asked !== true) {
+    problems.push(`${where}.asked: true, or left out`)
   }
   if (finding.thread !== undefined) {
     checkThread(finding.thread, `${where}.thread`, problems)

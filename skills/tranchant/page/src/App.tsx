@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type DiffState,
+  postAddAsked,
   postAnswer,
+  postAsk,
+  postDeclineAsked,
   postDiscuss,
   postDecisions,
   postStop,
@@ -11,6 +14,7 @@ import {
   useSettings,
   useTracker,
 } from './api'
+import type { AskHandlers } from './AskThread'
 import { BatchBar } from './BatchBar'
 import { parseDiff, placeFindings, type Section, unfoldFile } from './diff'
 import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView'
@@ -398,6 +402,48 @@ export default function App() {
     [reload],
   )
 
+  /** Runs `send`, its refusal in the notice; resolves to whether the server took it. */
+  const asking = useCallback(
+    async (send: () => Promise<unknown>, failed: string) => {
+      let sent = false
+      try {
+        await send()
+        sent = true
+        setNotice(undefined)
+      } catch (failure) {
+        setNotice(failure instanceof Error ? failure.message : failed)
+      }
+      await reload()
+      return sent
+    },
+    [reload],
+  )
+
+  const ask: AskHandlers = useMemo(
+    () => ({
+      onAsk: (path, from, to, text) =>
+        asking(() => postAsk({ path, from, to, text }), 'The question was not sent.'),
+      onFollowUp: (id, text) =>
+        asking(() => postAsk({ id, text }), 'The message was not sent.'),
+      onAdd: async (id, at, finding) => {
+        const added = await asking(
+          () => postAddAsked(id, at, finding),
+          'The finding was not added.',
+        )
+        // The finding takes the question's id: it opens, the thread its discussion.
+        if (added) {
+          setCursor(id)
+          setOpenId(id)
+          setSettled(false)
+        }
+        return added
+      },
+      onDecline: (id, at) =>
+        void asking(() => postDeclineAsked(id, at), 'The answer was not sent.'),
+    }),
+    [asking],
+  )
+
   const stop = useCallback(
     async (id: string) => {
       try {
@@ -734,6 +780,9 @@ export default function App() {
                 onToggle={toggle}
                 unfolds={unfolds}
                 offline={!reachable}
+                questions={payload?.questions}
+                theirs={review.ownership === 'theirs'}
+                ask={ask}
                 onUnfold={(path, from, to) => {
                   // The first finding opens itself: unfolding may move another one first.
                   if (!openState && openId) setOpenId(openId)

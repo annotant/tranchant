@@ -217,6 +217,16 @@ In the page:
   the whole discussion in hand, as a fix does (file locks, **Stop**), its
   current step, its questions and what it changed (**View changes**) in the
   thread; ask again for the next change, even once the finding is fixed.
+- **Ask Tranchant** about lines no finding covers ("can this be null?", "is
+  this lock released on error?"): in the diff, click a line number (Enter
+  with the keyboard), shift-click another in the same file to select a
+  range, and ask. A read-only agent answers in a thread under the last
+  line, its current step live while it reads; ask again in the same thread.
+  When it concludes there is a real problem, its answer proposes a finding
+  on those lines: **Add as a finding** (edit it first) puts it in the
+  review, marked as coming from your question, the thread as its
+  discussion, even once the review is complete; **No, thanks** leaves it
+  out. Nothing is added without that click.
 - The bar at the top selects every finding, a group (To do, Safe to
   auto-fix) or none, then applies one action to the selection (**Issue**
   opens one issue per finding, as drafted); Post all to do posts every open

@@ -98,18 +98,8 @@ function parse(text) {
  * @param {string} id
  */
 export async function readDiscussion(dir, id) {
-  const text = await readText(dir, id)
+  const text = await readOptional(discussionPath(dir, id))
   return text === undefined ? undefined : parse(text)
-}
-
-/** The file's text, or undefined when there is none. @param {string} dir @param {string} id */
-async function readText(dir, id) {
-  try {
-    return await readFile(discussionPath(dir, id), 'utf8')
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return undefined
-    throw error
-  }
 }
 
 /**
@@ -131,37 +121,79 @@ export async function readDiscussions(dir) {
 }
 
 /**
- * Runs `change` on finding `id`'s discussion under its file lock, and writes
- * it. Throwing a StoreRefusal writes nothing; a file it cannot read is
- * refused, never written over.
+ * Runs `change` on the JSON file `file`, a `what` (`discussion`…), under its
+ * lock, and writes it: `read` parses it, `fresh` is what a missing file
+ * starts as. Throwing a
+ * StoreRefusal writes nothing; a file `read` refuses is refused, never
+ * written over.
+ * @template D, T
+ * @param {string} file
+ * @param {string} what
+ * @param {(text: string) => D | undefined} read
+ * @param {() => D} fresh
+ * @param {(data: D) => T | Promise<T>} change
+ * @returns {Promise<T>}
+ */
+export async function changeJsonFile(file, what, read, fresh, change) {
+  await mkdir(path.dirname(file), { recursive: true })
+  return withFileLock(file, async () => {
+    const text = await readOptional(file)
+    const data = text === undefined ? fresh() : read(text)
+    if (data === undefined)
+      throw new StoreRefusal(
+        `${path.basename(path.dirname(file))}/${path.basename(file)} is not a ${what} this Tranchant reads: left as it is`,
+      )
+    const before = JSON.stringify(data)
+    const result = await change(data)
+    // Unchanged, not written: the server would tell the pages for nothing.
+    if (JSON.stringify(data) === before) return result
+    // Written to a temp file first: the server reads it while the agent answers.
+    const temp = `${file}.${process.pid}.tmp`
+    await writeFile(temp, `${JSON.stringify(data, null, 2)}\n`)
+    await rename(temp, file)
+    return result
+  })
+}
+
+/** The file's text, or undefined when there is none. @param {string} file */
+export async function readOptional(file) {
+  try {
+    return await readFile(file, 'utf8')
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+/**
+ * Runs `change` on finding `id`'s discussion under its file lock, and writes it.
  * @template T
  * @param {string} dir
  * @param {string} id
  * @param {(discussion: Discussion) => T | Promise<T>} change
  * @returns {Promise<T>}
  */
-async function changeDiscussion(dir, id, change) {
-  const file = discussionPath(dir, id)
-  await mkdir(path.dirname(file), { recursive: true })
-  return withFileLock(file, async () => {
-    const text = await readText(dir, id)
-    const discussion =
-      text === undefined
-        ? { version: /** @type {const} */ (1), messages: [] }
-        : parse(text)
-    if (!discussion)
-      throw new StoreRefusal(
-        `discussions/${id}.json is not a discussion this Tranchant reads: left as it is`,
-      )
-    const before = JSON.stringify(discussion)
-    const result = await change(discussion)
-    // Unchanged, not written: the server would tell the pages for nothing.
-    if (JSON.stringify(discussion) === before) return result
-    // Written to a temp file first: the server reads it while the agent answers.
-    const temp = `${file}.${process.pid}.tmp`
-    await writeFile(temp, `${JSON.stringify(discussion, null, 2)}\n`)
-    await rename(temp, file)
-    return result
+const changeDiscussion = (dir, id, change) =>
+  changeJsonFile(
+    discussionPath(dir, id),
+    'discussion',
+    parse,
+    () => ({ version: /** @type {const} */ (1), messages: [] }),
+    change,
+  )
+
+/**
+ * A question on lines of the diff became finding `id`: its thread becomes
+ * the finding's discussion, unless the finding has one already.
+ * @param {string} dir
+ * @param {string} id
+ * @param {Message[]} messages
+ */
+export function seedDiscussion(dir, id, messages) {
+  return changeDiscussion(dir, id, (discussion) => {
+    if (discussion.messages.length) return false
+    discussion.messages.push(...messages)
+    return true
   })
 }
 

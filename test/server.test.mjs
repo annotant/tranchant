@@ -266,12 +266,14 @@ test('answers the review, its decisions, its runs and the heads', async () => {
     'discussions',
     'findings',
     'head',
+    'questions',
     'review',
     'reviewers',
     'runs',
   ])
   assert.deepEqual(body.reviewers, [])
   assert.deepEqual(body.discussions, {})
+  assert.deepEqual(body.questions, {})
   assert.equal(body.review.id, main.review.id)
   assert.equal(body.review.findings.length, 5)
   assert.deepEqual(body.findings, {})
@@ -1515,6 +1517,344 @@ test('a question left waiting is asked again at start; an agent that ended answe
   assert.equal((await run(process.execPath, args)).stdout, '')
   const payload = await json(await fetch(`${server.base}/api/review`))
   const last = payload.discussions['f-02'].messages.at(-1)
+  assert.equal(last.failed, true)
+  assert.equal(last.by, 'agent')
+})
+
+/**
+ * A project whose change rewrites line 15 of `long.ts`, at its head commit.
+ * @param {any} t
+ */
+async function changedProject(t) {
+  const project = await tempDir(t, 'tranchant-ask-')
+  await writeFile(path.join(project, 'long.ts'), numbered(30, 0))
+  await gitIn(project, 'init', '-q', '-b', 'main')
+  await gitIn(project, 'add', '-A')
+  await gitIn(project, 'commit', '-q', '-m', 'base')
+  await gitIn(project, 'checkout', '-q', '-b', 'ask')
+  await writeFile(path.join(project, 'long.ts'), numbered(30, 15))
+  await gitIn(project, 'commit', '-q', '-am', 'head')
+  return { project, headSha: await gitIn(project, 'rev-parse', 'HEAD') }
+}
+
+test('a question on lines prints ASK; its answer proposes a finding the reviewer adds, on a complete review', async (t) => {
+  const { project, headSha } = await changedProject(t)
+  const server = await startServer(t, {
+    name: 'ours',
+    overrides: { project, base: 'main', headSha, verify: true },
+  })
+  /** @param {string} route @param {unknown} body */
+  const send = (route, body) =>
+    fetch(`${server.base}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const reviewNow = async () => json(await fetch(`${server.base}/api/review`))
+  /** @param {string} id @param {unknown} answer */
+  const reply = (id, answer) =>
+    run(process.execPath, [REPLY, id, '--question', '--review', server.dir], {
+      input: typeof answer === 'string' ? answer : JSON.stringify(answer),
+    })
+
+  // Only lines of a text file of the diff, as the head has them.
+  assert.equal(
+    (await send('/api/ask', { path: 'secret.ts', from: 1, to: 1, text: 'x' })).status,
+    404,
+  )
+  assert.equal(
+    (await send('/api/ask', { path: 'long.ts', from: 3, to: 2, text: 'x' })).status,
+    400,
+  )
+  assert.equal(
+    (await send('/api/ask', { path: 'long.ts', from: 29, to: 31, text: 'x' })).status,
+    409,
+  )
+  assert.equal(
+    (await send('/api/ask', { path: 'long.ts', from: 1, to: 81, text: 'x' })).status,
+    409,
+  )
+  assert.equal(
+    (await send('/api/ask', { path: 'long.ts', from: 14, to: 16, text: ' ' })).status,
+    409,
+  )
+
+  const printed = server.output().length
+  const asked = await send('/api/ask', {
+    path: 'long.ts',
+    from: 14,
+    to: 16,
+    text: ' Can this be null? ',
+  })
+  assert.equal(asked.status, 200)
+  const { id, question } = await json(asked)
+  assert.match(id, /^q-[0-9a-f]{8}$/)
+  assert.deepEqual(question.anchor, {
+    path: 'long.ts',
+    startLine: 14,
+    lines: ['line 14', 'changed 15', 'line 16'],
+  })
+  assert.equal(await server.nextLine('ASK', printed), `ASK ${id}`)
+  const again = await send('/api/ask', { id, text: 'And?' })
+  assert.equal(again.status, 409)
+  assert.deepEqual(await json(again), {
+    error: 'the agent is still answering the last message',
+  })
+  assert.equal((await send('/api/ask', { id: 'q-00000000', text: 'x' })).status, 404)
+
+  // Its agent's steps are the question's progress, never a review agent's.
+  const agents = path.join(server.dir, 'reviewers')
+  await mkdir(agents, { recursive: true })
+  const step = { at: 1, kind: 'read', label: 'long.ts', state: 'done' }
+  await writeFile(path.join(agents, `qs-${id}.jsonl`), `${JSON.stringify(step)}\n`)
+  let payload = await reviewNow()
+  assert.deepEqual(payload.reviewers, [])
+  assert.equal(payload.questions[id].step.label, 'long.ts')
+  assert.equal(payload.questions[id].messages[0].text, 'Can this be null?')
+
+  // A proposal is checked as any finding: its line among those asked about, its fields whole.
+  const proposed = {
+    title: 'Line 15 is read before it is set',
+    topic: 'Bugs',
+    line: 15,
+    problem: 'It reads `changed` before the guard.',
+    why: 'The total is then wrong.',
+    fix: 'Move the guard up.',
+  }
+  const outside = await reply(id, { text: 'Yes.', finding: { ...proposed, line: 20 } })
+  assert.equal(outside.code, 2)
+  assert.equal(
+    outside.stdout,
+    'REPLY_REFUSED finding.line: 20 is outside the lines asked about, 14 to 16\n',
+  )
+  const { why: _why, ...partial } = proposed
+  assert.equal(
+    (await reply(id, { text: 'Yes.', finding: partial })).stdout,
+    'REPLY_REFUSED finding.why: a text is required\n',
+  )
+  assert.equal((await reply(id, 'not json')).code, 2)
+  // A discussing agent's reply never lands on a question.
+  assert.equal(
+    (
+      await run(process.execPath, [REPLY, id, '--review', server.dir], {
+        input: '{"text":"x"}',
+      })
+    ).code,
+    2,
+  )
+  const replied = await reply(id, {
+    text: 'It can: see `long.ts:15`.',
+    finding: proposed,
+  })
+  assert.equal(replied.stdout, `REPLIED ${id}\n`, replied.stderr)
+  payload = await reviewNow()
+  const answer = payload.questions[id].messages[1]
+  assert.deepEqual(answer.proposal.finding, { ...proposed, bucket: 'review' })
+  assert.equal(payload.questions[id].step, undefined)
+
+  // Added as the reviewer edited it, on a complete review: a finding, its thread its discussion.
+  assert.equal(payload.review.status ?? 'complete', 'complete')
+  assert.equal(
+    (await send('/api/ask/add', { id, at: 'not-it', finding: proposed })).status,
+    409,
+  )
+  const added = await send('/api/ask/add', {
+    id,
+    at: answer.at,
+    finding: { ...proposed, title: 'Line 15 reads too early' },
+  })
+  assert.equal(added.status, 200, JSON.stringify(await added.clone().json()))
+  payload = await reviewNow()
+  const finding = payload.review.findings.find((/** @type {any} */ one) => one.id === id)
+  assert.equal(finding.title, 'Line 15 reads too early')
+  assert.equal(finding.asked, true)
+  assert.equal(finding.line, 15)
+  assert.deepEqual(finding.excerpt, {
+    startLine: 14,
+    lines: ['line 14', 'changed 15', 'line 16'],
+  })
+  assert.deepEqual(
+    payload.discussions[id].messages.map((/** @type {any} */ one) => one.text),
+    ['Can this be null?', 'It can: see `long.ts:15`.'],
+  )
+  assert.equal(payload.discussions[id].messages[1].proposal, undefined)
+  assert.equal(payload.questions[id].finding, id)
+  // It goes on in the finding's discussion; no verifier second-guesses it.
+  assert.equal((await send('/api/ask', { id, text: 'Then?' })).status, 409)
+  assert.equal(
+    (await send('/api/ask/add', { id, at: answer.at, finding: proposed })).status,
+    409,
+  )
+  assert.doesNotMatch(server.output(), new RegExp(`LANDED ${id}`))
+})
+
+/** Twenty lines, `line <n>`, but line 15. @param {string} fifteen */
+const twenty = (/** @type {string} */ fifteen) =>
+  Array.from({ length: 20 }, (_, at) => (at === 14 ? fifteen : `line ${at + 1}`)).join(
+    '\n',
+  ) + '\n'
+
+test('a finding added while a verified review runs gets no verifier; an add stopped halfway is finished by the next', async (t) => {
+  const project = await tempDir(t, 'tranchant-ask-')
+  await writeFile(path.join(project, 'long.ts'), twenty('line 15'))
+  await gitIn(project, 'init', '-q', '-b', 'main')
+  await gitIn(project, 'add', '-A')
+  await gitIn(project, 'commit', '-q', '-m', 'base')
+  await gitIn(project, 'checkout', '-q', '-b', 'ask')
+  // A minified line: longer than an excerpt holds, with a control character.
+  await writeFile(path.join(project, 'long.ts'), twenty(`${'x'.repeat(500)}\u0001`))
+  await gitIn(project, 'commit', '-q', '-am', 'head')
+  const headSha = await gitIn(project, 'rev-parse', 'HEAD')
+  const server = await startServer(t, {
+    name: 'ours',
+    overrides: { project, base: 'main', headSha, verify: true, status: 'reviewing' },
+  })
+  /** @param {string} route @param {unknown} body */
+  const send = (route, body) =>
+    fetch(`${server.base}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const { id, question } = await json(
+    await send('/api/ask', { path: 'long.ts', from: 15, to: 15, text: 'Why?' }),
+  )
+  assert.deepEqual(question.anchor.lines, ['x'.repeat(400)])
+  const proposed = { title: 'Minified', topic: 'Bugs', problem: 'p', why: 'w', fix: 'f' }
+  // A field past what the review keeps is refused, never cut.
+  const long = await run(
+    process.execPath,
+    [REPLY, id, '--question', '--review', server.dir],
+    {
+      input: JSON.stringify({
+        text: 'Yes.',
+        finding: { ...proposed, fix: 'f'.repeat(4001) },
+      }),
+    },
+  )
+  assert.equal(long.stdout, 'REPLY_REFUSED finding.fix: up to 4000 characters\n')
+  const replied = await run(
+    process.execPath,
+    [REPLY, id, '--question', '--review', server.dir],
+    { input: JSON.stringify({ text: 'Yes.', finding: proposed }) },
+  )
+  assert.equal(replied.stdout, `REPLIED ${id}\n`, replied.stderr)
+  const { at } = (await json(await fetch(`${server.base}/api/review`))).questions[id]
+    .messages[1]
+
+  // The discussion cannot be written: the finding landed, the question still offers it.
+  const discussion = path.join(server.dir, 'discussions', `${id}.json`)
+  await writeFile(discussion, '{"version":2,"messages":[]}')
+  const events = await listen(server.base)
+  try {
+    const stuck = await send('/api/ask/add', { id, at, finding: proposed })
+    assert.equal(stuck.status, 409)
+    await events.changed(id)
+  } finally {
+    events.close()
+  }
+  await rm(discussion)
+  // Added again, edited or declined: the add is finished as it was.
+  const declined = await send('/api/ask/decline', { id, at })
+  assert.equal(declined.status, 200)
+  const payload = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(payload.questions[id].finding, id)
+  assert.equal(payload.questions[id].messages[1].declined, undefined)
+  assert.equal(payload.discussions[id].messages.length, 2)
+  const finding = payload.review.findings.find((/** @type {any} */ one) => one.id === id)
+  assert.equal(finding.asked, true)
+  // The others get their verifier; the reviewer's own never does.
+  await server.nextLine('LANDED f-01', 0)
+  assert.doesNotMatch(server.output(), new RegExp(`LANDED ${id}`))
+})
+
+test('No, thanks declines a proposal, and the thread goes on; theirs needs the comment', async (t) => {
+  const { project, headSha } = await changedProject(t)
+  const first = await startServer(t, {
+    name: 'theirs',
+    overrides: {
+      project,
+      base: 'main',
+      headSha,
+      id: 'e3f4a5b6-7c8d-4e9f-8a0b-1c2d3e4f5a6b',
+      // Its diff is the branch's, not the fixture MR's.
+      mr: undefined,
+    },
+  })
+  /** @param {string} route @param {unknown} body */
+  const send = (route, body) =>
+    fetch(`${first.base}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const { id } = await json(
+    await send('/api/ask', { path: 'long.ts', from: 15, to: 15, text: 'Why?' }),
+  )
+  /** @param {unknown} answer */
+  const reply = (answer) =>
+    run(process.execPath, [REPLY, id, '--question', '--review', first.dir], {
+      input: JSON.stringify(answer),
+    })
+  const proposed = {
+    title: 'Line 15 is read before it is set',
+    topic: 'Code Quality',
+    problem: 'p',
+    why: 'w',
+    fix: 'f',
+  }
+  // On a theirs review, the comment to post is required.
+  assert.equal(
+    (await reply({ text: 'Yes.', finding: proposed })).stdout,
+    `REPLY_REFUSED finding.comment: required when ownership is theirs\n`,
+  )
+  assert.equal(
+    (await reply({ text: 'Yes.', finding: { ...proposed, comment: 'c' } })).code,
+    0,
+  )
+  let question = (await json(await fetch(`${first.base}/api/review`))).questions[id]
+  const answer = question.messages.at(-1)
+  assert.deepEqual(answer.proposal.finding, {
+    ...proposed,
+    comment: 'c',
+    bucket: 'auto',
+    line: 15,
+  })
+  const declined = await send('/api/ask/decline', { id, at: answer.at })
+  assert.equal(declined.status, 200)
+  question = (await json(declined)).question
+  assert.equal(question.messages.at(-1).declined, true)
+  assert.equal(
+    (await send('/api/ask/add', { id, at: answer.at, finding: proposed })).status,
+    409,
+  )
+
+  // Declined, the thread goes on.
+  assert.equal((await send('/api/ask', { id, text: 'Sure?' })).status, 200)
+})
+
+test('a question left waiting is asked again at start; its agent that ended answers it as failed', async (t) => {
+  const { project, headSha } = await changedProject(t)
+  const imported = await importReview(t, 'ours', stateDir, {
+    project,
+    base: 'main',
+    headSha,
+    id: 'f4a5b6c7-8d9e-4f0a-9b1c-2d3e4f5a6b7c',
+  })
+  const { ask } = await import('../skills/tranchant/scripts/lib/question.mjs')
+  const { id } = await ask(
+    imported.dir,
+    { path: 'long.ts', startLine: 15, lines: ['changed 15'] },
+    'Why?',
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  assert.equal(await server.nextLine(`ASK ${id}`, 0), `ASK ${id}`)
+  const args = [REPLY, id, '--question', '--review', imported.dir, '--ended']
+  assert.equal((await run(process.execPath, args)).stdout, `UNANSWERED ${id}\n`)
+  assert.equal((await run(process.execPath, args)).stdout, '')
+  const last = (await json(await fetch(`${server.base}/api/review`))).questions[
+    id
+  ].messages.at(-1)
   assert.equal(last.failed, true)
   assert.equal(last.by, 'agent')
 })

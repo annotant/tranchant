@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 // reply.mjs <id> --review <dir>, the answer as JSON on stdin
 // reply.mjs <id> --review <dir> --ended
+// reply.mjs <id> --question --review <dir> [--ended]
 // A discussing agent's answer to the reviewer's question on finding <id>:
 // `{ "text": "…", "fix"?: "…", "comment"?: "…", "drop"?: "…" }`, the text in
 // Markdown and what it proposes the reviewer carries over to a decision.
 // Prints `REPLIED <id>`; a refusal prints `REPLY_REFUSED <reason>` and exits 2.
 // `--ended`: the hooks, once the agent ended; a question it left waiting gets
 // a failed answer, and `UNANSWERED <id>` is printed.
+// `--question`: the asking agent's answer to the reviewer's question on lines
+// of the diff, <id> the question's: `{ "text": "…", "finding"?: { … } }`, the
+// finding it proposes checked as the review would check it.
 import { parseArgs } from 'node:util'
 import { textOrStdin } from './lib/cli.mjs'
 import { endUnanswered, reply } from './lib/discussion.mjs'
+import * as question from './lib/question.mjs'
 import { oneLine } from './lib/format.mjs'
 import { StoreRefusal } from './lib/store.mjs'
 
@@ -26,7 +31,11 @@ let parsed
 try {
   parsed = parseArgs({
     allowPositionals: true,
-    options: { review: { type: 'string' }, ended: { type: 'boolean' } },
+    options: {
+      review: { type: 'string' },
+      ended: { type: 'boolean' },
+      question: { type: 'boolean' },
+    },
   })
 } catch (error) {
   console.error(`reply.mjs: ${error instanceof Error ? error.message : String(error)}`)
@@ -36,13 +45,19 @@ const { values, positionals } = parsed
 const [id] = positionals
 if (!values.review || !id || !/^[\w-]{1,64}$/.test(id)) {
   console.error(
-    'usage: reply.mjs <id> --review <dir>, the answer as JSON on stdin, or --ended',
+    'usage: reply.mjs <id> [--question] --review <dir>, the answer as JSON on stdin, or --ended',
   )
   process.exit(2)
 }
 
+const asked = values.question === true
+const shape = asked
+  ? '{ "text": "…", "finding"? }'
+  : '{ "text": "…", "fix"?, "comment"?, "drop"? }'
+
 if (values.ended) {
-  if (await endUnanswered(values.review, id)) console.log(`UNANSWERED ${id}`)
+  const ended = asked ? question.endUnanswered : endUnanswered
+  if (await ended(values.review, id)) console.log(`UNANSWERED ${id}`)
   process.exit(0)
 }
 
@@ -52,12 +67,12 @@ let answer
 try {
   answer = JSON.parse(text)
 } catch {
-  refuse('the answer is not JSON: { "text": "…", "fix"?, "comment"?, "drop"? }')
+  refuse(`the answer is not JSON: ${shape}`)
 }
 if (!answer || typeof answer !== 'object' || Array.isArray(answer))
-  refuse('the answer is a JSON object: { "text": "…", "fix"?, "comment"?, "drop"? }')
+  refuse(`the answer is a JSON object: ${shape}`)
 try {
-  await reply(values.review, id, answer)
+  await (asked ? question.reply : reply)(values.review, id, answer)
   console.log(`REPLIED ${id}`)
 } catch (error) {
   if (!(error instanceof StoreRefusal)) throw error

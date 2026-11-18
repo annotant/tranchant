@@ -6,8 +6,10 @@
 // time), MOVED or ISSUE_FAILED for the issues it opens (issue.mjs, in the
 // same queue); LANDED for each finding a verifier must check, while a review whose
 // findings are verified (`verify`) runs; DISCUSS for each question the
-// reviewer asks about a finding. It watches the review folder, its
-// findings, its run files and its review agents' (reviewers/), and
+// reviewer asks about a finding; ASK for each question they ask about lines
+// of the diff. It watches the review folder, its
+// findings, its run files, its review agents' (reviewers/), its discussions
+// and its questions, and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
 // It computes the change's diff (/api/diff) once, with git, for the page's main view,
@@ -30,6 +32,7 @@ import { errorCode } from './lib/errors.mjs'
 import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
 import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
 import { readDiscussions, say, syncChange, waitsForAnswer } from './lib/discussion.mjs'
+import * as questions from './lib/question.mjs'
 import { ImportRefusal, importsDir, listImports, useImport } from './lib/imports.mjs'
 import { describeRecipe } from './lib/lens.mjs'
 import {
@@ -98,8 +101,9 @@ const runsDir = path.join(dir, 'runs')
 const findingsDir = path.join(dir, 'findings')
 const agentsDir = path.join(dir, 'reviewers')
 const discussionsDir = path.join(dir, 'discussions')
-/** A discussing agent's name: its steps are the discussion's, not a review agent's. */
-const DISCUSSER = /^ds-/
+const questionsDir = path.join(dir, 'questions')
+/** A discussing or asking agent's name: its steps are its thread's, not a review agent's. */
+const DISCUSSER = /^(?:ds|qs)-/
 
 /** The server's own origins, once it listens: the page's requests carry one of them. */
 const origins = new Set()
@@ -916,15 +920,29 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
     // Read anew: findings land and the status flips while the review runs.
-    const [{ review: latest, decisions }, runs, agents, discussions, current, lenses] =
-      await Promise.all([
-        store.readAll(),
-        store.runs(),
-        readReviewAgents(dir),
-        readDiscussions(dir),
-        currentHead(),
-        readLensesStep(),
-      ])
+    const [
+      { review: latest, decisions },
+      runs,
+      agents,
+      discussions,
+      asked,
+      current,
+      lenses,
+    ] = await Promise.all([
+      store.readAll(),
+      store.runs(),
+      readReviewAgents(dir),
+      readDiscussions(dir),
+      questions.readQuestions(dir),
+      currentHead(),
+      readLensesStep(),
+    ])
+    /** While it answers: its agent's last step, the page's progress line. @param {string} name */
+    const stepOf = (name) => {
+      // The file holds every agent the thread had: an end is a past one's.
+      const last = agents.find((agent) => agent.name === name)?.steps.at(-1)
+      return last && last.kind !== 'end' ? last : undefined
+    }
     return send(res, 200, {
       review: latest,
       ...(lenses && { lenses }),
@@ -933,14 +951,14 @@ async function handle(req, res) {
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
       discussions: Object.fromEntries(
         Object.entries(discussions).map(([id, discussion]) => {
-          // While it answers: its agent's last step, the page's progress line.
-          const steps = waitsForAnswer(discussion)
-            ? agents.find((agent) => agent.name === `ds-${id}`)?.steps
-            : undefined
-          // The file holds every agent the thread had: an end is a past one's.
-          const last = steps?.at(-1)
-          const step = last && last.kind !== 'end' ? last : undefined
+          const step = waitsForAnswer(discussion) ? stepOf(`ds-${id}`) : undefined
           return [id, { ...discussion, ...(step && { step }) }]
+        }),
+      ),
+      questions: Object.fromEntries(
+        Object.entries(asked).map(([id, question]) => {
+          const step = questions.waitsForAnswer(question) ? stepOf(`qs-${id}`) : undefined
+          return [id, { ...question, ...(step && { step }) }]
         }),
       ),
       head: { reviewed: latest.headSha, current },
@@ -1093,6 +1111,74 @@ async function handle(req, res) {
     const discussion = await say(dir, input.id, text(input.text) ?? '', { change })
     print(`${change ? 'FIX' : 'DISCUSS'} ${input.id}`)
     return send(res, 200, { discussion })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/ask') {
+    const input = await readJson(req)
+    if (input?.id !== undefined) {
+      if (typeof input.id !== 'string' || !ID.test(input.id))
+        return send(res, 400, { error: 'id is a question id' })
+      if (!(await questions.readQuestion(dir, input.id)))
+        return send(res, 404, { error: `no question ${input.id} in the review` })
+      const question = await questions.askAgain(dir, input.id, input.text)
+      print(`ASK ${input.id}`)
+      return send(res, 200, { id: input.id, question })
+    }
+    const file = typeof input?.path === 'string' ? input.path : ''
+    const { from, to } = input ?? {}
+    if (
+      !file ||
+      !Number.isSafeInteger(from) ||
+      !Number.isSafeInteger(to) ||
+      from < 1 ||
+      to < from
+    )
+      return send(res, 400, {
+        error: 'path, and from and to as line numbers, from first',
+      })
+    if (to - from + 1 > questions.MAX_ASKED_LINES)
+      return send(res, 409, {
+        error: `a question is on ${questions.MAX_ASKED_LINES} lines at most`,
+      })
+    let read
+    try {
+      // The lines as the head has them, never the page's: the agent and the finding read these.
+      read = await linesOf(file, from, to)
+    } catch (error) {
+      if (error instanceof OutsideFile || error instanceof DiffUnavailable)
+        return send(res, 409, { error: error.message })
+      throw error
+    }
+    if (!read) return send(res, 404, { error: `${file} is not a text file of the diff` })
+    if (read.to < to)
+      return send(res, 409, {
+        error: `${file} has ${read.total} lines: ${to} is past its end`,
+      })
+    const asked = await questions.ask(
+      dir,
+      { path: file, startLine: from, lines: read.lines },
+      input.text,
+    )
+    print(`ASK ${asked.id}`)
+    return send(res, 200, asked)
+  }
+
+  if (
+    req.method === 'POST' &&
+    (url.pathname === '/api/ask/add' || url.pathname === '/api/ask/decline')
+  ) {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id))
+      return send(res, 400, { error: 'id is a question id' })
+    if (typeof input.at !== 'string' || !input.at)
+      return send(res, 400, { error: 'at names the answer whose proposal it is' })
+    if (!(await questions.readQuestion(dir, input.id)))
+      return send(res, 404, { error: `no question ${input.id} in the review` })
+    const question =
+      url.pathname === '/api/ask/add'
+        ? await questions.addAsked(dir, input.id, input.at, input.finding)
+        : await questions.decline(dir, input.id, input.at)
+    return send(res, 200, { id: input.id, question })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/recipe/use') {
@@ -1351,6 +1437,15 @@ async function changes() {
     )
     next.set(id, `${next.get(id) ?? ''}\ndiscussion ${size}`)
   }
+  for (const name of await readdir(questionsDir).catch(() => [])) {
+    const id = /^([\w-]{1,64})\.json$/.exec(name)?.[1]
+    if (!id) continue
+    const size = await stat(path.join(questionsDir, name)).then(
+      (file) => `${file.size} ${file.mtimeMs}`,
+      () => '',
+    )
+    next.set(id, `${next.get(id) ?? ''}\nquestion ${size}`)
+  }
   const files = await readdir(runsDir).catch(() => [])
   for (const name of files) {
     const id = name.replace(/(?:\.history)?\.jsonl$/, '')
@@ -1410,7 +1505,8 @@ const landed = new Set()
 function announceLanded(latest) {
   if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing') return
   for (const finding of latest.findings) {
-    if (finding.verified === true || landed.has(finding.id)) continue
+    // The reviewer's own, from their question: no verifier second-guesses it.
+    if (finding.verified === true || finding.asked || landed.has(finding.id)) continue
     landed.add(finding.id)
     print(`LANDED ${finding.id}`)
   }
@@ -1568,6 +1664,7 @@ function watchFolders() {
     [findingsDir, changeSeen],
     [agentsDir, changeSeen],
     [discussionsDir, changeSeen],
+    [questionsDir, changeSeen],
     [path.dirname(PAGE), pageChanged],
     // Made by the first write: watched from then on, as findings/ is.
     [SETTINGS_DIR, settingsChanged],
@@ -1660,6 +1757,12 @@ async function resumeQueued() {
     // What a change left while no server ran, or a script failed to write.
     else await settleDiscussion(id)
   }
+  const asked = await questions.readQuestions(dir).catch((error) => {
+    console.error(`tranchant server: questions unreadable: ${oneLine(String(error))}`)
+    return {}
+  })
+  for (const [id, question] of Object.entries(asked))
+    if (questions.waitsForAnswer(question)) print(`ASK ${id}`)
 }
 
 server.listen(port, '127.0.0.1', async () => {
@@ -1672,6 +1775,7 @@ server.listen(port, '127.0.0.1', async () => {
   await mkdir(findingsDir, { recursive: true })
   await mkdir(agentsDir, { recursive: true })
   await mkdir(discussionsDir, { recursive: true })
+  await mkdir(questionsDir, { recursive: true })
   await refreshNext(true)
   console.log(
     `READY http://127.0.0.1:${listening} review=${review.id} project=${project}`,

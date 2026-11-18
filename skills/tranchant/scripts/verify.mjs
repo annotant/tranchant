@@ -55,7 +55,8 @@ if (values.pending) {
     return refuse(error.message)
   })
   for (const finding of review.findings) {
-    if (finding.verified !== true) console.log(`UNVERIFIED ${finding.id}`)
+    if (finding.verified !== true && !finding.asked)
+      console.log(`UNVERIFIED ${finding.id}`)
   }
   process.exit(0)
 }

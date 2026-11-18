@@ -42,7 +42,7 @@ export interface LensesProgress {
 }
 
 /** The seven topics, in the order the page lists them within a bucket. */
-const TOPICS = [
+export const TOPICS = [
   'Bugs',
   'Security & Permissions',
   'Breaking Changes',
@@ -129,6 +129,8 @@ export interface Finding {
   verified?: boolean
   /** The PR/MR thread it comes from (`/tranchant comments`). */
   thread?: Thread
+  /** Born from the reviewer's question on lines of the diff: no verifier checks it. */
+  asked?: boolean
 }
 
 interface DiffRefs {
@@ -326,6 +328,22 @@ interface Proposal {
   comment?: string
   /** The reason to drop. */
   drop?: string
+  /** A question on lines of the diff: the finding the agent proposes to add. */
+  finding?: ProposedFinding
+}
+
+/** What the agent answering a question on lines proposes to add to the review. */
+export interface ProposedFinding {
+  title: string
+  topic: string
+  bucket: Bucket
+  tag?: Tag
+  /** Within the question's lines. */
+  line: number
+  problem: string
+  why: string
+  fix: string
+  comment?: string
 }
 
 export interface Message {
@@ -341,6 +359,8 @@ export interface Message {
   /** The result of a change: the runs it took, if any started, and the state they left the finding in. */
   runs?: string[]
   outcome?: State
+  /** On a question's answer: the reviewer said no to the finding it proposed. */
+  declined?: true
 }
 
 /** A finding's discussion with an agent, as `/api/review` sends it. */
@@ -349,6 +369,34 @@ export interface Discussion {
   /** While the agent answers: its last step. */
   step?: Step
 }
+
+/** The lines a question is about: new side, at the head. */
+interface QuestionAnchor {
+  path: string
+  startLine: number
+  lines: string[]
+}
+
+/** A question the reviewer asked about lines of the diff, and the agent's answers. */
+export interface LineQuestion {
+  anchor: QuestionAnchor
+  messages: Message[]
+  /** Once added as a finding: its id. The thread is then that finding's discussion. */
+  finding?: string
+  /** While the agent answers: its last step. */
+  step?: Step
+}
+
+/** The last line a question is about: its thread shows under it. */
+export const endLineOf = (anchor: QuestionAnchor) =>
+  anchor.startLine + anchor.lines.length - 1
+
+/** The most lines one question may be about, as the server bounds it. */
+export const MAX_ASK_LINES = 80
+/** What the server takes of a question, and of each field of a proposed finding. */
+export const MAX_ASK_TEXT = 4000
+/** A finding's title, at most. */
+export const MAX_TITLE = 120
 
 /** What `GET /api/review` answers. */
 export interface ReviewPayload {
@@ -362,6 +410,8 @@ export interface ReviewPayload {
   lenses?: LensesProgress
   /** By finding id; absent from older servers. */
   discussions?: Record<string, Discussion>
+  /** The reviewer's questions on lines of the diff, by question id; absent from older servers. */
+  questions?: Record<string, LineQuestion>
   head: { reviewed: string; current: string | null }
 }
 
@@ -439,7 +489,9 @@ export const tagOf = (finding: Pick<Finding, 'tag'>): Tag => finding.tag ?? 'con
 export const unverifiedIds = (review: Pick<Review, 'verify' | 'findings'>) =>
   new Set(
     review.verify
-      ? review.findings.filter((one) => one.verified !== true).map((one) => one.id)
+      ? review.findings
+          .filter((one) => one.verified !== true && one.asked !== true)
+          .map((one) => one.id)
       : [],
   )
 

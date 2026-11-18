@@ -40,6 +40,10 @@ interface Props {
   canStop?: boolean
   /** The form answering the question the change's agent asked, shown under it. */
   asking?: ReactNode
+  /** The thread's heading: a finding's discussion by default. */
+  title?: string
+  /** Shown under the last message, unless it failed: a question's proposed finding. */
+  below?: ReactNode
   /** Resolves to whether the server took the message: the draft stays until it does. */
   onSend: (text: string, change?: boolean) => Promise<boolean>
   onStop?: () => void
@@ -398,6 +402,8 @@ export function Discussion(props: Props) {
     underway = false,
     canStop = false,
     asking,
+    title = 'Discussion',
+    below,
     onSend,
     onStop,
   } = props
@@ -425,9 +431,9 @@ export function Discussion(props: Props) {
   }
 
   return (
-    <section className="tr-dsc" aria-label="Discussion">
+    <section className="tr-dsc" aria-label={title}>
       <div className="tr-dsc-head">
-        <h3>Discussion</h3>
+        <h3>{title}</h3>
         <span className="tr-dsc-note">
           {canChange || changing
             ? 'Questions: read-only agent · Change: makes it'
@@ -550,6 +556,7 @@ export function Discussion(props: Props) {
                   {writable && message === last && !message.failed && (
                     <Proposals message={message} {...props} />
                   )}
+                  {message === last && !message.failed && below}
                   {!writable && replyAside && message === last && !message.failed && (
                     <Proposals
                       message={message}
