@@ -459,6 +459,25 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-row--marked .tr-text { background: var(--tr-mark-line); }
 .tr-row--anchor .tr-gutter { color: var(--tr-text); font-weight: 600; box-shadow: inset 3px 0 0 var(--tr-accent); }
 .tr-code mark { background: var(--tr-mark); color: inherit; border-radius: 2px; }
+/* A line number that picks its line: the gutter's look, a button's focus. */
+.tr-gutter--pick { display: block; width: 100%; border: 0; font: inherit; cursor: pointer; }
+.tr-gutter--pick:hover { color: var(--tr-text); }
+.tr-gutter--pick:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: -2px; }
+.tr-row--picked .tr-gutter { background: var(--tr-accent-weak); color: var(--tr-accent); }
+.tr-row--picked .tr-text { background: color-mix(in srgb, var(--tr-accent) 10%, transparent); }
+/* Asking about lines: the bar under the last line picked, then each question's thread. */
+.tr-qa-bar { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px 6px calc(var(--tr-digits, 2ch) + 3ch); font-family: var(--tr-font); background: var(--tr-bg); border-top: 1px solid var(--tr-border); border-bottom: 1px solid var(--tr-border); }
+.tr-qa-bar-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.tr-qa-bar-what { font-weight: 600; }
+.tr-qa { display: flex; flex-direction: column; gap: 10px; padding: 10px 8px 10px calc(var(--tr-digits, 2ch) + 3ch); font-family: var(--tr-font); background: var(--tr-bg); border-top: 1px solid var(--tr-border); border-bottom: 1px solid var(--tr-border); white-space: normal; }
+.tr-file > .tr-qa { padding-left: 0; border: 0; }
+.tr-qa-proposal { border-color: color-mix(in srgb, var(--tr-accent) 40%, var(--tr-border)); }
+.tr-qa-proposal .tr-proposal-text { gap: 8px; }
+.tr-qa-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tr-qa-form { gap: 8px; }
+.tr-qa-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.tr-qa-field { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 160px; font-size: 12px; color: var(--tr-muted); }
+.tr-qa-field .tr-input { flex: none; min-width: 0; color: var(--tr-text); }
 .tr-hunk + .tr-hunk { border-top: 1px solid var(--tr-border); }
 .tr-gap {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px 14px; padding: 3px 12px;

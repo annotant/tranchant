@@ -516,6 +516,49 @@ test("a discussing agent's hooks let it read and answer on its own finding only"
   assert.match(await pre(`node ${reply} f-01 --review ${dir} --ended`), /never --ended/)
 })
 
+test("an asking agent's hooks let it answer its own question only, with --question", async (t) => {
+  const { dir } = await live(t, 'agent-q')
+  const project = await tempDir(t)
+  const reply = path.join(SCRIPTS, 'reply.mjs')
+  /** @param {string} name @param {string} command */
+  const pre = async (name, command) => {
+    const ran = await run(
+      process.execPath,
+      [HOOK, 'pre', '--reviewer', name, '--review', dir, '--project', project],
+      { input: JSON.stringify(bash(command)), env: { TRANCHANT_STATE_DIR: stateDir } },
+    )
+    return ran.stdout
+      ? JSON.parse(ran.stdout).hookSpecificOutput.permissionDecisionReason
+      : undefined
+  }
+  const answer = `node ${reply} q-1a2b3c4d --question --review ${dir} <<'EOF'\n{"text":"x"}\nEOF`
+  assert.equal(await pre('qs-q-1a2b3c4d', answer), undefined)
+  assert.match(
+    await pre('qs-q-1a2b3c4d', `node ${reply} q-1a2b3c4d --review ${dir}`),
+    /--question/,
+  )
+  assert.match(
+    await pre('qs-q-1a2b3c4d', `node ${reply} q-99999999 --question --review ${dir}`),
+    /on q-1a2b3c4d only/,
+  )
+  assert.match(
+    await pre('qs-q-1a2b3c4d', `node ${SCRIPTS}add.mjs --review ${dir}`),
+    /reply\.mjs/,
+  )
+  assert.match(
+    await pre(
+      'qs-q-1a2b3c4d',
+      `node ${reply} q-1a2b3c4d --question --review ${dir} --ended`,
+    ),
+    /never --ended/,
+  )
+  // A discussing agent never answers a question on lines, even one named like its finding.
+  assert.match(
+    await pre('ds-q-1a2b3c4d', `node ${reply} q-1a2b3c4d --question --review ${dir}`),
+    /without --question/,
+  )
+})
+
 /** @param {string[]} args @param {string} [input] */
 const summarize = (args, input = '') =>
   run(process.execPath, [SUMMARIZE, ...args], { input })

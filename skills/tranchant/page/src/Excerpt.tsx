@@ -95,6 +95,10 @@ interface RowsProps {
   under?: ReadonlyMap<number, ReactNode> | undefined
   /** The language to highlight the rows in; none leaves them plain. */
   language: Language | undefined
+  /** Line numbers become buttons: a click picks the line, a shift-click extends to it. */
+  onPick?: ((line: number, extend: boolean) => void) | undefined
+  /** The lines picked, set apart. */
+  picked?: { from: number; to: number } | undefined
 }
 
 // A hunk's header and meta rows stay plain, like a file of another language.
@@ -112,6 +116,8 @@ export function CodeRows({
   signed,
   under,
   language,
+  onPick,
+  picked,
 }: RowsProps) {
   return (
     <>
@@ -122,20 +128,43 @@ export function CodeRows({
         const columns = lineMarks.filter(isColumnMark)
         const lineTokens = tokensOf(row, language)
         let column = 0
+        const { number } = row
+        const isPicked =
+          !!picked && number !== undefined && number >= picked.from && number <= picked.to
         const classes = [
           'tr-row',
           `tr-row--${row.kind}`,
           wholeLine ? 'tr-row--marked' : '',
           row.number !== undefined && row.number === anchor ? 'tr-row--anchor' : '',
+          isPicked ? 'tr-row--picked' : '',
         ]
           .filter(Boolean)
           .join(' ')
         return (
           <div key={index} className="tr-line-group">
             <div className={classes} data-line={row.number}>
-              <span className="tr-gutter" aria-hidden="true">
-                {row.number ?? ''}
-              </span>
+              {onPick && number !== undefined ? (
+                <button
+                  type="button"
+                  className="tr-gutter tr-gutter--pick"
+                  aria-label={`Line ${number}`}
+                  aria-pressed={isPicked}
+                  onClick={(event) => onPick(number, event.shiftKey)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return
+                    // The page's Enter opens the finding under the cursor: not from a line number.
+                    event.preventDefault()
+                    event.stopPropagation()
+                    onPick(number, event.shiftKey)
+                  }}
+                >
+                  {number}
+                </button>
+              ) : (
+                <span className="tr-gutter" aria-hidden="true">
+                  {row.number ?? ''}
+                </span>
+              )}
               <span className="tr-text">
                 {signed && row.kind !== 'header' && row.kind !== 'meta' && (
                   <span className="tr-sign">{signOf(row)}</span>

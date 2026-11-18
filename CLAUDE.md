@@ -30,13 +30,16 @@ pattern, read how annotant does it.
   page opens first, and shows that step). A question asked in a finding's
   discussion starts one
   read-only agent among those (`tranchant:ds-<id>-<review>`), which answers
-  with `reply.mjs`. `/tranchant import` starts one import agent
+  with `reply.mjs`; one asked about lines of the diff, its sibling
+  (`tranchant:qs-<question id>-<review>`), which answers with `reply.mjs
+  --question` and may propose a finding. `/tranchant import` starts one import agent
   (`tranchant:im-<import>`), which `hook.mjs --importer` lets write its
   recipe file alone.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
-  `agents/discuss.md`, the discussing agent's; `agents/import.md`, the
+  `agents/discuss.md`, the discussing agent's; `agents/ask.md`, the asking
+  agent's; `agents/import.md`, the
   import agent's;
   `agents/review/`, the default recipe of `/tranchant review`, its lenses'
   prompts (each a reviewer's whole instructions), `contract.md` (what wraps
@@ -48,7 +51,7 @@ pattern, read how annotant does it.
 - `skills/tranchant/scripts/`: Node.js ES modules with JSDoc types, no
   dependencies. `server.mjs` serves the page and prints the lines the hooks
   read; `lib/store.mjs` owns `decisions.json`, `lib/discussion.mjs` the
-  discussions; `lib/format.mjs` is the files' reference; `lib/settings.mjs`
+  discussions, `lib/question.mjs` the questions on lines of the diff; `lib/format.mjs` is the files' reference; `lib/settings.mjs`
   owns the user's settings file (`~/.config/tranchant/settings.json`), which
   the hooks read on their own by the same rules; `lib/lens.mjs` finds the
   recipe in force and builds its lenses from their sources;

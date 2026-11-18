@@ -1,10 +1,19 @@
 // Hunks have no identity but their place in the file: a new diff, or two joined, re-renders those after.
 /* oxlint-disable react/no-array-index-key */
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import type { DiffStat, FileUnfold } from './api'
+import {
+  type AskHandlers,
+  AskBar,
+  AskThread,
+  type LinePick,
+  linesWords,
+} from './AskThread'
 import { type DiffFile, type Gap, gapsOf, marksInDiff, type Section } from './diff'
 import {
+  endLineOf,
   type Finding,
+  type LineQuestion,
   type Records,
   STATE_DETAILS,
   stateClass,
@@ -126,6 +135,7 @@ function Marker({
         </span>
         <span className="tr-chip">{finding.topic}</span>
         {unverified && <span className="tr-chip">unverified</span>}
+        {finding.asked && <span className="tr-chip">from your question</span>}
         <span className="tr-marker-title">{finding.title}</span>
         {commented && <CommentMark />}
         {discussed > 0 && <DiscussionMark count={discussed} />}
@@ -313,18 +323,49 @@ function GapRow({ gap, last, unfold, offline, onUnfold }: GapProps) {
   )
 }
 
+/** What asking about lines needs: without `ask`, line numbers are not picked. */
+interface AskProps {
+  /** The reviewer's questions on lines, by id: those not added as a finding show in their file. */
+  questions?: Readonly<Record<string, LineQuestion>> | undefined
+  /** A `theirs` review: a finding to add needs its comment. */
+  theirs?: boolean | undefined
+  ask?: AskHandlers | undefined
+}
+
 type ViewProps = MarkerState &
-  UnfoldProps & {
+  UnfoldProps &
+  AskProps & {
     sections: readonly Section[]
     stats: ReadonlyMap<string, DiffStat>
   }
 
 type SectionProps = MarkerState &
-  UnfoldProps & {
+  UnfoldProps &
+  AskProps & {
     section: Section
     index: number
     stat: DiffStat | undefined
+    /** The lines picked, in this file or another. */
+    pick: LinePick | undefined
+    onPick: (pick: LinePick | undefined) => void
   }
+
+/** The lines a click on line `line` of `path` picks, from what was picked. */
+export function nextPick(
+  current: LinePick | undefined,
+  path: string,
+  line: number,
+  extend: boolean,
+): LinePick | undefined {
+  if (extend && current?.path === path) {
+    const { anchor } = current
+    return { path, anchor, from: Math.min(anchor, line), to: Math.max(anchor, line) }
+  }
+  // The one line picked, clicked again: nothing is.
+  if (current?.path === path && current.from === line && current.to === line)
+    return undefined
+  return { path, anchor: line, from: line, to: line }
+}
 
 function FileSection({
   section,
@@ -333,6 +374,11 @@ function FileSection({
   unfolds,
   offline = false,
   onUnfold,
+  questions,
+  theirs = false,
+  ask,
+  pick,
+  onPick,
   ...state
 }: SectionProps) {
   const { file } = section
@@ -343,12 +389,59 @@ function FileSection({
   const opened = open?.path === section.path ? open : undefined
   const marks = opened && file ? marksInDiff(opened, file) : NO_MARKS
   const language = languageOfFile(section.path)
-  const under = new Map(
-    [...section.lines].map(([line, stack]) => [
-      line,
-      <Markers key={line} {...state} findings={stack} />,
-    ]),
+  const shownLines = new Set(
+    file?.hunks.flatMap((hunk) => hunk.rows.flatMap((row) => row.number ?? [])) ?? [],
   )
+  const threads = ask
+    ? Object.entries(questions ?? {}).filter(
+        ([, question]) => !question.finding && question.anchor.path === section.path,
+      )
+    : []
+  const thread = ([id, question]: [string, LineQuestion], note?: string) =>
+    ask && (
+      <AskThread
+        key={id}
+        id={id}
+        question={question}
+        theirs={theirs}
+        offline={offline}
+        language={language}
+        note={note}
+        handlers={ask}
+      />
+    )
+  // Its lines folded again (a reload forgets what was unfolded): on the file's header.
+  const offThreads = threads.filter(
+    ([, question]) => !shownLines.has(endLineOf(question.anchor)),
+  )
+  const under = new Map<number, ReactNode[]>()
+  const add = (line: number, node: ReactNode) =>
+    under.set(line, [...(under.get(line) ?? []), node])
+  for (const [line, stack] of section.lines)
+    add(line, <Markers key={`markers-${line}`} {...state} findings={stack} />)
+  for (const one of threads)
+    if (shownLines.has(endLineOf(one[1].anchor)))
+      add(endLineOf(one[1].anchor), thread(one))
+  const picked = pick?.path === section.path ? pick : undefined
+  if (picked && ask)
+    add(
+      picked.to,
+      <AskBar
+        key={`ask-${picked.from}-${picked.to}`}
+        pick={picked}
+        offline={offline}
+        onClear={() => onPick(undefined)}
+        onAsk={async (text) => {
+          const sent = await ask.onAsk(picked.path, picked.from, picked.to, text)
+          if (sent) onPick(undefined)
+          return sent
+        }}
+      />,
+    )
+  const pickLine = ask
+    ? (line: number, extend: boolean) =>
+        onPick(nextPick(pick, section.path, line, extend))
+    : undefined
   const gaps = file && onUnfold ? gapsOf(file) : []
   const gapRow = (below: number) => {
     const gap = gaps.find((one) => one.below === below)
@@ -391,6 +484,13 @@ function FileSection({
           }
         />
       )}
+      {offThreads.map((one) => {
+        const { anchor } = one[1]
+        return thread(
+          one,
+          `${linesWords(anchor.startLine, endLineOf(anchor))}: unfold them to see them in place`,
+        )
+      })}
       {file && file.hunks.length > 0 && (
         // One frame for the file: the hidden lines' bars run across it, between its hunks.
         <CodeFrame signed digits={digits}>
@@ -405,6 +505,8 @@ function FileSection({
                   marks={marks}
                   under={under}
                   language={language}
+                  onPick={pickLine}
+                  picked={picked}
                 />
               </div>
             </Fragment>
@@ -422,6 +524,7 @@ function FileSection({
  */
 export function DiffView({ sections, stats, ...state }: ViewProps) {
   const { cursor } = state
+  const [pick, setPick] = useState<LinePick>()
   useEffect(() => {
     if (cursor) scrollTo(markerId(cursor), 'center')
   }, [cursor])
@@ -434,6 +537,8 @@ export function DiffView({ sections, stats, ...state }: ViewProps) {
           section={section}
           index={index}
           stat={stats.get(section.path)}
+          pick={pick}
+          onPick={setPick}
         />
       ))}
     </div>

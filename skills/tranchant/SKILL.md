@@ -59,7 +59,7 @@ AskUserQuestion; the user names or confirms the source, never you. Pass
 `recipe` only when the user named the file: a recipe's lenses instruct the
 reviewers. The plugin's hooks read the page's decisions and start
 one background agent per fix, or per question asked in a finding's
-discussion, or post each comment with `glab` and open each issue with `gh`
+discussion or about lines of the diff, or post each comment with `glab` and open each issue with `gh`
 or `glab`, with no turn of yours: never start or message those agents
 yourself, and never post a comment or open an issue yourself. If the tool is missing, the hooks did not load: run
 `claude --version`, tell the user Tranchant needs Claude Code 2.1.287 or

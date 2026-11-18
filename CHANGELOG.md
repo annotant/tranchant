@@ -7,6 +7,17 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Ask Tranchant about lines of code.** In the diff, select a line or a
+  range (click a line number, shift-click another; Enter and Shift+Enter
+  with the keyboard) and ask about it: a read-only agent answers in a thread
+  under those lines, which survives a reload. When it finds a real problem,
+  its answer proposes a finding: **Add as a finding** (editable first) adds
+  it to the review, even a complete one, marked as coming from your
+  question, the thread becoming its discussion; **No, thanks** leaves it
+  out.
+
 ## 0.5.1 - 2026-11-11
 
 ### Fixed

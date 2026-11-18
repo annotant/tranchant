@@ -430,6 +430,11 @@ export function FindingDetail({
             {BUCKET_LABELS[finding.bucket]}
           </span>
           <span className="tr-chip">{finding.topic}</span>
+          {finding.asked && (
+            <span className="tr-chip" title="Added from your question on these lines">
+              from your question
+            </span>
+          )}
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}

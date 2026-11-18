@@ -29,14 +29,15 @@ export type Lens = {
 
 /**
  * What waits for a free review agent: the agent summarizing the change, a
- * lens's reviewer, a finding's verifier, or the agent answering the
- * reviewer's question on a finding.
+ * lens's reviewer, a finding's verifier, the agent answering the
+ * reviewer's question on a finding, or on lines of the diff.
  */
 export type ReviewJob =
   | { kind: 'summarizer' }
   | { kind: 'reviewer'; lens: Lens }
   | { kind: 'verifier'; id: string }
   | { kind: 'discusser'; id: string }
+  | { kind: 'asker'; id: string }
 
 /**
  * A review `/tranchant review` runs: the agents waiting for a free place, in
@@ -50,14 +51,15 @@ export type ReviewRun = {
 /**
  * An agent the hooks started for a review: the summary agent (`sm-summary`),
  * a lens's reviewer (`rv-<lens>`), a finding's verifier (`vf-<id>`) or the
- * agent discussing a finding (`ds-<id>`). `running` until its turn completes.
+ * agent discussing a finding (`ds-<id>`) or answering a question on lines
+ * (`qs-<question id>`). `running` until its turn completes.
  */
 export type ReviewAgent = {
   agent: string
-  /** `sm-summary`, `rv-<lens>`, `vf-<id>` or `ds-<id>`: its run file's name, and its agent type's with the review's id. */
+  /** `sm-summary`, `rv-<lens>`, `vf-<id>`, `ds-<id>` or `qs-<id>`: its run file's name, and its agent type's with the review's id. */
   name: string
-  kind: 'summarizer' | 'reviewer' | 'verifier' | 'discusser'
-  /** Its instructions file, absolute: its lens's, agents/review/summary.md, agents/review/verifier.md or agents/discuss.md. */
+  kind: 'summarizer' | 'reviewer' | 'verifier' | 'discusser' | 'asker'
+  /** Its instructions file, absolute: its lens's, agents/review/summary.md, agents/review/verifier.md, agents/discuss.md or agents/ask.md. */
   prompt: string
   review: string
   project: string
@@ -132,6 +134,8 @@ declare module 'claude-code' {
       reviewAgents: Record<string, ReviewAgent>
       /** By review folder, the findings whose question waits for a free agent, in order. */
       discussing: Record<string, string[]>
+      /** By review folder, the questions on lines of the diff waiting for a free agent, in order. */
+      asking: Record<string, string[]>
       /** By import folder: the imports started, running or ended. */
       importing: Record<string, Importing>
     }

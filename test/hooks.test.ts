@@ -130,6 +130,15 @@ function world(
       }),
     ],
   ])
+  // A question the reviewer asked about lines of the diff.
+  files.set(
+    `${DIR}/questions/q-1a2b3c4d.json`,
+    JSON.stringify({
+      version: 1,
+      anchor: { path: 'src/cart.ts', startLine: 14, lines: ['const total = 0'] },
+      messages: [{ by: 'reviewer', text: 'Can this be null?', at: 'now' }],
+    }),
+  )
   if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
   if (settings !== undefined) files.set(SETTINGS, JSON.stringify(settings))
   for (const id of ['f-02', 'f-03', 'f-04']) {
@@ -151,6 +160,8 @@ function world(
       return { value: '---\nname: summary\n---\n\nYou summarize the change.\n' }
     if (e.path.endsWith('/agents/discuss.md'))
       return { value: '---\nname: discuss\n---\n\nYou answer one question.\n' }
+    if (e.path.endsWith('/agents/ask.md'))
+      return { value: '---\nname: ask\n---\n\nYou answer a question on lines.\n' }
     if (e.path.endsWith('/agents/import.md'))
       return { value: '---\nname: import\n---\n\nYou import a review process.\n' }
     const text = files.get(e.path)
@@ -1532,6 +1543,50 @@ test('a question starts its discussing agent, read-only; one that ends unanswere
   await w.print('DISCUSS f-01')
   expect(w.spawned).toHaveLength(2)
   // Stopped: its question gets a failed answer too, and nothing completes.
+  await $.command.run(command('stop'))
+  expect(w.replies).toHaveLength(2)
+  expect(w.completed).toEqual([])
+})
+
+test('a question on lines starts its asking agent, read-only; one that ends unanswered is answered as failed', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('ASK q-1a2b3c4d')
+  expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:qs-q-1a2b3c4d-rev-1'])
+  const prompt = w.spawned[0]?.prompt ?? ''
+  expect(prompt).toMatch(
+    new RegExp(
+      `^q-1a2b3c4d\nREVIEW=${DIR}\nSKILL=.+\nPROJECT=${ROOT}\nBASE=main\nHEAD=${HEAD}\n`,
+    ),
+  )
+  // The lines and the reviewer's words come fenced, after the paths.
+  const fence = marker(prompt)
+  expect(fence).toBeDefined()
+  expect(prompt).toContain(`${fence}       "text": "Can this be null?",`)
+  expect(prompt).toContain(`${fence}       "const total = 0"`)
+  const spec = w.registered.get('tranchant:qs-q-1a2b3c4d-rev-1')
+  expect(spec?.prompt).toBe('You answer a question on lines.\n')
+  expect(spec?.tools).toEqual(['Read', 'Bash', 'Grep', 'Glob'])
+  expect(spec?.hooks?.PreToolUse).toEqual([
+    {
+      matcher: 'Bash',
+      hooks: [
+        {
+          type: 'command',
+          command: expect.stringMatching(/'--reviewer' 'qs-q-1a2b3c4d'/),
+        },
+      ],
+    },
+  ])
+  expect(w.notes[0]?.stdin).toMatch(/"kind":"start","label":"Answering q-1a2b3c4d"/)
+  for (const agent of ['tranchant:qs-q-1a2b3c4d-rev-1', 'tranchant:ask'])
+    expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
+  await $.turn.complete(turnEnded('a1', 'REPLIED'))
+  await w.clock.settle()
+  expect(w.replies).toEqual([['q-1a2b3c4d', '--question', '--review', DIR, '--ended']])
+  // Asked again: a new agent; stopped, its question gets a failed answer too.
+  await w.print('ASK q-1a2b3c4d')
+  expect(w.spawned).toHaveLength(2)
   await $.command.run(command('stop'))
   expect(w.replies).toHaveLength(2)
   expect(w.completed).toEqual([])

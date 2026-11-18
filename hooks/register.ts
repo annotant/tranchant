@@ -19,7 +19,9 @@
 // page. Once every one ended, the review completes.
 //
 // A question the reviewer asks about a finding starts one agent that answers
-// it, read-only, among the review agents' three (`tranchant:ds-<id>-<review>`).
+// it, read-only, among the review agents' three (`tranchant:ds-<id>-<review>`);
+// one they ask about lines of the diff, its sibling, which may also propose a
+// finding (`tranchant:qs-<question id>-<review>`).
 //
 // The workers, the reviews served and run, the review agents and the fixes
 // handed over live in $.state, so they survive a reload of the module and
@@ -94,6 +96,8 @@ const reviewAgents = atom(
 )
 const noDiscussing: Record<string, string[]> = {}
 const discussing = atom({ plugin: 'tranchant', key: 'discussing' } as const, noDiscussing)
+/** The questions on lines waiting for an agent, by review folder. */
+const asking = atom({ plugin: 'tranchant', key: 'asking' } as const, noDiscussing)
 const noImporting: Record<string, Importing> = {}
 const importing = atom({ plugin: 'tranchant', key: 'importing' } as const, noImporting)
 
@@ -105,8 +109,10 @@ const FINDING_AGENT = /^tranchant:tr-[\w-]+$/
 const REVIEW_FILE_AGENT = /^tranchant:review:[\w-]+$/
 /** The discussing agent's file, agents/discuss.md: loaded as the plugin's agent too. */
 const DISCUSS_FILE_AGENT = 'tranchant:discuss'
-/** The review agents' types: `sm-summary`, `rv-<lens>`, `vf-<id>`, `ds-<id>`, with the review's id. */
-const REVIEW_AGENT = /^tranchant:(?:sm|rv|vf|ds)-[\w-]+$/
+/** The asking agent's file, agents/ask.md: loaded as the plugin's agent too. */
+const ASK_FILE_AGENT = 'tranchant:ask'
+/** The review agents' types: `sm-summary`, `rv-<lens>`, `vf-<id>`, `ds-<id>`, `qs-<id>`, with the review's id. */
+const REVIEW_AGENT = /^tranchant:(?:sm|rv|vf|ds|qs)-[\w-]+$/
 const REVIEW_TOOLS = ['Read', 'Bash', 'Grep', 'Glob']
 /** The import agent's type: `im-` and its import's id. */
 const IMPORT_AGENT = /^tranchant:im-[\w-]+$/
@@ -766,7 +772,9 @@ async function onLine(
     case 'LANDED':
       return verifyLanded($, watched.dir, id)
     case 'DISCUSS':
-      return discussLater($, watched.dir, id)
+      return answerLater($, watched.dir, id, 'discusser')
+    case 'ASK':
+      return answerLater($, watched.dir, id, 'asker')
     default:
       // POSTED, POST_FAILED, MOVED, ISSUE_FAILED, AGENT_ENDED: the server's own doing.
       return debug($, `${tag(id)}: ${kind}`)
@@ -1208,8 +1216,9 @@ const AGENT_PREFIX = {
   reviewer: 'rv',
   verifier: 'vf',
   discusser: 'ds',
+  asker: 'qs',
 } as const
-/** A review agent's name: `sm-summary`, `rv-<lens>`, `vf-<finding id>` or `ds-<finding id>`. */
+/** A review agent's name: `sm-summary`, `rv-<lens>`, `vf-<finding id>`, `ds-<finding id>` or `qs-<question id>`. */
 // Lens names and finding ids are `[\w-]`, 40 and 64 at most: whole, two never meet.
 const reviewAgentName = (job: ReviewJob) =>
   `${AGENT_PREFIX[job.kind]}-${job.kind === 'summarizer' ? 'summary' : job.kind === 'reviewer' ? job.lens.name : job.id}`
@@ -1367,13 +1376,35 @@ async function discussPrompt($: $, review: Review, id: string) {
   ].join('\n')
 }
 
+/**
+ * An asking agent's prompt: the review agents' lines, then the lines asked
+ * about and the messages, fenced: the code and the reviewer's words are data.
+ */
+async function askPrompt($: $, review: Review, id: string) {
+  const question: unknown = JSON.parse(
+    await $.fs.read(`${review.dir}/questions/${id}.json`),
+  )
+  const { anchor, messages } =
+    question && typeof question === 'object'
+      ? (question as { anchor?: unknown; messages?: unknown })
+      : {}
+  return [
+    reviewPrompt($, review, { kind: 'asker', id }),
+    fenced(
+      JSON.stringify({ anchor, messages: messages ?? [] }, null, 2),
+      'the lines asked about and the questions on them, as JSON',
+    ),
+  ].join('\n')
+}
+
 /** The plugin's own instructions files, by kind; a reviewer's is its lens's. */
 const PLUGIN_AGENT = {
   summarizer: 'review/summary',
   verifier: 'review/verifier',
   discusser: 'discuss',
+  asker: 'ask',
 } as const
-/** A review agent's instructions file: its lens's, the plugin's summary agent, verifier or discussing agent. */
+/** A review agent's instructions file: its lens's, the plugin's summary agent, verifier, discussing or asking agent. */
 const reviewInstructions = ($: $, job: ReviewJob) =>
   job.kind === 'reviewer'
     ? job.lens.prompt
@@ -1398,16 +1429,17 @@ async function startReviewQueued($: $) {
       return { ...all, [dir]: { ...run, queue } }
     })
     // The review's own agents first: a question waits for the next free place.
-    if (!next)
-      await update($, discussing, (all) => {
-        const dir = Object.keys(all).find((one) => all[one]?.length)
-        const ids = dir === undefined ? undefined : all[dir]
-        if (dir === undefined || !ids) return all
-        const [id, ...rest] = ids
-        if (id) next = { dir, job: { kind: 'discusser', id } }
-        const { [dir]: _, ...others } = all
-        return rest.length ? { ...all, [dir]: rest } : others
-      })
+    for (const kind of ['discusser', 'asker'] as const)
+      if (!next)
+        await updateWaiting($, kind, (all) => {
+          const dir = Object.keys(all).find((one) => all[one]?.length)
+          const ids = dir === undefined ? undefined : all[dir]
+          if (dir === undefined || !ids) return all
+          const [id, ...rest] = ids
+          if (id) next = { dir, job: { kind, id } }
+          const { [dir]: _, ...others } = all
+          return rest.length ? { ...all, [dir]: rest } : others
+        })
     if (!next) return
     await startReviewAgent($, next.dir, next.job)
   }
@@ -1429,7 +1461,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     $.ui.toast(
       `Tranchant could not start the ${job.kind} ${reviewAgentName(job)}: ${dir}/review.json: ${loaded}`,
     )
-    if (job.kind === 'discusser') await unanswered($, dir, job.id)
+    if (answers(job)) await unanswered($, dir, job.id, job.kind)
     void checkComplete($, dir)
     return
   }
@@ -1456,7 +1488,9 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
       prompt:
         job.kind === 'discusser'
           ? await discussPrompt($, review, job.id)
-          : reviewPrompt($, review, job),
+          : job.kind === 'asker'
+            ? await askPrompt($, review, job.id)
+            : reviewPrompt($, review, job),
     }))().catch((error: unknown) => ({
     deny: message(error),
     agentId: undefined,
@@ -1474,7 +1508,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     const why = started.deny ?? 'no agent started'
     $.ui.toast(`Tranchant could not start the ${kind} ${tag(name)}: ${why}`)
     await debug($, `${tag(name)}: could not start: ${short(why, 160)}`)
-    if (job.kind === 'discusser') await unanswered($, dir, job.id)
+    if (answers(job)) await unanswered($, dir, job.id, job.kind)
     void checkComplete($, dir)
     return
   }
@@ -1504,7 +1538,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
           ? 'Summarizing the change'
           : job.kind === 'reviewer'
             ? `Reviewing: ${job.lens.name}`
-            : `${job.kind === 'verifier' ? 'Verifying' : 'Discussing'} ${job.id}`,
+            : `${job.kind === 'verifier' ? 'Verifying' : job.kind === 'asker' ? 'Answering' : 'Discussing'} ${job.id}`,
       state: 'done',
       model,
     },
@@ -1528,27 +1562,42 @@ async function endReviewAgent(
     { at: Date.now(), kind: 'end', label, state: how === 'stopped' ? 'failed' : 'done' },
   ])
   await debug($, `${tag(one.name)}: agent ${one.agent} ${how}`)
-  if (one.kind !== 'discusser') return
+  if (one.kind !== 'discusser' && one.kind !== 'asker') return
   const id = one.name.slice(3)
   // Asked again after its answer, while its turn ended: a new agent, not a failure.
   const again = reasked.delete(key) && how === 'ended'
-  if (again && (await waitsForAnswer($, one.review, id)))
-    await discussLater($, one.review, id)
-  else await unanswered($, one.review, id)
+  if (again && (await waitsForAnswer($, one.review, id, one.kind)))
+    await answerLater($, one.review, id, one.kind)
+  else await unanswered($, one.review, id, one.kind)
 }
 
+type Answering = 'discusser' | 'asker'
+/** The agents that answer the reviewer: a finding's discussing agent, a question's asking agent. */
+const answers = (job: ReviewJob): job is Extract<ReviewJob, { kind: Answering }> =>
+  job.kind === 'discusser' || job.kind === 'asker'
+type Waiting = Record<string, string[]>
+/** The questions of `kind` waiting for an agent, changed: each atom named, as the state's scan reads it. */
+const updateWaiting = ($: $, kind: Answering, change: (all: Waiting) => Waiting) =>
+  kind === 'asker' ? update($, asking, change) : update($, discussing, change)
+const readWaiting = ($: $, kind: Answering) =>
+  kind === 'asker' ? read($, asking) : read($, discussing)
+/** Where the thread an agent answers lives, by kind. */
+const threadFile = (dir: string, id: string, kind: Answering) =>
+  `${dir}/${kind === 'asker' ? 'questions' : 'discussions'}/${id}.json`
+
 /**
- * Whether finding `id`'s discussion ends on the reviewer's question; unreadable,
- * it does not. A change they asked for waits for its fix's agent, not this one.
+ * Whether thread `id` ends on the reviewer's question; unreadable, it does
+ * not. A change they asked for waits for its fix's agent, not this one; a
+ * question that became a finding waits for nothing.
  */
-async function waitsForAnswer($: $, dir: string, id: string) {
+async function waitsForAnswer($: $, dir: string, id: string, kind: Answering) {
   try {
-    const discussion: unknown = JSON.parse(
-      await $.fs.read(`${dir}/discussions/${id}.json`),
-    )
+    const thread: unknown = JSON.parse(await $.fs.read(threadFile(dir, id, kind)))
+    if (thread && typeof thread === 'object' && 'finding' in thread && thread.finding)
+      return false
     const messages =
-      discussion && typeof discussion === 'object' && 'messages' in discussion
-        ? discussion.messages
+      thread && typeof thread === 'object' && 'messages' in thread
+        ? thread.messages
         : undefined
     const last: unknown = Array.isArray(messages) ? messages.at(-1) : undefined
     return (
@@ -1567,29 +1616,38 @@ async function waitsForAnswer($: $, dir: string, id: string) {
 const reasked = new Set<string>()
 
 /** A question its agent left waiting gets a failed answer: the reviewer may ask again. */
-async function unanswered($: $, dir: string, id: string) {
+async function unanswered($: $, dir: string, id: string, kind: Answering) {
+  const flag = kind === 'asker' ? ['--question'] : []
   const ran = await $.process
-    .run(['node', `${skillDir($)}/scripts/reply.mjs`, id, '--review', dir, '--ended'])
+    .run([
+      'node',
+      `${skillDir($)}/scripts/reply.mjs`,
+      id,
+      ...flag,
+      '--review',
+      dir,
+      '--ended',
+    ])
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
   if (ran.exitCode !== 0) {
     const why = short(ran.stderr.trim() || `reply.mjs exited ${ran.exitCode}`, 160)
     await debug($, `${tag(id)}: reply.mjs --ended failed: ${why}`)
     // Else the question waits for ever, and the page refuses the next one.
     $.ui.toast(
-      `Tranchant could not close the unanswered question on ${tag(id)}: ${why}. node ${skillDir($)}/scripts/reply.mjs ${id} --review ${dir} --ended does it.`,
+      `Tranchant could not close the unanswered question on ${tag(id)}: ${why}. node ${skillDir($)}/scripts/reply.mjs ${id}${flag.map((one) => ` ${one}`).join('')} --review ${dir} --ended does it.`,
     )
   } else if (ran.stdout.trim()) await debug($, `${tag(id)}: ${ran.stdout.trim()}`)
 }
 
-/** The reviewer asked about a finding: its agent, once, among the review agents. */
-async function discussLater($: $, dir: string, id: string) {
-  const key = agentKey(`ds-${id}`, dir)
+/** The reviewer asked about a finding, or lines: its agent, once, among the review agents. */
+async function answerLater($: $, dir: string, id: string, kind: Answering) {
+  const key = agentKey(`${AGENT_PREFIX[kind]}-${id}`, dir)
   if (startingReview.has(key) || (await read($, reviewAgents))[key]?.running) {
     reasked.add(key)
     return
   }
   let queued = false
-  await update($, discussing, (all) => {
+  await updateWaiting($, kind, (all) => {
     const ids = all[dir] ?? []
     if (ids.includes(id)) return all
     queued = true
@@ -1723,10 +1781,12 @@ async function reviewAgentDone($: $, agent: string, answer: string) {
 async function stopReviewing($: $) {
   for (const pending of startingReview.values()) pending.stop = true
   // The questions waiting for an agent get none: each is answered as failed.
-  const waiting = await read($, discussing)
-  await update($, discussing, () => noDiscussing)
-  for (const [dir, ids] of Object.entries(waiting))
-    for (const id of ids) await unanswered($, dir, id)
+  for (const kind of ['discusser', 'asker'] as const) {
+    const waiting = await readWaiting($, kind)
+    await updateWaiting($, kind, () => noDiscussing)
+    for (const [dir, ids] of Object.entries(waiting))
+      for (const id of ids) await unanswered($, dir, id, kind)
+  }
   const runs = Object.keys(await read($, reviewRuns))
   await update($, reviewRuns, (all) =>
     Object.fromEntries(
@@ -2278,6 +2338,7 @@ export const register: Register = (on) => {
   on('agent.offer', async ($, e, next) =>
     e.agent === WORKER ||
     e.agent === DISCUSS_FILE_AGENT ||
+    e.agent === ASK_FILE_AGENT ||
     e.agent === IMPORT_FILE_AGENT ||
     IMPORT_AGENT.test(e.agent) ||
     FINDING_AGENT.test(e.agent) ||

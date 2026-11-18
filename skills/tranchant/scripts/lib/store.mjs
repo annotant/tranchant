@@ -528,10 +528,12 @@ export function createStore(dir) {
      * with the time it landed. The same finding again changes nothing;
      * another one under the same id is refused, as is any finding once the
      * review is complete. Under review.json's lock: producers run in parallel.
+     * `asked`: the reviewer adds it from their question, whatever the review's status.
      * @param {any} finding
+     * @param {{ asked?: boolean }} [options]
      * @returns {Promise<{ id: string, added: boolean }>} `added`: false when it was there already.
      */
-    addFinding(finding) {
+    addFinding(finding, { asked = false } = {}) {
       return withFileLock(reviewFile, async () => {
         const review = await readReview()
         const problems = validateFinding(finding, {
@@ -546,10 +548,10 @@ export function createStore(dir) {
           }
           return { id: finding.id, added: false }
         }
-        if (statusOf(review) === 'complete') {
+        if (!asked && statusOf(review) === 'complete') {
           throw new StoreRefusal('the review is complete: nothing can be added')
         }
-        if (statusOf(review) === 'refused') {
+        if (!asked && statusOf(review) === 'refused') {
           throw new StoreRefusal('the review was refused: nothing can be added')
         }
         // Only a verifier verifies: a finding lands unverified, whatever it says.

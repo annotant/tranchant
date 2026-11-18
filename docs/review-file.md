@@ -10,8 +10,9 @@ folder: nothing is installed in a repository to review it.
 | `decisions.json`                  | Next to it                            | What the reviewer decided on each finding, its state, its runs and the history of its moves | The store (`scripts/lib/store.mjs`), for the server and the agents' scripts                                            |
 | `runs/<finding id>.jsonl`         | Next to it                            | The steps of the run in progress on that finding                                            | The hooks (`hooks/register.ts`)                                                                                        |
 | `runs/<finding id>.history.jsonl` | Next to it                            | The steps of every run that ended                                                           | The store, when a run ends                                                                                             |
-| `reviewers/<name>.jsonl`          | Next to it                            | The steps of one review agent of `/tranchant review`: `sm-summary`, `rv-<lens>` or `vf-<finding id>`; of a finding's discussing agent: `ds-<finding id>` | The hooks (`hooks/register.ts`, `hook.mjs --reviewer`)                                                                 |
+| `reviewers/<name>.jsonl`          | Next to it                            | The steps of one review agent of `/tranchant review`: `sm-summary`, `rv-<lens>` or `vf-<finding id>`; of a finding's discussing agent: `ds-<finding id>`; of a question's asking agent: `qs-<question id>` | The hooks (`hooks/register.ts`, `hook.mjs --reviewer`)                                                                 |
 | `discussions/<finding id>.json`   | Next to it                            | The finding's discussion: the reviewer's questions and the agent's answers                  | `lib/discussion.mjs`, for the server (a question, a change, and a change's answer or result on each move the reviewer makes and at start), `reply.mjs` (an answer), and `done.mjs`, `ask.mjs`, `hook.mjs ended` (a change's result) |
+| `questions/<question id>.json`    | Next to it                            | A question the reviewer asked about lines of the diff, and the asking agent's answers       | `lib/question.mjs`, for the server (a question, a proposal added or declined) and `reply.mjs --question` (an answer) |
 | `lenses.json`                     | Next to it                            | The Lenses step of `/tranchant review`: one row per lens, as it is resolved and built        | `lenses.mjs`                                                                                                           |
 | `lenses/<sha256>.md`              | `<state>/`                            | A lens's prompt as the Lenses step built it, one file per hash, shared by every review       | `lenses.mjs`, once per hash                                                                                            |
 | `imports/<import id>/`            | `<state>/<hash>/`                     | An import of `/tranchant import`: `import.json` (its source, its location, where it stands) and `recipe.json`, the recipe its agent wrote | `import.mjs` and the import agent (`recipe.json` alone); the server, when the user uses it                    |
@@ -159,6 +160,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `related[]`                  | object[], optional                  | Up to 4. Same shape as `path`, `line`, `excerpt`, `marks`.                                                                                                                                       |
 | `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs` or `add.mjs`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
 | `thread`                     | object, optional                    | The pull or merge request thread the finding comes from, written by `comments.mjs` (see [`/tranchant comments`](#tranchant-comments)): `forge` (`github` or `gitlab`), `id` (GitHub's review thread node id, GitLab's discussion id), `url`, `comments` (1 to 100, the reviewer's first, then the replies: `author`, `body` up to 65,536 characters, a third party's Markdown, `at`, `url`), `outdated` (the code it was on is not at `line` in the head any more: `line` is only near it, its excerpt the code the comment read; the page puts it on its file's header) and `file` (on the whole file). Its `forge` is the review's `mr.forge` (`gitlab` when absent): a finding whose thread is on another forge, or in a review with no `mr`, is refused. A post on such a finding replies on the thread. |
+| `asked`                      | `true`, optional                    | Born from the reviewer's question on lines of the diff (see [a question on lines](#a-question-on-lines)), written by the server when they add the finding it proposed: no verifier checks it, and the page marks it as coming from their question. |
 | `verified`                   | boolean, optional                   | Set by `verify.mjs` once a verifier confirmed or amended it; read only when the review's `verify` is true. Like `addedAt`, left out when two findings are compared.                             |
 
 #### Topics
@@ -385,6 +387,83 @@ same file named in `since`. Each request is one more change on the same
 finding: a `fixed` one queues again, and a `cancellation` an earlier stop
 left goes, the run that fixed it having finished it.
 
+## A question on lines
+
+`questions/<question id>.json`: in the diff, the reviewer selects one line
+or a range of one file (the lines that show a number: added, context, and
+those unfolded around the hunks) and asks about it; an agent answers. The
+id is `q-` and 8 hex digits, made by the server.
+
+```jsonc
+{
+  "version": 1,
+  "anchor": {
+    "path": "src/cart.ts", // relative to project, a text file of the diff
+    "startLine": 14, // new side, 1-based
+    "lines": ["…", "…"], // 1 to 80 lines, as the diff's head has them
+  },
+  "messages": [
+    { "by": "reviewer", "text": "Can this be null?", "at": "…" },
+    {
+      "by": "agent",
+      "text": "It can: … (Markdown)",
+      "at": "…",
+      "proposal": {
+        // optional: a finding on those lines, checked as any finding of the review
+        "finding": {
+          "title": "…",
+          "topic": "Bugs",
+          "bucket": "review", // its topic's default when the agent leaves it out
+          "tag": "concern", // optional
+          "line": 15, // one of the anchor's lines; its last when the agent leaves it out
+          "problem": "…",
+          "why": "…",
+          "fix": "…",
+          "comment": "…", // required on a theirs review
+        },
+      },
+      "declined": true, // the reviewer said No, thanks
+    },
+  ],
+  "finding": "q-1a2b3c4d", // once added: the finding it became
+}
+```
+
+The server reads the lines again at the head (`/api/lines`' rules), never
+the page's: each is cut at 400 characters, a control character other than a
+tab shown as `�`, as a finding's excerpt holds them. Messages follow
+[a discussion](#a-discussion)'s rules: a last message by the `reviewer`
+waits for the agent, 60 messages at most, the reviewer's up to 4,000
+characters and the agent's up to 8,000; `failed` when its agent ended, was
+stopped or could not start before it answered.
+
+Each question starts one agent (`tranchant:qs-<id>-<review>`,
+`agents/ask.md`), the discussing agent's sibling: among the three review
+agents, after the review's own and the discussions', read-only, its hooks a
+review agent's (`hook.mjs --reviewer qs-<id>`), which let it run its own
+`reply.mjs <id> --question` only. Its prompt gives the question's id,
+`REVIEW`, `SKILL`, `PROJECT`, `BASE`, `HEAD`, `RANGE`, `OWNERSHIP`, then the
+anchor and the messages as JSON, fenced: the code and the reviewer's words
+are data. A question still waiting when the server starts is asked again.
+
+Its answer may carry a proposed `finding`, which `reply.mjs` refuses unless
+the review would take it: its fields whole, its `line` among the lines asked
+about, its `comment` on a theirs review, its id (the question's) no
+finding's yet. The page shows it under the last answer:
+
+- **Add as a finding** opens it in a form to edit, then
+  `POST /api/ask/add`: the finding is checked again and added whatever the
+  review's status (unlike `add.mjs`), as `{ id: <question id>, topic,
+  bucket, tag?, title, path, line, excerpt: the anchor, problem, why, fix,
+  comment?, asked: true }`; the question's messages become
+  `discussions/<id>.json` (their proposals left out) and the question gets
+  `finding`. The page then shows the finding at its line, and its
+  discussion goes on there; the question takes no other message.
+- **No, thanks** (`POST /api/ask/decline`) sets `declined` on the answer:
+  nothing is added, and the thread goes on.
+
+Only the last answer's proposal can be taken or declined, once.
+
 ## The run files
 
 One JSON object per line, as the hooks record the agent's tools:
@@ -561,6 +640,7 @@ locks and show no progress.
 | `AGENT_ENDED <id>`                                         | `hook.mjs ended` found the finding still `working` and moved it to `failed`.     |
 | `LANDED <id>`                                              | A finding not verified yet is there, in a `verify` review still `reviewing`: the hooks start its verifier. Once per finding, after `READY`. |
 | `DISCUSS <id>`                                             | The reviewer asked about finding `id`: the hooks start its discussing agent. Again at start for each question still waiting. |
+| `ASK <id>`                                                 | The reviewer asked question `id` about lines of the diff: the hooks start its asking agent. Again at start for each question still waiting. |
 | `PORT_BUSY <port> is used by <owner>`                      | Could not listen.                                                                |
 | `REVIEW_REFUSED <reason>`                                  | The review folder is unreadable or its version unknown.                          |
 | `HOOKS_MISSING …`                                          | Started outside the plugin's hooks (`TRANCHANT_HOOKS` unset).                    |
@@ -572,7 +652,7 @@ locks and show no progress.
 | `GET /`               | The page.                                                                                                                                                                                                                                                                                                                                                          |
 | `GET /page.js`        | Its bundle.                                                                                                                                                                                                                                                                                                                                                        |
 | `GET /api/health`     | `{ ok: true, review: "<id>", version: "<plugin version>" }`.                                                                                                                                                                                                                                                                                                       |
-| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head, lenses? }`: `lenses` the Lenses step's `lenses.json` once it started (`{ state: "resolving" \| "ready" \| "refused", lenses: [ { name, source, state: "resolving" \| "ready" \| "failed", change?, version?, reason?, fix? } ] }`); the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
+| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, questions, head, lenses? }`: `lenses` the Lenses step's `lenses.json` once it started (`{ state: "resolving" \| "ready" \| "refused", lenses: [ { name, source, state: "resolving" \| "ready" \| "failed", change?, version?, reason?, fix? } ] }`); the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), the questions on lines by id (`{ version, anchor, messages, finding?, step? }`, `step` likewise, the asking agents left out of `reviewers` too), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
 | `GET /api/account`    | `{ username, tool }`: the account `tool` posts as, `glab api user`'s `username` or `gh api user`'s `login`, run from `project` and kept once known; `null` when the tool cannot say (not installed, not logged in, an error), asked again next time. `tool` is `?tool=glab` or `?tool=gh` when the query names one (the batch bar asks for glab's: MR comments go through glab), else the settings' `postWith`, or with `auto` `gh` on a GitHub tracker and `glab` otherwise. The page names it in a post's confirmation, or says "your glab account", and in the Settings. |
 | `GET /api/settings`, `PUT /api/settings` | The user's settings file, read and written, with the recipe in force for the review's project and the recipes imported for it: see [the settings file](settings.md). |
 | `POST /api/recipe/use` | `{ "id" }`: Use this recipe, on an import of the project that is `ready`: its recipe checked again and written to its location (the project's `.tranchant/recipe.json`, or the local recipe); answers `{ target, to, settings }`. 409 `{ error }` when it is not ready, failed its check or is in use already. |
@@ -583,6 +663,9 @@ locks and show no progress.
 | `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "issue" \| "drop" \| "skip", "context"?, "comment"?, "reason"?, "title"?, "body"? } ] }` (`title` and `body`: an issue's). Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
 | `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ finding }`. The answer to a change's question joins its discussion.                                                                                                                                                                                                                                                                                     |
 | `POST /api/discuss`   | `{ "id", "text", "change"? }`: a question on finding `id`, refused (409) when `id` is not a finding of the review, its state allows no discussion, a message still waits, the text is empty, the discussion holds 60 messages, or its file is one this Tranchant cannot read; answers `{ discussion }` and prints `DISCUSS <id>`. With `change: true`, a change to the code instead (see [change requests](#change-requests)), refused too on a finding with no `thread` or a state the `change` move does not leave; prints `FIX <id>`. |
+| `POST /api/ask`       | `{ "path", "from", "to", "text" }`: a question on lines `from` to `to` (80 at most) of `path` (see [a question on lines](#a-question-on-lines)), read at the head; answers `{ id, question }` and prints `ASK <id>`. 400 when `from` or `to` is not a line number or `to` comes before `from`; 404 for a path that is not a text file of the diff; 409 for a range past 80 lines or the file's end, an empty text, or the diff unavailable. `{ "id", "text" }`: the reviewer asks again in question `id`, refused (409) while a message waits, once it became a finding, or past 60 messages; 404 for an id that is no question. |
+| `POST /api/ask/add`   | `{ "id", "at", "finding" }`: adds the finding the answer `at` (question `id`'s last) proposed, as the reviewer edited it; answers `{ id, question }`. 409 when that answer is not the last, has no proposal, was declined, the question became a finding already, or the finding is unsound. |
+| `POST /api/ask/decline` | `{ "id", "at" }`: No, thanks to the proposal of the answer `at`, question `id`'s last; answers `{ id, question }`. |
 | `POST /api/stop`      | `{ "id" }`; answers `{ finding }`. A change asked in the discussion gets its `stopped` result there.                                                                                                                                                                                                                                                                                                                                |
 | `GET /api/changes/<id>` | `{ files, diff }`: what finding `id`'s fix changed. `files`, each `{ path, since }`, are the paths of the `edit` and `write` steps (not `failed`) of its run that ended `fixed` (else its last run that ended; with `?run=<run>`, repeated up to 50 times, those runs once they ended, none otherwise, 400 for a value that is no run id; this finding's other runs that wrote a file later are then in its `since`, as `<id> (<run>)`), in `.history.jsonl`: their `file` (their `label` in runs recorded before it), relative to `project`, those outside it left out; `since` names the other findings whose runs, ended or in progress, wrote that file after this run last did: the diff then shows their changes too. `diff` is their unified diff against `HEAD` on the working tree, run in `project` (`git diff HEAD` for the tracked files, from `/dev/null` for an untracked regular file whose real path is in `project` and not in `.git`; anything else untracked left out). A finding with no run, or whose run wrote nothing, answers `{ files: [], diff: "" }`; an id not in the review, 404. Answers 409 with the reason when git is missing, `project` is not a git repository or has no commit, the diff is past `TRANCHANT_MAX_DIFF_MIB`, or git fails. |
 | `GET /api/runs/<id>`  | `{ progress, history }`: the steps of the run in progress, then those of the runs that ended, each a list.                                                                                                                                                                                                                                                         |
@@ -617,8 +700,9 @@ server's.
 | `summarize.mjs` | The summary agent's: `{ "summary": "<Markdown>", "strengths": ["…"] }` on stdin replaces the review's `summary` (non-blank, 12,000 characters at most) and `strengths` (10 at most, 500 characters each) while it is `reviewing`; prints `SUMMARIZED`. An unsound one, or any once the review is complete, prints `SUMMARY_REFUSED <reason>`, exit 2. |
 | `verify.mjs <id> [--file <finding.json> \| --amend]`, `verify.mjs --pending`                                                                         | A verifier's verdict: `VERIFIED <id>` sets `verified: true`; with the finding whole (same id) from the file or stdin, `AMENDED <id>` replaces it, verified, its `addedAt` kept. Amending a finding the reviewer decided on is refused. `--pending` prints `UNVERIFIED <id>` per finding not verified. A refusal prints `VERIFY_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                   |
 | `reply.mjs <id> [--ended]`                                                                                                  | A discussing agent's answer to the question that waits on finding `id`, as JSON on stdin: `{ "text", "fix"?, "comment"?, "drop"? }`; prints `REPLIED <id>`. No question waiting, not JSON, a `text` missing, or a proposal that is not a text: `REPLY_REFUSED <reason>`, exit 2. `--ended`, the hooks' once its agent ended: a question left waiting gets a `failed` answer and `UNANSWERED <id>` is printed. |
+| `reply.mjs <id> --question [--ended]`                                                                                       | An asking agent's answer to question `id` on lines of the diff: `{ "text", "finding"? }`; prints `REPLIED <id>`. Refused as above, and for a proposed `finding` the review would refuse (a field missing, its `line` outside the lines asked about, no `comment` on a theirs review). `--ended` as above. |
 | `remove.mjs <id>`                                                                                                           | Removes a finding a verifier rejected or found duplicated: `REMOVED <id>`. A finding the reviewer decided on, or one inline in `review.json`, stays: `REMOVE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `hook.mjs <pre\|post\|stop\|note\|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]` | The settings hooks of one finding's agent: file locks, refused Bash writes, steps. With `--reviewer <name>` in place of `--finding`, a review agent's: no lock, no writing tool, and its Bash runs only reading commands (git's reading subcommands, `cat`, `head`, `grep`…, chained; `sort` without `-o` or a compressor, `uniq` without an output file; no redirection but `2>&1` and `>/dev/null`, no substitution outside single quotes, no unquoted heredoc) and its own review script, a reviewer's `add.mjs`, the summary agent's `summarize.mjs`, a verifier's `verify.mjs`/`remove.mjs` or a discussing agent's `reply.mjs` on its own finding, run by its path in the skill's `scripts/` (no node option before it) with `--review` its own review and never `--ended`, the finding or the answer in a quoted heredoc; steps into `reviewers/<name>.jsonl`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `hook.mjs <pre\|post\|stop\|note\|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]` | The settings hooks of one finding's agent: file locks, refused Bash writes, steps. With `--reviewer <name>` in place of `--finding`, a review agent's: no lock, no writing tool, and its Bash runs only reading commands (git's reading subcommands, `cat`, `head`, `grep`…, chained; `sort` without `-o` or a compressor, `uniq` without an output file; no redirection but `2>&1` and `>/dev/null`, no substitution outside single quotes, no unquoted heredoc) and its own review script, a reviewer's `add.mjs`, the summary agent's `summarize.mjs`, a verifier's `verify.mjs`/`remove.mjs` or a discussing agent's `reply.mjs` on its own finding, an asking agent's `reply.mjs --question` on its own question, run by its path in the skill's `scripts/` (no node option before it) with `--review` its own review and never `--ended`, the finding or the answer in a quoted heredoc; steps into `reviewers/<name>.jsonl`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## The recipe
 

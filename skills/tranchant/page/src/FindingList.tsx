@@ -124,6 +124,7 @@ function Row({
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}
           {unverified && <span className="tr-chip">unverified</span>}
+          {finding.asked && <span className="tr-chip">from your question</span>}
           <span className="tr-item-title">{finding.title}</span>
           {commented && <CommentMark />}
           {discussed > 0 && <DiscussionMark count={discussed} />}

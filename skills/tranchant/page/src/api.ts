@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   DecisionInput,
   DecisionsResult,
+  ProposedFinding,
   ReviewPayload,
   Step,
   Tracker,
@@ -15,6 +16,7 @@ const DECISIONS = '/api/decisions'
 const ANSWER = '/api/answer'
 const STOP = '/api/stop'
 const DISCUSS = '/api/discuss'
+const ASK = '/api/ask'
 const RUNS = '/api/runs/'
 const DIFF = '/api/diff'
 const LINES = '/api/lines'
@@ -181,6 +183,24 @@ export const postDiscuss = (id: string, text: string, change = false) =>
     method: 'POST',
     body: JSON.stringify({ id, text, ...(change && { change: true }) }),
   })
+
+/** A question on lines `from` to `to` of `path`, a new thread; or with `id`, a follow-up in that thread. */
+export const postAsk = (
+  input:
+    | { path: string; from: number; to: number; text: string }
+    | { id: string; text: string },
+) => request<unknown>(ASK, { method: 'POST', body: JSON.stringify(input) })
+
+/** The finding the answer at `at` proposed, as the reviewer edited it, added to the review. */
+export const postAddAsked = (id: string, at: string, finding: ProposedFinding) =>
+  request<unknown>(`${ASK}/add`, {
+    method: 'POST',
+    body: JSON.stringify({ id, at, finding }),
+  })
+
+/** No, thanks: the finding the answer at `at` proposed is not added. */
+export const postDeclineAsked = (id: string, at: string) =>
+  request<unknown>(`${ASK}/decline`, { method: 'POST', body: JSON.stringify({ id, at }) })
 
 export const postStop = (id: string) =>
   request<unknown>(STOP, { method: 'POST', body: JSON.stringify({ id }) })
