@@ -192,7 +192,7 @@ const changeDiscussion = (dir, id, change) =>
 export function seedDiscussion(dir, id, messages) {
   return changeDiscussion(dir, id, (discussion) => {
     if (discussion.messages.length) return false
-    discussion.messages.push(...messages.slice(-MAX_MESSAGES))
+    discussion.messages.push(...messages)
     return true
   })
 }

@@ -42,7 +42,7 @@ interface Props {
   asking?: ReactNode
   /** The thread's heading: a finding's discussion by default. */
   title?: string
-  /** Shown under the agent's last answer: a question's proposed finding. */
+  /** Shown under the last message, unless it failed: a question's proposed finding. */
   below?: ReactNode
   /** Resolves to whether the server took the message: the draft stays until it does. */
   onSend: (text: string, change?: boolean) => Promise<boolean>

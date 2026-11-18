@@ -8,7 +8,8 @@
 // findings are verified (`verify`) runs; DISCUSS for each question the
 // reviewer asks about a finding; ASK for each question they ask about lines
 // of the diff. It watches the review folder, its
-// findings, its run files and its review agents' (reviewers/), and
+// findings, its run files, its review agents' (reviewers/), its discussions
+// and its questions, and
 // pushes `changed` to the pages on /api/events: they reload only then. It
 // watches the page's bundle too, and pushes `page` when a dev build replaces it.
 // It computes the change's diff (/api/diff) once, with git, for the page's main view,

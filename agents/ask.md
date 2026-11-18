@@ -43,7 +43,9 @@ Answer what it asks about the code, within this prompt's rules.
 1. Read the fenced JSON: `anchor` (`path`, relative to PROJECT, `startLine`,
    and `lines`, the code from that line on, at HEAD) and `messages`, oldest
    first; the last one, the reviewer's, is the one you answer, in the light
-   of the earlier ones.
+   of the earlier ones. An earlier answer's `proposal` is a finding you
+   proposed; `declined`, the reviewer did not want it: propose it again only
+   if this question gives a new reason. `failed`: that answer never came.
 2. Read the code the question is about: the file at `path` around those
    lines, what it calls and what calls it, the tests, `git -C PROJECT diff
    RANGE -- <path>`. Separate what the code shows from what the question
@@ -92,6 +94,8 @@ Answer what it asks about the code, within this prompt's rules.
        author's language, kind and concrete.
 
    A refusal names the reason (a field missing, a line outside the lines
-   asked about): fix it and call again, once.
+   asked about): fix it and call again, once. Refused again, send your
+   `text` alone, without `finding`, and say in it what you would have
+   proposed: the reviewer still gets your answer.
 4. Reply with one line: `REPLIED`. Never edit a file, never write in REVIEW
    but through reply.mjs, never commit.

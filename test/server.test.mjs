@@ -1688,6 +1688,86 @@ test('a question on lines prints ASK; its answer proposes a finding the reviewer
   assert.doesNotMatch(server.output(), new RegExp(`LANDED ${id}`))
 })
 
+/** Twenty lines, `line <n>`, but line 15. @param {string} fifteen */
+const twenty = (/** @type {string} */ fifteen) =>
+  Array.from({ length: 20 }, (_, at) => (at === 14 ? fifteen : `line ${at + 1}`)).join(
+    '\n',
+  ) + '\n'
+
+test('a finding added while a verified review runs gets no verifier; an add stopped halfway is finished by the next', async (t) => {
+  const project = await tempDir(t, 'tranchant-ask-')
+  await writeFile(path.join(project, 'long.ts'), twenty('line 15'))
+  await gitIn(project, 'init', '-q', '-b', 'main')
+  await gitIn(project, 'add', '-A')
+  await gitIn(project, 'commit', '-q', '-m', 'base')
+  await gitIn(project, 'checkout', '-q', '-b', 'ask')
+  // A minified line: longer than an excerpt holds, with a control character.
+  await writeFile(path.join(project, 'long.ts'), twenty(`${'x'.repeat(500)}\u0001`))
+  await gitIn(project, 'commit', '-q', '-am', 'head')
+  const headSha = await gitIn(project, 'rev-parse', 'HEAD')
+  const server = await startServer(t, {
+    name: 'ours',
+    overrides: { project, base: 'main', headSha, verify: true, status: 'reviewing' },
+  })
+  /** @param {string} route @param {unknown} body */
+  const send = (route, body) =>
+    fetch(`${server.base}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const { id, question } = await json(
+    await send('/api/ask', { path: 'long.ts', from: 15, to: 15, text: 'Why?' }),
+  )
+  assert.deepEqual(question.anchor.lines, ['x'.repeat(400)])
+  const proposed = { title: 'Minified', topic: 'Bugs', problem: 'p', why: 'w', fix: 'f' }
+  // A field past what the review keeps is refused, never cut.
+  const long = await run(
+    process.execPath,
+    [REPLY, id, '--question', '--review', server.dir],
+    {
+      input: JSON.stringify({
+        text: 'Yes.',
+        finding: { ...proposed, fix: 'f'.repeat(4001) },
+      }),
+    },
+  )
+  assert.equal(long.stdout, 'REPLY_REFUSED finding.fix: up to 4000 characters\n')
+  const replied = await run(
+    process.execPath,
+    [REPLY, id, '--question', '--review', server.dir],
+    { input: JSON.stringify({ text: 'Yes.', finding: proposed }) },
+  )
+  assert.equal(replied.stdout, `REPLIED ${id}\n`, replied.stderr)
+  const { at } = (await json(await fetch(`${server.base}/api/review`))).questions[id]
+    .messages[1]
+
+  // The discussion cannot be written: the finding landed, the question still offers it.
+  const discussion = path.join(server.dir, 'discussions', `${id}.json`)
+  await writeFile(discussion, '{"version":2,"messages":[]}')
+  const events = await listen(server.base)
+  try {
+    const stuck = await send('/api/ask/add', { id, at, finding: proposed })
+    assert.equal(stuck.status, 409)
+    await events.changed(id)
+  } finally {
+    events.close()
+  }
+  await rm(discussion)
+  // Added again, edited or declined: the add is finished as it was.
+  const declined = await send('/api/ask/decline', { id, at })
+  assert.equal(declined.status, 200)
+  const payload = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(payload.questions[id].finding, id)
+  assert.equal(payload.questions[id].messages[1].declined, undefined)
+  assert.equal(payload.discussions[id].messages.length, 2)
+  const finding = payload.review.findings.find((/** @type {any} */ one) => one.id === id)
+  assert.equal(finding.asked, true)
+  // The others get their verifier; the reviewer's own never does.
+  await server.nextLine('LANDED f-01', 0)
+  assert.doesNotMatch(server.output(), new RegExp(`LANDED ${id}`))
+})
+
 test('No, thanks declines a proposal, and the thread goes on; theirs needs the comment', async (t) => {
   const { project, headSha } = await changedProject(t)
   const first = await startServer(t, {

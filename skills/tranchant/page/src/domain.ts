@@ -393,6 +393,10 @@ export const endLineOf = (anchor: QuestionAnchor) =>
 
 /** The most lines one question may be about, as the server bounds it. */
 export const MAX_ASK_LINES = 80
+/** What the server takes of a question, and of each field of a proposed finding. */
+export const MAX_ASK_TEXT = 4000
+/** A finding's title, at most. */
+export const MAX_TITLE = 120
 
 /** What `GET /api/review` answers. */
 export interface ReviewPayload {

@@ -5,6 +5,8 @@ import {
   type Bucket,
   endLineOf,
   MAX_ASK_LINES,
+  MAX_ASK_TEXT,
+  MAX_TITLE,
   type Message,
   type ProposedFinding,
   type LineQuestion,
@@ -66,6 +68,7 @@ function FindingForm({
       <textarea
         className="tr-textarea"
         rows={3}
+        maxLength={MAX_ASK_TEXT}
         value={draft[key] ?? ''}
         onChange={(event) => set(key, event.target.value)}
       />
@@ -85,6 +88,7 @@ function FindingForm({
         <span>Title</span>
         <input
           className="tr-input"
+          maxLength={MAX_TITLE}
           value={draft.title}
           onChange={(event) => set('title', event.target.value)}
           autoFocus
@@ -417,6 +421,7 @@ export function AskBar({
           <textarea
             className="tr-textarea"
             rows={3}
+            maxLength={MAX_ASK_TEXT}
             value={text}
             placeholder="Can this be null? Is this lock released on error?"
             aria-label="Your question about these lines"

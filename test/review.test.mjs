@@ -459,6 +459,25 @@ test('verify.mjs confirms or amends a finding; --pending lists the others', asyn
   assert.equal(again.stdout, 'ADDED f-01\n', again.stderr)
 })
 
+test("only the reviewer's question makes a finding asked: add.mjs drops it, --pending skips it", async (t) => {
+  const { dir, findings } = await live(t, 'verify-asked')
+  const add = (/** @type {unknown} */ finding) =>
+    run(process.execPath, [path.join(SCRIPTS, 'add.mjs'), '--review', dir], {
+      input: JSON.stringify(finding),
+    })
+  // A producer that writes `asked` gets a finding like any other, verified first.
+  const claimed = { ...findings[2], id: 'f-09', asked: true }
+  assert.equal((await add(claimed)).stdout, 'ADDED f-09\n')
+  const landed = JSON.parse(await readFile(findingPath(dir, 'f-09'), 'utf8'))
+  assert.equal(landed.asked, undefined)
+  // The reviewer's own, through the store's `asked`: no verifier on it.
+  await createStore(dir).addFinding({ ...findings[2], id: 'q-1a2b3c4d' }, { asked: true })
+  assert.equal(
+    (await verify(['--pending', '--review', dir])).stdout,
+    'UNVERIFIED f-01\nUNVERIFIED f-02\nUNVERIFIED f-09\n',
+  )
+})
+
 test("a verifier's hooks let it give its verdict on its own finding only", async (t) => {
   const { dir } = await live(t, 'agent-2')
   const project = await tempDir(t)
@@ -551,6 +570,11 @@ test("an asking agent's hooks let it answer its own question only, with --questi
       `node ${reply} q-1a2b3c4d --question --review ${dir} --ended`,
     ),
     /never --ended/,
+  )
+  // After `--`, `--question` is no flag: reply.mjs would answer a finding's discussion.
+  assert.match(
+    await pre('qs-q-1a2b3c4d', `node ${reply} q-1a2b3c4d --review ${dir} -- --question`),
+    /no --/,
   )
   // A discussing agent never answers a question on lines, even one named like its finding.
   assert.match(

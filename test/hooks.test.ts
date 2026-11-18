@@ -1641,6 +1641,33 @@ test('questions wait behind three review agents; stop answers the waiting ones a
   ])
 })
 
+test('a question on lines waits behind three review agents; stop answers it as failed, with --question', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print('DISCUSS f-01', 'DISCUSS f-02', 'DISCUSS f-03', 'ASK q-1a2b3c4d')
+  expect(w.spawned).toHaveLength(3)
+  await $.command.run(command('stop'))
+  expect(w.replies).toContainEqual([
+    'q-1a2b3c4d',
+    '--question',
+    '--review',
+    DIR,
+    '--ended',
+  ])
+  expect(w.spawned).toHaveLength(3)
+})
+
+test('an asking agent that cannot start answers its question as failed', async ($, on) => {
+  const w = world(on, { spawnRefused: 'no agents today' })
+  await open($, w)
+  await w.print('ASK q-1a2b3c4d')
+  expect(w.replies).toEqual([['q-1a2b3c4d', '--question', '--review', DIR, '--ended']])
+  expect(w.toasts.at(-1)).toMatch(
+    /could not start the asker qs-q-1a2b3c4d: no agents today/,
+  )
+  await w.exit(0)
+})
+
 test('a discussing agent that cannot start answers its question as failed', async ($, on) => {
   const w = world(on, { spawnRefused: 'no agents today' })
   await open($, w)

@@ -6,12 +6,12 @@ folder: nothing is installed in a repository to review it.
 | File                              | Where                                 | Holds                                                                                       | Written by                                                                                                             |
 | --------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `review.json`                     | `<state>/<hash>/reviews/<review id>/` | The review's envelope as its producer wrote it: the change, its summary, its `status`       | The producer (any tool that follows this file), imported by `open.mjs`; `complete.mjs` sets its `status`               |
-| `findings/<finding id>.json`      | Next to it                            | One finding: its excerpt, marks and diagram, and `addedAt`, when it landed                  | `open.mjs` for the findings a producer wrote inline; `add.mjs` for each one that lands while the review is `reviewing` |
+| `findings/<finding id>.json`      | Next to it                            | One finding: its excerpt, marks and diagram, and `addedAt`, when it landed                  | `open.mjs` for the findings a producer wrote inline; `add.mjs` for each one that lands while the review is `reviewing`; the server for one the reviewer adds from their question (`POST /api/ask/add`), in any status |
 | `decisions.json`                  | Next to it                            | What the reviewer decided on each finding, its state, its runs and the history of its moves | The store (`scripts/lib/store.mjs`), for the server and the agents' scripts                                            |
 | `runs/<finding id>.jsonl`         | Next to it                            | The steps of the run in progress on that finding                                            | The hooks (`hooks/register.ts`)                                                                                        |
 | `runs/<finding id>.history.jsonl` | Next to it                            | The steps of every run that ended                                                           | The store, when a run ends                                                                                             |
 | `reviewers/<name>.jsonl`          | Next to it                            | The steps of one review agent of `/tranchant review`: `sm-summary`, `rv-<lens>` or `vf-<finding id>`; of a finding's discussing agent: `ds-<finding id>`; of a question's asking agent: `qs-<question id>` | The hooks (`hooks/register.ts`, `hook.mjs --reviewer`)                                                                 |
-| `discussions/<finding id>.json`   | Next to it                            | The finding's discussion: the reviewer's questions and the agent's answers                  | `lib/discussion.mjs`, for the server (a question, a change, and a change's answer or result on each move the reviewer makes and at start), `reply.mjs` (an answer), and `done.mjs`, `ask.mjs`, `hook.mjs ended` (a change's result) |
+| `discussions/<finding id>.json`   | Next to it                            | The finding's discussion: the reviewer's questions and the agent's answers                  | `lib/discussion.mjs`, for the server (a question, a change, and a change's answer or result on each move the reviewer makes and at start; a question's thread, once added as a finding), `reply.mjs` (an answer), and `done.mjs`, `ask.mjs`, `hook.mjs ended` (a change's result) |
 | `questions/<question id>.json`    | Next to it                            | A question the reviewer asked about lines of the diff, and the asking agent's answers       | `lib/question.mjs`, for the server (a question, a proposal added or declined) and `reply.mjs --question` (an answer) |
 | `lenses.json`                     | Next to it                            | The Lenses step of `/tranchant review`: one row per lens, as it is resolved and built        | `lenses.mjs`                                                                                                           |
 | `lenses/<sha256>.md`              | `<state>/`                            | A lens's prompt as the Lenses step built it, one file per hash, shared by every review       | `lenses.mjs`, once per hash                                                                                            |
@@ -89,7 +89,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `mr.viewer`   | string, optional          | Who imported its threads (`/tranchant comments`: GitHub's `viewer`, `glab api user`): the page marks their comments in a thread as theirs. |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
 | `summary`     | string                    | Markdown, shown above the findings. May be blank: with no `strengths` either, the page hides the section. While the review is `reviewing`, `summarize.mjs` writes it and `strengths`; the page shows them as they land. |
-| `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
+| `verify`      | boolean, optional         | `true`: each finding lands unverified and a verifier confirms it (`verified`); the page dims the others; while the review is `reviewing`, the server prints `LANDED` once for each not verified yet, but those `asked`, which no verifier checks. Only `/tranchant review` sets it: `open.mjs` drops it from any other file, and every finding's `verified`, so a review opened from a file is never dimmed. |
 | `findings`    | Finding[]                 | At least one, unless the review is not `complete`. Ids unique within the review.                    |
 
 ### A finding
@@ -158,7 +158,7 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `comment`                    | string, optional                    | The text to post, whole. Required when `ownership` is `theirs`; optional on an `ours` review with an `mr`, where the page prefills the editor from `problem` and `fix` when it is absent. Up to 4000 characters. |
 | `diagram.kind`               | `mermaid`, `svg` or `text`          | `mermaid`: [Mermaid](https://mermaid.js.org) source the page draws in its own colours, the way to show a sequence or a flow (`sequenceDiagram`, `flowchart`, `stateDiagram`); strict: no click, no HTML label, and a directive (`%%{init}%%`, front matter) cannot change the security level, the labels, the layout (dagre, `flowchart-elk` included), the theme, its CSS or its font; a source that does not parse shows as text with the parser's message. `svg`: inline SVG drawn by hand, for what Mermaid cannot draw, which the page sanitizes (no script, no event handler, no `foreignObject`, no external reference). `text`: preformatted, ASCII art or a Markdown list of steps. Up to 64 KiB. |
 | `related[]`                  | object[], optional                  | Up to 4. Same shape as `path`, `line`, `excerpt`, `marks`.                                                                                                                                       |
-| `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs` or `add.mjs`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
+| `addedAt`                    | string, optional                    | When it joined the review, set by `open.mjs`, `add.mjs` or the server's `POST /api/ask/add`: the producer leaves it out. `/api/review` lists the findings in that order.                                                           |
 | `thread`                     | object, optional                    | The pull or merge request thread the finding comes from, written by `comments.mjs` (see [`/tranchant comments`](#tranchant-comments)): `forge` (`github` or `gitlab`), `id` (GitHub's review thread node id, GitLab's discussion id), `url`, `comments` (1 to 100, the reviewer's first, then the replies: `author`, `body` up to 65,536 characters, a third party's Markdown, `at`, `url`), `outdated` (the code it was on is not at `line` in the head any more: `line` is only near it, its excerpt the code the comment read; the page puts it on its file's header) and `file` (on the whole file). Its `forge` is the review's `mr.forge` (`gitlab` when absent): a finding whose thread is on another forge, or in a review with no `mr`, is refused. A post on such a finding replies on the thread. |
 | `asked`                      | `true`, optional                    | Born from the reviewer's question on lines of the diff (see [a question on lines](#a-question-on-lines)), written by the server when they add the finding it proposed: no verifier checks it, and the page marks it as coming from their question. |
 | `verified`                   | boolean, optional                   | Set by `verify.mjs` once a verifier confirmed or amended it; read only when the review's `verify` is true. Like `addedAt`, left out when two findings are compared.                             |
@@ -390,8 +390,9 @@ left goes, the run that fixed it having finished it.
 ## A question on lines
 
 `questions/<question id>.json`: in the diff, the reviewer selects one line
-or a range of one file (the lines that show a number: added, context, and
-those unfolded around the hunks) and asks about it; an agent answers. The
+or a range of one file (from a line that shows a number to another: added,
+context, or unfolded around the hunks; the lines folded between them are
+asked about too) and asks about it; an agent answers. The
 id is `q-` and 8 hex digits, made by the server.
 
 ```jsonc
@@ -433,13 +434,14 @@ The server reads the lines again at the head (`/api/lines`' rules), never
 the page's: each is cut at 400 characters, a control character other than a
 tab shown as `�`, as a finding's excerpt holds them. Messages follow
 [a discussion](#a-discussion)'s rules: a last message by the `reviewer`
-waits for the agent, 60 messages at most, the reviewer's up to 4,000
+waits for the agent, 60 messages at most (the reviewer's last leaves room
+for the answer, so the whole thread fits a discussion), the reviewer's up to 4,000
 characters and the agent's up to 8,000; `failed` when its agent ended, was
 stopped or could not start before it answered.
 
 Each question starts one agent (`tranchant:qs-<id>-<review>`,
-`agents/ask.md`), the discussing agent's sibling: among the three review
-agents, after the review's own and the discussions', read-only, its hooks a
+`agents/ask.md`), the discussing agent's sibling: among the review agents
+(`maxReviewAgents`), after the review's own and the discussions', read-only, its hooks a
 review agent's (`hook.mjs --reviewer qs-<id>`), which let it run its own
 `reply.mjs <id> --question` only. Its prompt gives the question's id,
 `REVIEW`, `SKILL`, `PROJECT`, `BASE`, `HEAD`, `RANGE`, `OWNERSHIP`, then the
@@ -448,8 +450,10 @@ are data. A question still waiting when the server starts is asked again.
 
 Its answer may carry a proposed `finding`, which `reply.mjs` refuses unless
 the review would take it: its fields whole, its `line` among the lines asked
-about, its `comment` on a theirs review, its id (the question's) no
-finding's yet. The page shows it under the last answer:
+about, its `problem`, `why`, `fix` and `comment` up to 4,000 characters
+each, its `comment` on a theirs review, its id (the question's) no
+finding's yet. A producer's `asked` is dropped (`add.mjs`, `open.mjs`):
+only this route marks a finding so. The page shows it under the last answer:
 
 - **Add as a finding** opens it in a form to edit, then
   `POST /api/ask/add`: the finding is checked again and added whatever the
@@ -462,7 +466,10 @@ finding's yet. The page shows it under the last answer:
 - **No, thanks** (`POST /api/ask/decline`) sets `declined` on the answer:
   nothing is added, and the thread goes on.
 
-Only the last answer's proposal can be taken or declined, once.
+Only the last answer's proposal can be taken or declined, once. An add that
+stopped after the finding landed (its discussion could not be written) is
+finished by the next add or decline, which then only writes the discussion
+and sets `finding`.
 
 ## The run files
 
@@ -539,7 +546,7 @@ reviews a change with no producer of your own:
    `<review>` the review id's first 8 characters, the lens's prompt its
    instructions; see [the recipe](#the-recipe)) reads the diff and the files
    and calls `add.mjs` once per finding. As each finding lands, the server
-   prints `LANDED <id>` and a verifier (`tranchant:vf-<id>-<review>`,
+   prints `LANDED <id>` (never for an `asked` finding) and a verifier (`tranchant:vf-<id>-<review>`,
    `agents/review/verifier.md`) re-reads the code,
    then confirms it (`verify.mjs`), amends it (`verify.mjs --amend`) or
    removes it (`remove.mjs`), a duplicate of a finding that landed before it
@@ -549,7 +556,7 @@ reviews a change with no producer of your own:
    `verifyModel`), else the session's (`TRANCHANT_MODEL` wins over all); a
    lens the settings turn off (`disabledLenses`) is not run.
 6. Once the summary agent, every reviewer and every verifier ended, the hooks start a verifier for any
-   finding still unverified that had none (`verify.mjs --pending`), then call
+   finding still unverified, not `asked`, that had none (`verify.mjs --pending`), then call
    `complete.mjs`. `/tranchant stop` ends the review agents and completes the
    review too.
 
@@ -638,7 +645,7 @@ locks and show no progress.
 | `MOVED <id>`, `ISSUE_FAILED <id> <reason>`                 | The server ran `issue.mjs` itself; informational.                                |
 | `DROPPED <id>`, `SKIPPED <id>`                             | Informational.                                                                   |
 | `AGENT_ENDED <id>`                                         | `hook.mjs ended` found the finding still `working` and moved it to `failed`.     |
-| `LANDED <id>`                                              | A finding not verified yet is there, in a `verify` review still `reviewing`: the hooks start its verifier. Once per finding, after `READY`. |
+| `LANDED <id>`                                              | A finding not verified yet, and not `asked`, is there, in a `verify` review still `reviewing`: the hooks start its verifier. Once per finding, after `READY`. |
 | `DISCUSS <id>`                                             | The reviewer asked about finding `id`: the hooks start its discussing agent. Again at start for each question still waiting. |
 | `ASK <id>`                                                 | The reviewer asked question `id` about lines of the diff: the hooks start its asking agent. Again at start for each question still waiting. |
 | `PORT_BUSY <port> is used by <owner>`                      | Could not listen.                                                                |
@@ -663,9 +670,9 @@ locks and show no progress.
 | `POST /api/decisions` | `{ "decisions": [ { "id", "action": "fix" \| "post" \| "issue" \| "drop" \| "skip", "context"?, "comment"?, "reason"?, "title"?, "body"? } ] }` (`title` and `body`: an issue's). Applies each in order; answers `{ applied: [ids], refused: [ { id, reason } ] }`. A batch is one request.                                                                                                                                       |
 | `POST /api/answer`    | `{ "id", "text", "choices"? }` on an `asking` finding; answers `{ finding }`. The answer to a change's question joins its discussion.                                                                                                                                                                                                                                                                                     |
 | `POST /api/discuss`   | `{ "id", "text", "change"? }`: a question on finding `id`, refused (409) when `id` is not a finding of the review, its state allows no discussion, a message still waits, the text is empty, the discussion holds 60 messages, or its file is one this Tranchant cannot read; answers `{ discussion }` and prints `DISCUSS <id>`. With `change: true`, a change to the code instead (see [change requests](#change-requests)), refused too on a finding with no `thread` or a state the `change` move does not leave; prints `FIX <id>`. |
-| `POST /api/ask`       | `{ "path", "from", "to", "text" }`: a question on lines `from` to `to` (80 at most) of `path` (see [a question on lines](#a-question-on-lines)), read at the head; answers `{ id, question }` and prints `ASK <id>`. 400 when `from` or `to` is not a line number or `to` comes before `from`; 404 for a path that is not a text file of the diff; 409 for a range past 80 lines or the file's end, an empty text, or the diff unavailable. `{ "id", "text" }`: the reviewer asks again in question `id`, refused (409) while a message waits, once it became a finding, or past 60 messages; 404 for an id that is no question. |
-| `POST /api/ask/add`   | `{ "id", "at", "finding" }`: adds the finding the answer `at` (question `id`'s last) proposed, as the reviewer edited it; answers `{ id, question }`. 409 when that answer is not the last, has no proposal, was declined, the question became a finding already, or the finding is unsound. |
-| `POST /api/ask/decline` | `{ "id", "at" }`: No, thanks to the proposal of the answer `at`, question `id`'s last; answers `{ id, question }`. |
+| `POST /api/ask`       | `{ "path", "from", "to", "text" }`: a question on lines `from` to `to` (80 at most) of `path` (see [a question on lines](#a-question-on-lines)), read at the head; answers `{ id, question }` and prints `ASK <id>`. 400 when `path` is missing, `from` or `to` is not a line number or `to` comes before `from`; 404 for a path that is not a text file of the diff; 409 for a range past 80 lines or the file's end, an empty text, or the diff unavailable. `{ "id", "text" }`: the reviewer asks again in question `id`, refused (409) for an empty text, while a message waits, once it became a finding, or when 59 messages are there; 400 for an id that is not one, 404 for an id that is no question. |
+| `POST /api/ask/add`   | `{ "id", "at", "finding" }`: adds the finding the answer `at` (question `id`'s last) proposed, as the reviewer edited it; answers `{ id, question }`. 400 for an `id` or `at` that is not one, 404 for an id that is no question; 409 when that answer is not the last, has no proposal, was declined, the question became a finding already, or the finding is unsound. |
+| `POST /api/ask/decline` | `{ "id", "at" }`: No, thanks to the proposal of the answer `at`, question `id`'s last; answers `{ id, question }`. 400 and 404 as the add; 409 when that answer is not the last, has no proposal, was declined already, or the question became a finding. |
 | `POST /api/stop`      | `{ "id" }`; answers `{ finding }`. A change asked in the discussion gets its `stopped` result there.                                                                                                                                                                                                                                                                                                                                |
 | `GET /api/changes/<id>` | `{ files, diff }`: what finding `id`'s fix changed. `files`, each `{ path, since }`, are the paths of the `edit` and `write` steps (not `failed`) of its run that ended `fixed` (else its last run that ended; with `?run=<run>`, repeated up to 50 times, those runs once they ended, none otherwise, 400 for a value that is no run id; this finding's other runs that wrote a file later are then in its `since`, as `<id> (<run>)`), in `.history.jsonl`: their `file` (their `label` in runs recorded before it), relative to `project`, those outside it left out; `since` names the other findings whose runs, ended or in progress, wrote that file after this run last did: the diff then shows their changes too. `diff` is their unified diff against `HEAD` on the working tree, run in `project` (`git diff HEAD` for the tracked files, from `/dev/null` for an untracked regular file whose real path is in `project` and not in `.git`; anything else untracked left out). A finding with no run, or whose run wrote nothing, answers `{ files: [], diff: "" }`; an id not in the review, 404. Answers 409 with the reason when git is missing, `project` is not a git repository or has no commit, the diff is past `TRANCHANT_MAX_DIFF_MIB`, or git fails. |
 | `GET /api/runs/<id>`  | `{ progress, history }`: the steps of the run in progress, then those of the runs that ended, each a list.                                                                                                                                                                                                                                                         |
@@ -698,7 +705,7 @@ server's.
 | `lenses.mjs --review <dir> --plan <file>` | The Lenses step, once the page is open: builds each lens of the plan, writing `lenses.json` as it goes; every lens built, the review becomes `reviewing` with its `lenses` and it prints one `LENS <json>` per lens (`{ name, prompt, paths, model?, topics? }`, `prompt` the built file). A source that cannot be resolved makes the review `refused` and prints `REVIEW_REFUSED lens <name> (<source>): <reason>; <fix>`, exit 2, no `LENS` line. |
 | `import.mjs --find \| --prepare <source> --to <project \| local> \| --check <folder>` | `/tranchant import`'s, run from the session's folder. `--find`: `CANDIDATE <path>` per `.claude/skills/*review*` and `.claude/agents/*review*` of the project, else `NO_CANDIDATE`. `--prepare`: finds the source, makes the import's folder and prints `IMPORT <json>` (`{ id, dir, recipe, source, file, folder, version?, to, target, project }`). `--check`: the agent's recipe checked as `prepare.mjs` reads one, each lens built from its location; prints `IMPORTED <target>`. `IMPORT_REFUSED <reason>`, exit 2. |
 | `summarize.mjs` | The summary agent's: `{ "summary": "<Markdown>", "strengths": ["…"] }` on stdin replaces the review's `summary` (non-blank, 12,000 characters at most) and `strengths` (10 at most, 500 characters each) while it is `reviewing`; prints `SUMMARIZED`. An unsound one, or any once the review is complete, prints `SUMMARY_REFUSED <reason>`, exit 2. |
-| `verify.mjs <id> [--file <finding.json> \| --amend]`, `verify.mjs --pending`                                                                         | A verifier's verdict: `VERIFIED <id>` sets `verified: true`; with the finding whole (same id) from the file or stdin, `AMENDED <id>` replaces it, verified, its `addedAt` kept. Amending a finding the reviewer decided on is refused. `--pending` prints `UNVERIFIED <id>` per finding not verified. A refusal prints `VERIFY_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                   |
+| `verify.mjs <id> [--file <finding.json> \| --amend]`, `verify.mjs --pending`                                                                         | A verifier's verdict: `VERIFIED <id>` sets `verified: true`; with the finding whole (same id) from the file or stdin, `AMENDED <id>` replaces it, verified, its `addedAt` kept. Amending a finding the reviewer decided on is refused. `--pending` prints `UNVERIFIED <id>` per finding not verified, but those `asked`. A refusal prints `VERIFY_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                   |
 | `reply.mjs <id> [--ended]`                                                                                                  | A discussing agent's answer to the question that waits on finding `id`, as JSON on stdin: `{ "text", "fix"?, "comment"?, "drop"? }`; prints `REPLIED <id>`. No question waiting, not JSON, a `text` missing, or a proposal that is not a text: `REPLY_REFUSED <reason>`, exit 2. `--ended`, the hooks' once its agent ended: a question left waiting gets a `failed` answer and `UNANSWERED <id>` is printed. |
 | `reply.mjs <id> --question [--ended]`                                                                                       | An asking agent's answer to question `id` on lines of the diff: `{ "text", "finding"? }`; prints `REPLIED <id>`. Refused as above, and for a proposed `finding` the review would refuse (a field missing, its `line` outside the lines asked about, no `comment` on a theirs review). `--ended` as above. |
 | `remove.mjs <id>`                                                                                                           | Removes a finding a verifier rejected or found duplicated: `REMOVED <id>`. A finding the reviewer decided on, or one inline in `review.json`, stays: `REMOVE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |

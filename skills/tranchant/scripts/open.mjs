@@ -87,7 +87,10 @@ if (!ours && (parsed.status === 'preparing' || parsed.status === 'refused'))
 const review = {
   ...parsed,
   ...(ours ? { verify: true } : {}),
-  findings: parsed.findings.map(({ verified: _verified, ...finding }) => finding),
+  // A producer's finding is neither verified nor `asked`, whatever it says.
+  findings: parsed.findings.map(
+    ({ verified: _verified, asked: _asked, ...finding }) => finding,
+  ),
 }
 const { id, project } = review
 const dir = reviewDir(project, id)

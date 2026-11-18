@@ -36,7 +36,6 @@ const MAX_MESSAGES = 60
 const MAX_QUESTION = 4000
 const MAX_ANSWER = 8000
 const MAX_FIELD = 4000
-const MAX_COMMENT = 4000
 const UNANSWERED = 'The agent ended without answering: ask again.'
 const QUESTION_FILE = /^([\w-]{1,64})\.json$/
 // The topics a person decides on; the others an assistant fixes from the text alone.
@@ -117,7 +116,11 @@ export async function readQuestions(dir) {
   for (const name of names) {
     const id = QUESTION_FILE.exec(name)?.[1]
     if (!id) continue
-    const question = await readQuestion(dir, id)
+    // One file it cannot read leaves the others, and the page, as they are.
+    const question = await readQuestion(dir, id).catch((error) => {
+      console.error(`tranchant: questions/${name}: ${String(error)}; left out`)
+      return undefined
+    })
     if (question) all[id] = question
   }
   return all
@@ -192,7 +195,7 @@ export async function ask(dir, anchor, text) {
 /**
  * The reviewer asks again in question `id`: refused while the last message
  * waits, once the question became a finding (its discussion goes on there),
- * and past 60 messages.
+ * and when the agent's answer would not fit in its 60 messages.
  * @param {string} dir
  * @param {string} id
  * @param {unknown} text
@@ -207,7 +210,8 @@ export function askAgain(dir, id, text) {
       )
     if (waitsForAnswer(data))
       throw new StoreRefusal('the agent is still answering the last message')
-    if (data.messages.length >= MAX_MESSAGES)
+    // Room for the answer too: the thread may become a finding's discussion, as whole.
+    if (data.messages.length >= MAX_MESSAGES - 1)
       throw new StoreRefusal(`a question holds ${MAX_MESSAGES} messages at most`)
     data.messages.push({ by: 'reviewer', text: question, at: now() })
     return data
@@ -225,8 +229,11 @@ export function askAgain(dir, id, text) {
 function proposalOf(given, anchor) {
   if (!given || typeof given !== 'object' || Array.isArray(given))
     throw new StoreRefusal('finding: an object is required')
-  for (const key of ['title', 'problem', 'why', 'fix'])
+  for (const key of ['title', 'problem', 'why', 'fix']) {
     if (!isText(given[key])) throw new StoreRefusal(`finding.${key}: a text is required`)
+    if (given[key].trim().length > MAX_FIELD)
+      throw new StoreRefusal(`finding.${key}: up to ${MAX_FIELD} characters`)
+  }
   if (!TOPICS.includes(given.topic))
     throw new StoreRefusal(`finding.topic: one of ${TOPICS.join(', ')}`)
   const bucket = given.bucket ?? (REVIEW_TOPICS.has(given.topic) ? 'review' : 'auto')
@@ -243,17 +250,17 @@ function proposalOf(given, anchor) {
   if (given.comment !== undefined && given.comment !== null && !isText(given.comment))
     throw new StoreRefusal('finding.comment: a text')
   const comment = isText(given.comment) ? given.comment.trim() : undefined
-  if (comment !== undefined && comment.length > MAX_COMMENT)
-    throw new StoreRefusal(`finding.comment: up to ${MAX_COMMENT} characters`)
+  if (comment !== undefined && comment.length > MAX_FIELD)
+    throw new StoreRefusal(`finding.comment: up to ${MAX_FIELD} characters`)
   return {
     title: given.title.trim(),
     topic: given.topic,
     bucket,
     ...(given.tag !== undefined && { tag: given.tag }),
     line,
-    problem: given.problem.trim().slice(0, MAX_FIELD),
-    why: given.why.trim().slice(0, MAX_FIELD),
-    fix: given.fix.trim().slice(0, MAX_FIELD),
+    problem: given.problem.trim(),
+    why: given.why.trim(),
+    fix: given.fix.trim(),
     ...(comment !== undefined && { comment }),
   }
 }
@@ -368,10 +375,40 @@ function openProposal(data, at) {
  * @returns {Promise<Question>}
  */
 export function decline(dir, id, at) {
-  return changeQuestion(dir, id, (data) => {
+  return changeQuestion(dir, id, async (data) => {
+    if (data.finding)
+      throw new StoreRefusal(`the question became finding ${data.finding}`)
+    // An add that stopped halfway is finished, never declined.
+    if (await addedAlready(dir, id)) return becameFinding(dir, id, data)
     openProposal(data, at).declined = true
     return data
   })
+}
+
+/** Whether the review holds finding `id`: an add that stopped before the question said so. @param {string} dir @param {string} id */
+const addedAlready = async (dir, id) =>
+  (await createStore(dir).readReview()).findings.some((one) => one.id === id)
+
+/**
+ * Question `id` became finding `id`: its thread becomes the finding's
+ * discussion, its proposals left out, and the question says so.
+ * @param {string} dir
+ * @param {string} id
+ * @param {Question} data
+ */
+async function becameFinding(dir, id, data) {
+  await seedDiscussion(
+    dir,
+    id,
+    data.messages.map(({ by, text, at, failed }) => ({
+      by,
+      text,
+      at,
+      ...(failed && { failed }),
+    })),
+  )
+  data.finding = id
+  return data
 }
 
 /**
@@ -386,25 +423,16 @@ export function decline(dir, id, at) {
  */
 export function addAsked(dir, id, at, given) {
   return changeQuestion(dir, id, async (data) => {
+    if (data.finding)
+      throw new StoreRefusal(`the question became finding ${data.finding}`)
+    // An add that stopped halfway (its discussion unwritten) is finished as it was.
+    if (await addedAlready(dir, id)) return becameFinding(dir, id, data)
     openProposal(data, at)
-    // Not unique: an add whose discussion failed is taken again, the same finding.
-    const proposed = await checkedProposal(dir, id, data.anchor, given, false)
+    const proposed = await checkedProposal(dir, id, data.anchor, given, true)
     await createStore(dir).addFinding(findingOf(id, data.anchor, proposed), {
       asked: true,
     })
-    // Its proposal is the finding now: the discussion keeps the words.
-    await seedDiscussion(
-      dir,
-      id,
-      data.messages.map(({ by, text, at: when, failed }) => ({
-        by,
-        text,
-        at: when,
-        ...(failed && { failed }),
-      })),
-    )
-    data.finding = id
-    return data
+    return becameFinding(dir, id, data)
   })
 }
 

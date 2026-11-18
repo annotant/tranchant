@@ -388,6 +388,8 @@ function reviewerRefusal(name, command, review) {
         return 'it answers the question with reply.mjs <id> --question'
       if (kind === 'ds' && args.includes('--question'))
         return 'it answers the finding’s discussion, without --question'
+      // After `--` every word is positional: `-- --question` would read as no flag at all.
+      if (args.includes('--')) return 'a review script takes no --'
       const outside = reviewArgRefusal(args.slice(1), review)
       if (outside) return outside
       continue

@@ -527,8 +527,9 @@ export function createStore(dir) {
      * A producer adds a finding to the review: `findings/<id>.json`, stamped
      * with the time it landed. The same finding again changes nothing;
      * another one under the same id is refused, as is any finding once the
-     * review is complete. Under review.json's lock: producers run in parallel.
-     * `asked`: the reviewer adds it from their question, whatever the review's status.
+     * review is complete or refused, unless `asked`: the reviewer adds it from
+     * their question, whatever the review's status, and it alone is marked
+     * `asked`. Under review.json's lock: producers run in parallel.
      * @param {any} finding
      * @param {{ asked?: boolean }} [options]
      * @returns {Promise<{ id: string, added: boolean }>} `added`: false when it was there already.
@@ -554,9 +555,13 @@ export function createStore(dir) {
         if (!asked && statusOf(review) === 'refused') {
           throw new StoreRefusal('the review was refused: nothing can be added')
         }
-        // Only a verifier verifies: a finding lands unverified, whatever it says.
-        const { verified: _verified, ...landed } = finding
-        await writeFinding({ ...landed, addedAt: new Date().toISOString() })
+        // Only a verifier verifies, and only the reviewer's question makes a finding `asked`.
+        const { verified: _verified, asked: _asked, ...landed } = finding
+        await writeFinding({
+          ...landed,
+          ...(asked && { asked: true }),
+          addedAt: new Date().toISOString(),
+        })
         return { id: finding.id, added: true }
       })
     },
