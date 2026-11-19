@@ -45,6 +45,11 @@ export type ReviewJob =
 export type ReviewRun = {
   queue: ReviewJob[]
   verifying: string[]
+  /**
+   * While lenses whose source changed are cleaned again: the plan the Lenses
+   * step builds once they end, and their cleanings' folders still at work.
+   */
+  waiting?: { plan: string; cleanings: string[] }
 }
 
 /**
@@ -69,18 +74,22 @@ export type ReviewAgent = {
 }
 
 /**
- * An import `/tranchant import` runs: its agent, its folder in the state,
- * the recipe file it alone may write, and where Use this recipe puts it.
+ * A lens's cleaning (Add a lens, `/tranchant import`, a source that changed):
+ * its agent, its folder in the state and the two files it alone may write.
  */
-export type Importing = {
+export type Cleaning = {
   agent: string
-  /** `im-` and the import id's first 8 characters: its agent type's name. */
+  /** `cl-` and the cleaning id's first 8 characters: its agent type's name. */
   name: string
   dir: string
-  recipe: string
+  /** The lens it makes, or cleans again, and where that lens lives. */
+  lens: string
+  scope: string
+  again: boolean
   source: string
-  target: string
   project: string
+  /** The two files it writes: the lens's domain and its report. */
+  writes: string[]
   running: boolean
 }
 
@@ -106,10 +115,14 @@ declare module 'claude-code' {
       run?: boolean
       target?: string
       recipe?: string
-      /** A review process to import as a recipe; empty, the project's are listed. */
+      /** A reviewer to add as a lens, cleaned first; empty, the project's are listed. */
       import?: string
-      /** With import: `project` or `local`. */
+      /** With import: `global` or `local`. */
       to?: string
+      /** With import: the lens's name; absent, one from its source. */
+      name?: string
+      /** With import: a skill that frames the lens's run. */
+      context?: string
     }
   }
   interface PluginState {
@@ -132,8 +145,8 @@ declare module 'claude-code' {
       reviewAgents: Record<string, ReviewAgent>
       /** By review folder, the findings whose question waits for a free agent, in order. */
       discussing: Record<string, string[]>
-      /** By import folder: the imports started, running or ended. */
-      importing: Record<string, Importing>
+      /** By cleaning folder: the cleanings started, running or ended. */
+      cleaning: Record<string, Cleaning>
     }
   }
 }

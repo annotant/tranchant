@@ -112,3 +112,56 @@ test('a refused review shows the Lenses step and no reviewer', async () => {
   expect(screen.getByText(/No reviewer ran: a lens could not be built/)).toBeTruthy()
   expect(screen.getByText('review refused')).toBeTruthy()
 })
+
+test('a lens whose source changed says it is cleaned again, then cleaned, or that its last version runs', () => {
+  const { unmount } = render(
+    <LensesStep
+      step={{
+        state: 'resolving',
+        lenses: [
+          {
+            name: 'abac',
+            source: 'workflow:code-reviewer-abac',
+            state: 'resolving',
+            scope: 'local',
+            cleaning: 'running',
+          },
+          { name: 'bugs', source: 'tranchant:bugs', state: 'resolving' },
+        ],
+      }}
+      review={{ status: 'preparing' }}
+    />,
+  )
+  expect(screen.getByRole('region', { name: 'Lenses' }).textContent).toContain(
+    '1 lens cleaned again first, its source changed: the reviewers wait for it',
+  )
+  expect(rows()[0]?.textContent).toContain('workflow:code-reviewer-abac · this project')
+  expect(rows()[0]?.textContent).toContain('its source changed · cleaning again')
+  unmount()
+  render(
+    <LensesStep
+      step={{
+        state: 'ready',
+        lenses: [
+          {
+            name: 'abac',
+            source: 'workflow:code-reviewer-abac',
+            state: 'ready',
+            cleaning: 'failed',
+            reason: 'the agent wrote no lens.md',
+          },
+          { name: 'money', source: './money.md', state: 'ready', cleaning: 'again' },
+        ],
+      }}
+      review={{ status: 'reviewing' }}
+    />,
+  )
+  const step = screen.getByRole('region', { name: 'Lenses' })
+  expect(step.textContent).toContain(', 1 cleaned again')
+  expect(step.textContent).toContain(
+    'abac could not be cleaned again: the last version runs',
+  )
+  // A failed cleaning keeps the rows open: the reason shows without asking.
+  expect(rows()[0]?.textContent).toContain('the agent wrote no lens.md')
+  expect(rows()[1]?.textContent).toContain('ready · cleaned again: its source changed')
+})

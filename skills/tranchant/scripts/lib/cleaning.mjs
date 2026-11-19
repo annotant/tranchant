@@ -1,0 +1,597 @@
+// A lens's cleaning: Add a lens on the page, /tranchant import, or a source
+// that changed since its lens was last cleaned. Each in
+// <state>/<project hash>/cleanings/<id>/: cleaning.json (the source, the lens
+// it makes or cleans again, where it stands) and the two files the cleaning
+// agent writes, lens.md (the source's review without its orchestration and
+// output) and report.json (where it runs, its topics, its integration rules,
+// what was removed and added; or why the source holds no single review). A
+// new lens waits there, unused, until the page adds it; a lens cleaned again
+// takes its new version as soon as the cleaning is checked.
+import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { readFile, readdir, rm } from 'node:fs/promises'
+import path from 'node:path'
+import { LensRefusal, buildLens } from './lens.mjs'
+import { STATE_ROOT, hashOf } from './project.mjs'
+import {
+  LensFileRefusal,
+  MAX_SCOPE_LENSES,
+  isSourceText,
+  checkChanges,
+  checkUserLens,
+  checkRuntime,
+  hashesOf,
+  isScope,
+  lensDir,
+  listUserLenses,
+  readUserLens,
+  recordedSource,
+  whereOf,
+  writeJson,
+  writeText,
+  writeUserLens,
+} from './userlens.mjs'
+
+/** @typedef {import('./userlens.mjs').Scope} Scope */
+/** @typedef {import('./userlens.mjs').UserLens} UserLens */
+/**
+ * @typedef {object} Cleaning
+ * @property {string} id
+ * @property {string} createdAt
+ * @property {string} project
+ * @property {string} name The lens it makes, or cleans again.
+ * @property {Scope} scope
+ * @property {boolean} again Whether it cleans a stored lens again.
+ * @property {string} source As the lens records it.
+ * @property {string} file The source's file, found.
+ * @property {string} folder Its folder.
+ * @property {string} [version]
+ * @property {string} sourceHash
+ * @property {string} [context]
+ * @property {string} [contextFile]
+ * @property {string} [contextHash]
+ * @property {'cleaning' | 'ready' | 'failed' | 'added'} state
+ * @property {string} [reason] With `failed`.
+ * @property {string[]} [instead] With `failed`: the reviewers a whole process starts, to add one by one.
+ */
+
+/** A cleaning still `cleaning` after this long lost its agent: shown failed. */
+const LOST_MS = 30 * 60 * 1000
+const MAX_DOMAIN = 64 * 1024
+const MAX_RULES = 8 * 1024
+const MAX_INSTEAD = 12
+
+/** A cleaning this Tranchant refuses to start or use, and why. */
+export class CleaningRefusal extends Error {}
+
+/** @param {string} what @returns {never} */
+const refuse = (what) => {
+  throw new CleaningRefusal(what)
+}
+
+const message = (/** @type {unknown} */ error) =>
+  error instanceof Error ? error.message : String(error)
+
+/** The cleanings of the project at `root`. */
+export const cleaningsDir = (/** @type {string} */ root) =>
+  path.join(STATE_ROOT, hashOf(root), 'cleanings')
+
+/** A cleaning's folder, from its id: a name, never a path. */
+function cleaningDir(/** @type {string} */ project, /** @type {string} */ id) {
+  if (!/^[\w-]{1,64}$/.test(id)) throw new CleaningRefusal(`no cleaning ${id}`)
+  return path.join(cleaningsDir(project), id)
+}
+
+/** @returns {Promise<Cleaning>} */
+async function readCleaning(/** @type {string} */ dir) {
+  return JSON.parse(await readFile(path.join(dir, 'cleaning.json'), 'utf8'))
+}
+
+/** The record of cleaning `id`, or a refusal naming it. */
+export async function cleaningOf(
+  /** @type {string} */ project,
+  /** @type {string} */ id,
+) {
+  const dir = cleaningDir(project, id)
+  return {
+    dir,
+    record: await readCleaning(dir).catch(() => {
+      throw new CleaningRefusal(`no cleaning ${id}`)
+    }),
+  }
+}
+
+/**
+ * What the cleaning agent is given, from its record: the files it reads and
+ * the two it writes.
+ * @param {string} dir
+ * @param {Cleaning} record
+ */
+export function agentInput(dir, record) {
+  const kept = path.join(dir, 'rules.md')
+  return {
+    id: record.id,
+    dir,
+    project: record.project,
+    name: record.name,
+    scope: record.scope,
+    again: record.again,
+    source: record.source,
+    file: record.file,
+    folder: record.folder,
+    ...(record.version && { version: record.version }),
+    ...(record.contextFile && {
+      context: record.context,
+      contextFile: record.contextFile,
+    }),
+    ...(existsSync(kept) && { rules: kept }),
+    lens: path.join(dir, 'lens.md'),
+    report: path.join(dir, 'report.json'),
+  }
+}
+
+/**
+ * The source and context of a lens found and hashed, as a cleaning records
+ * them; a LensRefusal becomes the cleaning's refusal.
+ * @param {{ source: string, context?: string }} lens
+ * @param {string} project
+ */
+async function found(lens, project) {
+  try {
+    const hashes = await hashesOf(lens, project)
+    return {
+      file: hashes.source.file,
+      folder: hashes.source.folder,
+      ...(hashes.source.version && { version: hashes.source.version }),
+      sourceHash: hashes.sourceHash,
+      ...(hashes.context && {
+        context: lens.context,
+        contextFile: hashes.context.file,
+        contextHash: hashes.contextHash,
+      }),
+    }
+  } catch (error) {
+    if (error instanceof LensRefusal) throw new CleaningRefusal(error.message)
+    throw error
+  }
+}
+
+/**
+ * A new lens's cleaning, for the project at `project`: the source found
+ * first, so a name that does not resolve starts no agent, and the name free
+ * in its scope.
+ * @param {{ project: string, source: string, name?: string, scope: string, context?: string }} given
+ * @returns {Promise<{ dir: string, record: Cleaning }>}
+ */
+export async function createCleaning({ project, source, name, scope, context }) {
+  if (!isScope(scope))
+    throw new CleaningRefusal(
+      `a lens is global or local, never in the repository: not ${scope}`,
+    )
+  if (!isSourceText(source))
+    throw new CleaningRefusal('a source is required, on one line: plugin:name, or a path')
+  if (context?.trim() && !isSourceText(context))
+    throw new CleaningRefusal('the context skill is one line: plugin:skill, or a path')
+  const lensName = name?.trim() || nameOf(source)
+  let target
+  try {
+    target = lensDir(scope, project, lensName)
+  } catch (error) {
+    if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
+    throw error
+  }
+  if (existsSync(target))
+    throw new CleaningRefusal(
+      `a lens named ${lensName} is ${scope === 'global' ? 'global' : "this project's"} already: edit it, or choose another name`,
+    )
+  if ((await listUserLenses(scope, project)).length >= MAX_SCOPE_LENSES)
+    throw new CleaningRefusal(`${MAX_SCOPE_LENSES} lenses of a scope at most`)
+  const recorded = recordedSource(source, scope, project)
+  const recordedContext = context?.trim()
+    ? recordedSource(context, scope, project)
+    : undefined
+  const sources = await found(
+    { source: recorded, ...(recordedContext && { context: recordedContext }) },
+    project,
+  )
+  return start(project, {
+    name: lensName,
+    scope,
+    again: false,
+    source: recorded,
+    ...sources,
+  })
+}
+
+/**
+ * A stored lens's cleaning again, its source changed or asked anew: the
+ * integration rules the user edited go to the agent, and stay.
+ * @param {{ project: string, scope: string, name: string }} given
+ */
+export async function cleanAgain({ project, scope, name }) {
+  if (!isScope(scope)) throw new CleaningRefusal(`no lens scope ${scope}`)
+  let dir
+  let lens
+  try {
+    dir = lensDir(scope, project, name)
+    lens = await readUserLens(dir)
+  } catch (error) {
+    if (error instanceof LensFileRefusal)
+      throw new CleaningRefusal(`the lens ${name} cannot be read: ${error.message}`)
+    throw error
+  }
+  const sources = await found(lens, project)
+  const made = await start(project, {
+    name,
+    scope,
+    again: true,
+    source: lens.source,
+    ...sources,
+  })
+  if (lens.rulesEdited) await writeText(path.join(made.dir, 'rules.md'), lens.rules)
+  return made
+}
+
+/** A name for a lens from its source: its last segment, as a lens name. */
+function nameOf(/** @type {string} */ source) {
+  const last =
+    source
+      .trim()
+      .replace(/\/SKILL\.md$/i, '')
+      .replace(/\.md$/i, '')
+      .split(/[:/]/)
+      .findLast(Boolean) ?? 'lens'
+  return (
+    last
+      .replace(/[^\w-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/^(?:code-)?review(?:er)?-|-review(?:er)?$/g, '')
+      .slice(0, 40) || 'lens'
+  )
+}
+
+/**
+ * Writes a cleaning's record, `cleaning`.
+ * @param {string} project
+ * @param {Omit<Cleaning, 'id' | 'createdAt' | 'project' | 'state'>} fields
+ */
+async function start(project, fields) {
+  const id = randomUUID()
+  const dir = cleaningDir(project, id)
+  /** @type {Cleaning} */
+  const record = {
+    id,
+    createdAt: new Date().toISOString(),
+    project,
+    ...fields,
+    state: 'cleaning',
+  }
+  await writeJson(path.join(dir, 'cleaning.json'), record)
+  return { dir, record }
+}
+
+/**
+ * What the agent wrote, checked: its lens's domain and its report, or why
+ * the source holds no single review.
+ * @param {string} dir
+ */
+async function readOutput(dir) {
+  let raw
+  try {
+    raw = JSON.parse(await readFile(path.join(dir, 'report.json'), 'utf8'))
+  } catch (error) {
+    return refuse(`the cleaning agent wrote no report that reads: ${message(error)}`)
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    refuse('report.json: an object')
+  if (raw.refused !== undefined) {
+    if (typeof raw.refused !== 'string' || !raw.refused.trim())
+      refuse('report.json: refused, a short text')
+    const instead = Array.isArray(raw.instead)
+      ? raw.instead
+          .filter((/** @type {unknown} */ one) => typeof one === 'string' && one.trim())
+          .slice(0, MAX_INSTEAD)
+          .map((/** @type {string} */ one) => one.trim().slice(0, 200))
+      : []
+    return { refused: raw.refused.trim().slice(0, 1000), instead }
+  }
+  const domain = await readFile(path.join(dir, 'lens.md'), 'utf8').catch(() => '')
+  if (!domain.trim()) refuse('the cleaning agent wrote no lens.md')
+  if (Buffer.byteLength(domain) > MAX_DOMAIN)
+    refuse(`lens.md is larger than ${MAX_DOMAIN / 1024} KiB`)
+  if (typeof raw.rules !== 'string' || raw.rules.length > MAX_RULES)
+    refuse(`report.json: rules, a text of ${MAX_RULES / 1024} KiB at most`)
+  const runtime = checkRuntime(
+    {
+      name: 'lens',
+      ...(raw.otherwise === true ? { otherwise: true } : { paths: raw.paths }),
+      ...(raw.topics !== undefined && { topics: raw.topics }),
+    },
+    (what) => refuse(`report.json: ${what}`),
+  )
+  const changes = checkChanges(raw.removed, raw.added, (what) =>
+    refuse(`report.json: ${what}`),
+  )
+  return {
+    domain,
+    report: {
+      paths: runtime.paths,
+      ...(runtime.otherwise && { otherwise: /** @type {const} */ (true) }),
+      ...(runtime.topics && { topics: runtime.topics }),
+      rules: raw.rules,
+      ...changes,
+    },
+  }
+}
+
+/**
+ * The cleaning agent ended: what it wrote checked, and the lens built from
+ * it as a review would. A new lens is `ready`, to add from the page; a lens
+ * cleaned again takes its new version at once (`added`). `failed` with why;
+ * a lens cleaned again then keeps its last version, the failure recorded on
+ * it so the next review does not clean it again for the same source; unless
+ * the agent was `stopped` or never started, which says nothing of the source.
+ * @param {string} dir
+ * @param {{ stopped?: boolean }} [options]
+ * @returns {Promise<Cleaning>}
+ */
+export async function checkCleaning(dir, { stopped = false } = {}) {
+  const record = await readCleaning(dir)
+  if (record.state !== 'cleaning') return record
+  /** @type {Cleaning} */
+  let next
+  try {
+    if (stopped) refuse('the cleaning agent was stopped, or did not start')
+    const output = await readOutput(dir)
+    if ('refused' in output) {
+      next = {
+        ...record,
+        state: 'failed',
+        reason: `the source holds no single review: ${output.refused}`,
+        ...(output.instead.length && { instead: output.instead }),
+      }
+    } else {
+      const { domain, report } = output
+      const lens = record.again ? await promoted(record, report) : fresh(record, report)
+      await builds(record, lens, domain)
+      if (record.again)
+        await writeUserLens(
+          lensDir(record.scope, record.project, record.name),
+          lens,
+          domain,
+        )
+      next = { ...record, state: record.again ? 'added' : 'ready' }
+    }
+  } catch (error) {
+    if (!(error instanceof CleaningRefusal || error instanceof LensFileRefusal))
+      throw error
+    next = { ...record, state: 'failed', reason: error.message }
+  }
+  if (next.state === 'failed' && record.again && !stopped)
+    await recordFailure(record, next.reason ?? '')
+  await writeJson(path.join(dir, 'cleaning.json'), next)
+  return next
+}
+
+/** The lens a new cleaning makes, on, with what the agent found. */
+function fresh(/** @type {Cleaning} */ record, /** @type {any} */ report) {
+  /** @type {UserLens} */
+  const lens = {
+    name: record.name,
+    source: record.source,
+    on: true,
+    paths: report.paths,
+    ...(report.otherwise && { otherwise: true }),
+    ...(report.topics && { topics: report.topics }),
+    ...(record.context && { context: record.context }),
+    rules: report.rules,
+    cleaned: cleanedOf(record, report),
+  }
+  return lens
+}
+
+/** The stored lens with its new cleaning: the user's settings kept, and the rules they edited. */
+async function promoted(/** @type {Cleaning} */ record, /** @type {any} */ report) {
+  const dir = lensDir(record.scope, record.project, record.name)
+  const lens = await readUserLens(dir).catch((error) => {
+    throw new CleaningRefusal(`the lens ${record.name} is gone: ${message(error)}`)
+  })
+  // Removed and added again meanwhile, from another source: this cleaning is not its.
+  if (lens.source !== record.source)
+    throw new CleaningRefusal(`the lens ${record.name} names another source now`)
+  const { failedCleaning: _failed, ...rest } = lens
+  return {
+    ...rest,
+    ...(!lens.rulesEdited && { rules: report.rules }),
+    cleaned: cleanedOf(record, report),
+  }
+}
+
+/** @param {Cleaning} record @param {any} report */
+const cleanedOf = (record, report) => ({
+  at: new Date().toISOString(),
+  sourceHash: record.sourceHash,
+  ...(record.contextHash && { contextHash: record.contextHash }),
+  ...(record.version && { version: record.version }),
+  removed: report.removed,
+  added: report.added,
+})
+
+/** Builds the lens as a review would, from a trial folder: a lens that cannot run is not kept. */
+async function builds(
+  /** @type {Cleaning} */ record,
+  /** @type {UserLens} */ lens,
+  /** @type {string} */ domain,
+) {
+  const trial = path.join(cleaningDir(record.project, record.id), 'trial')
+  try {
+    await writeUserLens(trial, lens, domain)
+    await buildLens(
+      {
+        name: lens.name,
+        paths: lens.paths,
+        source: lens.source,
+        ...(lens.context && { context: lens.context }),
+        added: { scope: record.scope, dir: trial },
+      },
+      whereOf(record.project),
+    )
+  } catch (error) {
+    if (error instanceof LensRefusal) throw new CleaningRefusal(error.message)
+    throw error
+  } finally {
+    await rm(trial, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+/** A cleaning again failed: its lens says so, and for which source. */
+async function recordFailure(
+  /** @type {Cleaning} */ record,
+  /** @type {string} */ reason,
+) {
+  const dir = lensDir(record.scope, record.project, record.name)
+  const lens = await readUserLens(dir).catch(() => undefined)
+  if (!lens) return
+  await writeUserLens(dir, {
+    ...lens,
+    failedCleaning: {
+      at: new Date().toISOString(),
+      reason: reason.slice(0, 1000),
+      sourceHash: record.sourceHash,
+      ...(record.contextHash && { contextHash: record.contextHash }),
+    },
+  })
+}
+
+/**
+ * Add this lens: a ready cleaning written to its scope, with the user's
+ * changes to what the agent found (its name, scope, paths, topics, model,
+ * rules); the cleaning is `added` from then on.
+ * @param {string} project
+ * @param {string} id
+ * @param {any} [edits]
+ */
+export async function addCleaned(project, id, edits = {}) {
+  const { dir, record } = await cleaningOf(project, id)
+  if (record.again) throw new CleaningRefusal('this cleaning updates its lens on its own')
+  if (record.state === 'added') throw new CleaningRefusal('this lens is added already')
+  if (record.state !== 'ready')
+    throw new CleaningRefusal(
+      record.state === 'cleaning'
+        ? 'the cleaning agent is still at work'
+        : `this cleaning failed: ${record.reason ?? ''}`,
+    )
+  const output = await readOutput(dir)
+  if ('refused' in output) throw new CleaningRefusal(output.refused)
+  const scope = edits.scope ?? record.scope
+  if (!isScope(scope)) throw new CleaningRefusal('scope: global or local')
+  const name =
+    typeof edits.name === 'string' && edits.name.trim() ? edits.name.trim() : record.name
+  const { otherwise: _otherwise, topics: _topics, ...made } = fresh(record, output.report)
+  // Recorded for the scope it was cleaned for: a global lens's paths are absolute.
+  const base = {
+    ...made,
+    source: recordedSource(made.source, scope, project),
+    ...(made.context && { context: recordedSource(made.context, scope, project) }),
+  }
+  const otherwise =
+    edits.otherwise === true || (edits.paths === undefined && output.report.otherwise)
+  const topics = edits.topics === undefined ? output.report.topics : edits.topics
+  let clean
+  try {
+    // Checked as lens.json is read: what the person changed is held to the same rules.
+    clean = checkUserLens({
+      version: 1,
+      ...base,
+      name,
+      ...(otherwise
+        ? { otherwise: true, paths: [] }
+        : { paths: edits.paths ?? base.paths }),
+      ...(topics?.length && { topics }),
+      ...(typeof edits.model === 'string' && edits.model && { model: edits.model }),
+      ...(typeof edits.rules === 'string' &&
+        edits.rules !== base.rules && { rules: edits.rules, rulesEdited: true }),
+    })
+  } catch (error) {
+    if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
+    throw error
+  }
+  let target
+  try {
+    target = lensDir(scope, project, name)
+  } catch (error) {
+    if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
+    throw error
+  }
+  if (existsSync(target))
+    throw new CleaningRefusal(
+      `a lens named ${name} is ${scope === 'global' ? 'global' : "this project's"} already`,
+    )
+  if ((await listUserLenses(scope, project)).length >= MAX_SCOPE_LENSES)
+    throw new CleaningRefusal(`${MAX_SCOPE_LENSES} lenses of a scope at most`)
+  try {
+    await writeUserLens(target, clean, output.domain)
+  } catch (error) {
+    await rm(target, { recursive: true, force: true }).catch(() => undefined)
+    if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
+    throw error
+  }
+  await writeJson(path.join(dir, 'cleaning.json'), { ...record, state: 'added' })
+  return { scope, name }
+}
+
+/** Discard: a cleaning's folder removed, refused while its agent may still be at work. */
+export async function discardCleaning(
+  /** @type {string} */ project,
+  /** @type {string} */ id,
+) {
+  const { dir, record } = await cleaningOf(project, id)
+  if (record.state === 'cleaning' && Date.now() - Date.parse(record.createdAt) < LOST_MS)
+    throw new CleaningRefusal('the cleaning agent is still at work')
+  await rm(dir, { recursive: true, force: true })
+}
+
+/**
+ * The cleanings of the project not added yet, newest first, as the page
+ * shows them: a new lens's with what it found, a lens cleaned again while it
+ * runs. One whose agent was lost reads as failed.
+ * @param {string} project
+ */
+export async function listCleanings(project) {
+  const root = cleaningsDir(project)
+  const all = []
+  for (const id of await readdir(root).catch(() => [])) {
+    const dir = path.join(root, id)
+    const record = await readCleaning(dir).catch(() => undefined)
+    if (!record || record.state === 'added') continue
+    if (record.again && record.state !== 'cleaning') continue
+    const lost =
+      record.state === 'cleaning' && Date.now() - Date.parse(record.createdAt) > LOST_MS
+    let shown = {}
+    if (record.state === 'ready') {
+      const output = await readOutput(dir).catch((error) => ({ broken: message(error) }))
+      shown =
+        'broken' in output
+          ? { state: 'failed', reason: output.broken }
+          : 'refused' in output
+            ? { state: 'failed', reason: output.refused, instead: output.instead }
+            : { report: output.report, domain: output.domain }
+    }
+    all.push({
+      id: record.id,
+      createdAt: record.createdAt,
+      name: record.name,
+      scope: record.scope,
+      again: record.again,
+      source: record.source,
+      ...(record.version && { version: record.version }),
+      ...(record.context && { context: record.context }),
+      state: lost ? 'failed' : record.state,
+      ...(lost && { reason: 'the cleaning agent did not finish' }),
+      ...(record.reason && { reason: record.reason }),
+      ...(record.instead && { instead: record.instead }),
+      ...shown,
+    })
+  }
+  return all.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
+}

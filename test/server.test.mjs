@@ -1770,6 +1770,7 @@ const DEFAULT_SETTINGS = {
   maxReviewAgents: 3,
   recipe: null,
   disabledLenses: [],
+  lensModels: {},
   postWith: 'auto',
 }
 
@@ -2022,7 +2023,7 @@ test('a tool forced on the other forge\u2019s host is refused: no token goes to 
 
 // The recipe in force, the imports, and the Lenses step's progress.
 
-test('the review carries its Lenses step; Use this recipe puts an import in force', async (t) => {
+test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, changes, shows and removes it', async (t) => {
   const config = await tempDir(t, 'tranchant-config-')
   const server = await startServer(t, { env: { XDG_CONFIG_HOME: config } })
   const step = {
@@ -2031,59 +2032,125 @@ test('the review carries its Lenses step; Use this recipe puts an import in forc
   }
   await writeFile(path.join(server.dir, 'lenses.json'), JSON.stringify(step))
   assert.deepEqual((await json(await fetch(`${server.base}/api/review`))).lenses, step)
-  const { hashOf } = await import('../skills/tranchant/scripts/lib/project.mjs')
-  const target = path.join(
-    config,
-    'tranchant',
-    'projects',
-    hashOf(server.project),
-    'recipe.json',
-  )
-  const folder = path.join(stateDir, hashOf(server.project), 'imports', 'imp-1')
-  await mkdir(folder, { recursive: true })
-  const recipe = { version: 1, lenses: [{ name: 'mine', source: 'tranchant:docs' }] }
-  await writeFile(path.join(folder, 'recipe.json'), JSON.stringify(recipe))
-  await writeFile(
-    path.join(folder, 'import.json'),
-    JSON.stringify({
-      id: 'imp-1',
-      createdAt: '2026-11-10T00:00:00Z',
-      project: server.project,
-      source: 'tranchant:docs',
-      file: '/x',
-      folder: '/',
-      to: 'local',
-      target,
-      state: 'ready',
-    }),
-  )
-  const settings = await json(await fetch(`${server.base}/api/settings`))
-  assert.equal(settings.recipeFrom, 'plugin')
-  assert.deepEqual(
-    settings.imports.map((/** @type {any} */ one) => [
-      one.id,
-      one.state,
-      one.lenses.length,
-    ]),
-    [['imp-1', 'ready', 1]],
-  )
-  const use = (/** @type {unknown} */ id) =>
-    fetch(`${server.base}/api/recipe/use`, {
+  const lensPost = (/** @type {string} */ route, /** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/lens/${route}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify(body),
     })
-  assert.equal((await use('../x')).status, 400)
-  const unknown = await use('imp-2')
-  assert.equal(unknown.status, 409)
-  assert.match((await json(unknown)).error, /no import imp-2/)
-  const used = await use('imp-1')
-  assert.equal(used.status, 200)
-  const answer = await json(used)
-  assert.equal(answer.target, target)
-  assert.equal(answer.settings.recipeFrom, 'local')
-  assert.deepEqual(answer.settings.lenses, ['mine'])
-  assert.deepEqual(answer.settings.imports, [])
-  assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), recipe)
-  assert.equal((await use('imp-1')).status, 409)
+
+  const first = await json(await fetch(`${server.base}/api/settings`))
+  assert.equal(first.recipeFrom, 'plugin')
+  assert.equal(first.lensSet.lenses.length, 10)
+  assert.ok(
+    first.lensSet.lenses.every(
+      (/** @type {any} */ lens) => lens.scope === 'recipe' && lens.runs,
+    ),
+  )
+  assert.deepEqual(first.cleanings, [])
+
+  await writeFile(path.join(server.project, 'money.md'), 'Amounts are in cents.\n')
+  assert.equal(
+    (await lensPost('import', { source: 'money.md', scope: 'project' })).status,
+    409,
+  )
+  const from = server.output().length
+  const started = await lensPost('import', { source: 'money.md', scope: 'local' })
+  assert.equal(started.status, 200)
+  const { cleaning, settings } = await json(started)
+  assert.equal(await server.nextLine('CLEAN ', from), `CLEAN ${cleaning}`)
+  assert.deepEqual(
+    settings.cleanings.map((/** @type {any} */ one) => [one.name, one.state]),
+    [['money', 'cleaning']],
+  )
+  // Still being cleaned: nothing to add yet.
+  assert.equal((await lensPost('add', { id: cleaning })).status, 409)
+
+  const { hashOf } = await import('../skills/tranchant/scripts/lib/project.mjs')
+  const folder = path.join(stateDir, hashOf(server.project), 'cleanings', cleaning)
+  await writeFile(path.join(folder, 'lens.md'), 'A float on a money path is a finding.\n')
+  await writeFile(
+    path.join(folder, 'report.json'),
+    JSON.stringify({
+      paths: ['src/**'],
+      rules: '- Rounding is review.',
+      removed: [],
+      added: [],
+    }),
+  )
+  const checked = await run(
+    process.execPath,
+    [path.join(SCRIPTS, 'clean.mjs'), '--project', server.project, '--check', folder],
+    {
+      env: { TRANCHANT_STATE_DIR: stateDir, XDG_CONFIG_HOME: config },
+    },
+  )
+  assert.match(
+    checked.stdout,
+    /^CLEANED ready local money$/m,
+    checked.stdout + checked.stderr,
+  )
+  const added = await lensPost('add', {
+    id: cleaning,
+    lens: { name: 'cents', topics: ['Bugs'] },
+  })
+  assert.equal(added.status, 200)
+  const after = (await json(added)).settings
+  assert.deepEqual(after.cleanings, [])
+  const cents = after.lensSet.lenses.find(
+    (/** @type {any} */ lens) => lens.name === 'cents',
+  )
+  assert.equal(cents.scope, 'local')
+  assert.equal(cents.runs, true)
+  assert.deepEqual(cents.topics, ['Bugs'])
+  assert.equal(cents.rules, '- Rounding is review.')
+  assert.ok(
+    after.lensSet.dirs.local.startsWith(path.join(config, 'tranchant', 'projects')),
+  )
+
+  const prompt = await json(
+    await fetch(`${server.base}/api/lens/prompt?scope=local&name=cents`),
+  )
+  assert.match(prompt.prompt, /A float on a money path is a finding\./)
+  assert.match(prompt.prompt, /## Integration rules/)
+  const builtIn = await json(
+    await fetch(`${server.base}/api/lens/prompt?scope=recipe&name=bugs`),
+  )
+  assert.ok(builtIn.prompt.length > 1000)
+  assert.equal(
+    (await fetch(`${server.base}/api/lens/prompt?scope=local&name=none`)).status,
+    404,
+  )
+
+  assert.equal(
+    (await lensPost('save', { scope: 'nowhere', name: 'cents', lens: {} })).status,
+    400,
+  )
+  const off = await json(
+    await lensPost('save', {
+      scope: 'local',
+      name: 'cents',
+      lens: { on: false, scope: 'global' },
+    }),
+  )
+  const moved = off.settings.lensSet.lenses.find(
+    (/** @type {any} */ lens) => lens.name === 'cents',
+  )
+  assert.deepEqual([moved.scope, moved.on, moved.runs], ['global', false, false])
+  const refused = await lensPost('save', {
+    scope: 'global',
+    name: 'cents',
+    lens: { paths: ['-x'] },
+  })
+  assert.equal(refused.status, 409)
+  assert.match((await json(refused)).error, /paths/)
+  const removed = await json(await lensPost('remove', { scope: 'global', name: 'cents' }))
+  assert.equal(
+    removed.settings.lensSet.lenses.some(
+      (/** @type {any} */ lens) => lens.name === 'cents',
+    ),
+    false,
+  )
+  assert.equal((await lensPost('remove', { scope: 'global', name: 'cents' })).status, 409)
+  assert.equal((await lensPost('discard', { id: '../x' })).status, 400)
 })

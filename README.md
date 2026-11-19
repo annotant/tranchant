@@ -104,12 +104,22 @@ code, and `bugs` and `docs` read every file. Every lens follows the
 execution chain past the changed lines: the server route a request reaches,
 and the dependencies in `node_modules` at the version the lockfile installs,
 whose source settles how a library behaves.
-`--recipe <path>` runs your own, in the same shape. A team that has a
-review process of its own (a skill and the agents it starts, a project's
-`.claude/agents/*-reviewer.md`) imports it with `/tranchant import`: the
-recipe references its sources, and each review rebuilds the lenses from them,
-so they follow the sources' later changes. See
-[the review file](docs/review-file.md#the-recipe).
+`--recipe <path>` runs your own, in the same shape.
+
+Beside the recipe's lenses, **Settings › Lenses** adds a team's reviewer as
+a lens of its own: a plugin's skill or agent, or a file. A cleaning agent
+reads it once and writes the lens Tranchant runs, its review kept and its
+orchestration, output format, posting and questions left out, with
+integration rules (the files it takes, its topics, its buckets) the user can
+edit; the page shows what it removed and added before the lens is used. A
+lens is **local** (this project) or **global** (every project), always in
+`~/.config/tranchant/`, never in the repository; a local lens wins over a
+global one of the same name, which wins over the recipe's. Each
+`/tranchant review` hashes again the source of every added lens it runs and
+cleans the changed ones first, keeping the rules the user edited, unless the
+change under review is what changed it; a cleaning that fails runs the
+lens's last version and says so. `/tranchant import` does the same
+from the terminal. See [the settings file](docs/settings.md#the-lenses-you-add).
 
 ## Install
 
@@ -149,7 +159,7 @@ run script.
 /tranchant review feature/cart        # another branch, against the default branch
 /tranchant review <merge request url> # someone else's MR, read with glab
 /tranchant review ../other-repo       # another repository, at its current branch
-/tranchant import [<source>] [--to project|local]  # a team's review process as a recipe, shown before it is used
+/tranchant import [<source>] [--to local|global]   # a team's reviewer cleaned into a lens, shown before it is added
 /tranchant comments                   # the unresolved review threads of the current branch's PR/MR
 /tranchant comments <PR or MR url>    # those of another one
 /tranchant <review.json>              # import a review and open its page
@@ -232,8 +242,10 @@ Tranchant in one page, grouped, each with its value, its default, one line
 on what it does and a **Reset**: the theme, the view and the summary a
 review opens with; the model of the fix agents, the reviewers and the
 verifiers (the session's by default) and how many fix agents and review
-agents run at a time; the default recipe of `/tranchant review` and the
-lenses turned on; the CLI that opens issues (`glab`, `gh`, or whichever the
+agents run at a time; the default recipe of `/tranchant review` and, in
+**Settings › Lenses**, every lens one by one (the recipe's and those added,
+turned on or off, their models, their settings, what each reviewer reads);
+the CLI that opens issues (`glab`, `gh`, or whichever the
 remote names) and the account it posts as. A change applies to the next
 agent, review or post, never to an agent already running. The settings are
 kept in `~/.config/tranchant/settings.json` (`$XDG_CONFIG_HOME/tranchant/settings.json`

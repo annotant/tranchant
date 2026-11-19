@@ -22,7 +22,6 @@ const CHANGES = '/api/changes/'
 const ACCOUNT = '/api/account'
 const TRACKER = '/api/tracker'
 const SETTINGS = '/api/settings'
-const USE_RECIPE = '/api/recipe/use'
 
 /** How often the page asks again once the server stopped answering. */
 export const RETRY_MS = 5000
@@ -262,6 +261,15 @@ export function useAccount(wanted: boolean, tool?: 'glab' | 'gh') {
 
 const fetchSettings = () => request<SettingsPayload>(SETTINGS)
 
+/** The changes to the lenses the server takes, by route. */
+export type LensRoute = 'import' | 'add' | 'discard' | 'save' | 'remove' | 'clean'
+
+/** The prompt a lens's reviewer reads, built as a review builds it. */
+export const fetchLensPrompt = (scope: string, name: string) =>
+  request<{ prompt: string }>(
+    `/api/lens/prompt?${new URLSearchParams({ scope, name }).toString()}`,
+  )
+
 const putSettings = (settings: StoredSettings) =>
   request<SettingsPayload>(SETTINGS, { method: 'PUT', body: JSON.stringify(settings) })
 
@@ -324,25 +332,32 @@ export function useSettings() {
     return saving.current
   }, [])
   const dismiss = useCallback(() => setError(undefined), [])
-  /** Use this recipe: an imported recipe put in force at its location. */
-  const applyRecipe = useCallback(
-    async (id: string) => {
+  /**
+   * A change to the lenses (`/api/lens/<route>`): the settings it answers
+   * shown; a refusal kept in `error`, and thrown for the caller to keep its form.
+   */
+  const lens = useCallback(
+    async (route: LensRoute, body: Record<string, unknown>) => {
       try {
-        const used = await request<{ settings?: SettingsPayload }>(USE_RECIPE, {
-          method: 'POST',
-          body: JSON.stringify({ id }),
-        })
+        const done = await request<{ settings?: SettingsPayload; cleaning?: string }>(
+          `/api/lens/${route}`,
+          { method: 'POST', body: JSON.stringify(body) },
+        )
         setError(undefined)
-        if (!used.settings) return await reload()
-        latest.current = used.settings
-        setPayload(used.settings)
+        if (!done.settings) await reload()
+        else {
+          latest.current = done.settings
+          setPayload(done.settings)
+        }
+        return done
       } catch (refusal) {
-        setError(refusal instanceof Error ? refusal.message : 'The recipe was not used.')
+        setError(refusal instanceof Error ? refusal.message : 'The lens was not changed.')
+        throw refusal
       }
     },
     [reload],
   )
-  return { payload, loaded, unavailable, error, save, dismiss, reload, applyRecipe }
+  return { payload, loaded, unavailable, error, save, dismiss, reload, lens }
 }
 
 /**

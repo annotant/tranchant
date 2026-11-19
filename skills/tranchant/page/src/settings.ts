@@ -17,6 +17,8 @@ export interface SettingsValues {
   maxReviewAgents: number
   recipe: string | null
   disabledLenses: string[]
+  /** By lens of the recipe, its reviewer's model. */
+  lensModels: Record<string, string>
   postWith: PostWith
 }
 
@@ -40,37 +42,88 @@ export interface SettingsPayload {
   recipeProblem?: string
   /** Where the recipe in force comes from: the local recipe, the project's, the settings', the plugin's. */
   recipeFrom?: RecipeFrom
-  /** Its lenses, each with its source and, when it cannot be built now, why. */
-  recipeLenses?: RecipeLens[]
-  /** The recipes `/tranchant import` wrote for this project, not used yet. */
-  imports?: ImportedRecipe[]
+  /** Every lens that could run on the project: the project's, the global ones, the recipe's. */
+  lensSet?: LensSet
+  /** The lenses being cleaned, or cleaned and waiting to be added. */
+  cleanings?: CleaningEntry[]
   /** Why the file reads as none: not JSON, another version, a wrong value. The server then writes nothing. */
   problem?: string
 }
 
 export type RecipeFrom = 'run' | 'local' | 'project' | 'settings' | 'plugin'
 
-/** A lens of the recipe in force: its source, and why it cannot be built, when it cannot. */
-interface RecipeLens {
+/** Where a lens comes from: the project's, every project's, or the recipe in force. */
+export type LensScope = 'local' | 'global' | 'recipe'
+
+/** What a cleaning removed from its source and added for Tranchant. */
+interface Cleaned {
+  at: string
+  sourceHash: string
+  contextHash?: string
+  version?: string
+  removed: { what: string; why: string }[]
+  added: string[]
+}
+
+/** One lens of the set, as Settings › Lenses shows it. */
+export interface LensEntry {
   name: string
+  scope: LensScope
+  on: boolean
+  /** It is the one that runs under its name. */
+  runs: boolean
+  /** It runs in place of a lens of the same name below it. */
+  replaces?: boolean
   source: string
+  version?: string
+  paths: string[]
+  otherwise?: boolean
+  topics?: string[]
+  model?: string
+  /** An added lens's. */
+  context?: string
+  rules?: string
+  rulesEdited?: boolean
+  cleaned?: Cleaned
+  failedCleaning?: { at: string; reason: string }
+  /** Its source changed since its last cleaning; `failed` when cleaning it again failed on that source. */
+  stale?: 'stale' | 'failed'
+  /** Why it cannot be built now, and what fixes it. */
   problem?: string
   fix?: string
 }
 
-/** A recipe `/tranchant import` wrote: its lenses and what it left out, shown before it is used. */
-export interface ImportedRecipe {
+interface LensSet {
+  /** The folders the added lenses live in: every project's, and this one's. */
+  dirs: { global: string; local: string }
+  lenses: LensEntry[]
+}
+
+/** A lens's cleaning: being cleaned, cleaned and waiting to be added, or failed. */
+export interface CleaningEntry {
   id: string
   createdAt: string
+  name: string
+  scope: 'global' | 'local'
+  /** It cleans a stored lens again. */
+  again: boolean
   source: string
   version?: string
-  to: 'project' | 'local'
-  target: string
-  state: 'importing' | 'ready' | 'failed'
+  context?: string
+  state: 'cleaning' | 'ready' | 'failed'
   reason?: string
-  extends: boolean
-  lenses: { name: string; source: string; skills?: string[]; paths: string[] }[]
-  leftOut: { what: string; why: string }[]
+  /** A whole process's reviewers, to add one by one. */
+  instead?: string[]
+  /** With `ready`: what the agent found, and the lens's domain. */
+  report?: {
+    paths: string[]
+    otherwise?: boolean
+    topics?: string[]
+    rules: string
+    removed: { what: string; why: string }[]
+    added: string[]
+  }
+  domain?: string
 }
 
 /** The most agents of a kind the settings allow at a time. */
@@ -79,7 +132,7 @@ export const MAX_AGENTS = 8
 /** Model ids the page suggests; any id or alias Claude Code takes may be typed. */
 export const KNOWN_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']
 
-/** Whether `value` is `key`'s default: a list by its content, in any order. */
+/** Whether `value` is `key`'s default: a list by its content, in any order; a map by its entries. */
 function isDefault<K extends SettingKey>(
   key: K,
   value: SettingsValues[K] | null | undefined,
@@ -89,6 +142,18 @@ function isDefault<K extends SettingKey>(
   const base = defaults[key]
   if (Array.isArray(value) && Array.isArray(base))
     return value.length === base.length && value.every((one) => base.includes(one))
+  if (
+    typeof value === 'object' &&
+    base &&
+    typeof base === 'object' &&
+    !Array.isArray(value)
+  ) {
+    const entries = Object.entries(value)
+    return (
+      entries.length === Object.keys(base).length &&
+      entries.every(([one, model]) => Reflect.get(base, one) === model)
+    )
+  }
   return value === base
 }
 
