@@ -16,6 +16,14 @@ released to the `stable` branch.
 
 ### Changed
 
+- **The lenses build in the center of the page, then fold into the
+  header.** While `/tranchant review` builds its lenses (or cleans one
+  again first), the page shows a spinner, how many are ready and the rows
+  on demand, in place of the accordion above the review. Once built, a
+  chip in the header (*13 lenses*, amber with a warning when a lens runs
+  its last version) opens the same rows over the page. A refused review
+  names each lens that could not be built, with a link to its editor in
+  Settings › Lenses.
 - A reviewer names its lens when it adds a finding
   (`add.mjs --lens LENS`), and its hooks refuse the call otherwise. A
   recipe's whole `prompt` written before this must say so.

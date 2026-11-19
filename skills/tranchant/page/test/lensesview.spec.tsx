@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import type { SettingsChange } from '../src/api'
+import App from '../src/App'
 import { LensesView } from '../src/LensesView'
 import type { CleaningEntry, LensEntry, StoredSettings } from '../src/settings'
-import { settingsPayload } from './fixture'
+import { fakeServer, payload, settingsPayload } from './fixture'
 
 const cleaned = {
   at: '2026-11-12T09:12:00Z',
@@ -73,7 +74,11 @@ const READY: CleaningEntry = {
   domain: 'Amounts are integers in cents.',
 }
 
-function renderLenses(cleanings: CleaningEntry[] = [], stored: StoredSettings = {}) {
+function renderLenses(
+  cleanings: CleaningEntry[] = [],
+  stored: StoredSettings = {},
+  focus?: string,
+) {
   const settings = settingsPayload(stored, {
     recipeFrom: 'plugin',
     lensSet: {
@@ -93,6 +98,7 @@ function renderLenses(cleanings: CleaningEntry[] = [], stored: StoredSettings = 
   render(
     <LensesView
       settings={settings}
+      focus={focus}
       offline={false}
       onDismiss={() => undefined}
       onSave={onSave}
@@ -122,6 +128,22 @@ test('the lenses show in three groups, each with its switch, its source and wher
     false,
   )
   expect(builtIn.getAllByRole('button', { name: 'View' })).toHaveLength(2)
+})
+
+test('a link to one lens opens its editor, and that one only', () => {
+  renderLenses([], {}, 'recipe:bugs')
+  const builtIn = group("Built-in · the plugin's")
+  expect(builtIn.getAllByRole('button', { name: 'Close' })).toHaveLength(1)
+  expect(builtIn.getAllByRole('button', { name: 'View' })).toHaveLength(1)
+  expect(screen.getByLabelText('Model')).toBeDefined()
+})
+
+test('a link to a lens these settings do not list says so, and opens none', () => {
+  renderLenses([], {}, 'recipe:gone')
+  expect(screen.getByRole('status').textContent).toContain(
+    'The lens gone is not among these',
+  )
+  expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
 })
 
 test('a lens of the recipe turns off and on in the settings, and its model is set there', () => {
@@ -252,4 +274,56 @@ test('a cleaned lens shows what it found before Add this lens; a failed one, wha
   })
   fireEvent.click(adding.getAllByRole('button', { name: 'Discard' })[1]!)
   expect(onLens).toHaveBeenLastCalledWith('discard', { id: 'c-2' })
+})
+
+/** Moves the page to `hash`, as a link or the browser's back does. */
+const go = (hash: string) =>
+  act(() => {
+    location.hash = hash
+    window.dispatchEvent(new Event('hashchange'))
+  })
+
+/** The lenses whose editor is open. */
+const openLenses = () =>
+  screen.getAllByRole('button', { name: 'Close' }).map((one) => one.closest('li'))
+
+test('the page opened at a lens shows its editor and scrolls to it; another link moves on; a broken one opens none', async () => {
+  const server = fakeServer(payload())
+  server.answerSettings(
+    settingsPayload(
+      {},
+      {
+        recipeFrom: 'plugin',
+        lensSet: {
+          dirs: { global: '/me/lenses', local: '/me/p/lenses' },
+          lenses: LENSES,
+        },
+      },
+    ),
+  )
+  const scrolls = vi.spyOn(Element.prototype, 'scrollIntoView')
+  try {
+    location.hash = '#settings/lenses/local%3Aabac'
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Lenses Preview' })
+    // The lenses load after the mount: the scroll waits for them.
+    await waitFor(() => expect(openLenses()).toHaveLength(1))
+    expect(openLenses()[0]?.textContent).toContain('workflow:code-reviewer-abac')
+    await waitFor(() =>
+      expect(
+        scrolls.mock.contexts.map((one) => (one instanceof Element ? one.id : '')),
+      ).toContain('tr-lns-local-abac'),
+    )
+    go('#settings/lenses/recipe%3Adocs')
+    expect(openLenses()).toHaveLength(1)
+    expect(
+      within(openLenses()[0]!).getByRole('switch', { name: /^docs: / }),
+    ).toBeDefined()
+    go('#settings/lenses/%E0')
+    expect(screen.getByRole('heading', { name: 'Lenses Preview' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+  } finally {
+    scrolls.mockRestore()
+    location.hash = ''
+  }
 })

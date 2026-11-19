@@ -447,8 +447,10 @@ reviews a change with no producer of your own:
    failure recorded on it, so the next review does not clean it again for
    the same source. Then `lenses.mjs` resolves each lens's source, builds the
    prompt its reviewer runs ([the lenses](#the-lenses-built-at-every-review))
-   and writes its progress to `lenses.json`, which the page shows above the
-   reviewers, one row per lens: `resolving`, then `ready` (`unchanged`,
+   and writes its progress to `lenses.json`, which the page shows in its
+   center while they build (a spinner, how many are ready, the rows on
+   demand), then folds into a chip of the header that opens the rows, one
+   per lens: `resolving`, then `ready` (`unchanged`,
    `updated since the last review` or `new`, against the project's previous
    review that recorded its lenses; an added lens's row also says whether it
    was `cleaned again`, or that its cleaning failed and its last version
@@ -456,8 +458,10 @@ reviews a change with no producer of your own:
    Every lens built: the review becomes `reviewing`, with its `lenses`, and
    one `LENS` line per lens tells the hooks what to start. One source that
    cannot be resolved refuses the review: `refused`, its `refusal`, no
-   reviewer starts; the page shows the reason and the fix, the terminal says
-   it in one line.
+   reviewer starts; the page's center shows each lens that failed, its
+   reason, its fix and a link to its editor in Settings › Lenses
+   (`#settings/lenses/<scope>:<name>`, percent-encoded, `<scope>` being
+   `recipe`, `global` or `local`), the terminal says it in one line.
 4. The summary agent (`tranchant:sm-summary-<review>`,
    `agents/review/summary.md`) queues first, beside the reviewers: it reads
    the diff and writes, with `summarize.mjs`, the review's `summary` (what
