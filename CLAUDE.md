@@ -58,7 +58,8 @@ pattern, read how annotant does it.
   publishes it on the `stable` branch users install from.
 - `docs/review-file.md`: the review, decisions and run files, their schemas
   and the findings' states. `docs/settings.md`: the settings file, its
-  schema, its precedence and its routes.
+  schema, its precedence and its routes. `docs/studies/`: the decisions a
+  study issue ended on, and the pieces left to build.
 - `test/`: `node:test` suites for the scripts and the server;
   `hooks.test.ts` for `claude plugin test`.
 
