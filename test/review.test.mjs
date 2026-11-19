@@ -225,7 +225,7 @@ test('prepare.mjs reads the recipe the settings name, --recipe still first, and 
     assert.equal(refused.code, 2)
     assert.equal(
       refused.stdout.trim(),
-      'REVIEW_REFUSED every lens of the recipe is turned off in the settings',
+      'REVIEW_REFUSED every lens is turned off in the settings (Settings › Lenses)',
     )
     // --recipe on the run wins over the settings' recipe, and runs whole: the lenses off are the other recipe's.
     const own = path.join(recipes, 'own.json')

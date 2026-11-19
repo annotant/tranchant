@@ -31,8 +31,13 @@ export interface LensRow {
   /** With `ready`: against the project's previous review. */
   change?: 'unchanged' | 'updated' | 'new'
   version?: string
+  /** With `failed`; with `cleaning: 'failed'`, why its last version runs. */
   reason?: string
   fix?: string
+  /** A lens the user added: where it lives. */
+  scope?: 'global' | 'local'
+  /** Its source changed: being cleaned again, cleaned again, its cleaning failed, or held: the change under review changed it. */
+  cleaning?: 'running' | 'again' | 'failed' | 'held'
 }
 
 /** The Lenses step's progress: lenses.json. */
@@ -42,7 +47,7 @@ export interface LensesProgress {
 }
 
 /** The seven topics, in the order the page lists them within a bucket. */
-const TOPICS = [
+export const TOPICS = [
   'Bugs',
   'Security & Permissions',
   'Breaking Changes',

@@ -38,6 +38,7 @@ import { FindingList } from './FindingList'
 import { LensesStep } from './LensesStep'
 import { ReviewAgents } from './ReviewAgents'
 import type { View } from './settings'
+import { LensesView } from './LensesView'
 import { SettingsView } from './SettingsView'
 import { Summary } from './Summary'
 import { applyTheme, type Theme } from './theme'
@@ -45,10 +46,15 @@ import { SettingsLink, ThemeToggle } from './ThemeToggle'
 
 const NO_SECTIONS: readonly Section[] = []
 
-/** What the page shows: the review, or the Settings (`#settings`). */
-type Route = 'review' | 'settings'
+/** What the page shows: the review, the Settings (`#settings`) or their Lenses (`#settings/lenses`). */
+type Route = 'review' | 'settings' | 'lenses'
 
-const readRoute = (): Route => (location.hash === '#settings' ? 'settings' : 'review')
+const readRoute = (): Route =>
+  location.hash === '#settings'
+    ? 'settings'
+    : location.hash === '#settings/lenses'
+      ? 'lenses'
+      : 'review'
 
 /** The route the URL's hash names, following the gear and the browser's back. */
 function useRoute(): Route {
@@ -520,7 +526,7 @@ export default function App() {
       review={review}
       tally={tally}
       moved={moved}
-      settingsOpen={route === 'settings'}
+      settingsOpen={route !== 'review'}
       onNeedsYou={openNextNeedingYou}
       onTheme={(next) => {
         // No settings read yet (an older server): the switch holds for this visit.
@@ -537,6 +543,27 @@ export default function App() {
       </button>
     </p>
   )
+  if (route === 'lenses') {
+    return (
+      <div className="tr-app">
+        {!reachable && (
+          <div className="tr-banner" role="alert">
+            Tranchant stopped serving this review. The lenses are read-only until it is
+            back; retrying every 5 seconds…
+          </div>
+        )}
+        {header}
+        <LensesView
+          settings={settings.payload}
+          offline={!reachable}
+          error={settings.error}
+          onDismiss={settings.dismiss}
+          onSave={(change) => void settings.save(change)}
+          onLens={settings.lens}
+        />
+      </div>
+    )
+  }
   if (route === 'settings') {
     return (
       <div className="tr-app">
@@ -554,7 +581,6 @@ export default function App() {
           error={settings.error}
           onDismiss={settings.dismiss}
           onSave={(change) => void settings.save(change)}
-          onUseRecipe={(id) => void settings.applyRecipe(id)}
         />
       </div>
     )

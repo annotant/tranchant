@@ -397,6 +397,7 @@ const SETTINGS_DEFAULTS: SettingsValues = {
   maxReviewAgents: 3,
   recipe: null,
   disabledLenses: [],
+  lensModels: {},
   postWith: 'auto',
 }
 

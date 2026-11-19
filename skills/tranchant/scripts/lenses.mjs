@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// lenses.mjs --review <dir> --plan <file>
+// lenses.mjs --review <dir> --plan <file> [--check]
 // lenses.mjs --review <dir> --abandon <reason>
 // The Lenses step of `/tranchant review`, run once the page is open: for each
 // lens of the plan prepare.mjs wrote, resolves its source, builds the prompt
@@ -14,13 +14,28 @@
 // LENS line, and it exits 2. So does any other failure of the step, and
 // `--abandon`, which the hooks run when the step could not run: a review
 // never stays `preparing` with nothing at work on it.
+// --check, first: for each lens the user added, its source and context skill
+// hashed again (lib/userlens.mjs); one that changed since its last cleaning
+// prints `STALE <json>`, `{ name, scope }`, and its row says it is being
+// cleaned again. The hooks clean those, then run the step without --check:
+// a lens cleaned meanwhile says so, one whose cleaning failed runs its last
+// version and says why.
+import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { oneLine } from './lib/format.mjs'
 import { LensRefusal, buildLens, folderOf, originOf, storeLens } from './lib/lens.mjs'
 import { findReview } from './lib/project.mjs'
 import { StoreRefusal, createStore } from './lib/store.mjs'
+import {
+  LensFileRefusal,
+  hashesOf,
+  readUserLens,
+  staleness,
+  whereOf,
+} from './lib/userlens.mjs'
 
 /** @typedef {import('./lib/lens.mjs').LensSpec} LensSpec */
 /** @typedef {import('./lib/lens.mjs').RecipeRef} RecipeRef */
@@ -33,8 +48,10 @@ import { StoreRefusal, createStore } from './lib/store.mjs'
  * @property {'resolving' | 'ready' | 'failed'} state
  * @property {'unchanged' | 'updated' | 'new'} [change] With `ready`: against the project's previous review.
  * @property {string} [version]
- * @property {string} [reason] With `failed`.
+ * @property {string} [reason] With `failed`; with `cleaning: 'failed'`, why its last version runs.
  * @property {string} [fix] With `failed`: what makes it build.
+ * @property {'global' | 'local'} [scope] A lens the user added.
+ * @property {'running' | 'again' | 'failed' | 'held'} [cleaning] An added lens whose source changed: being cleaned again, cleaned again, its cleaning failed, or held: the change under review is what changed it.
  */
 
 /**
@@ -160,7 +177,82 @@ const rows = plan.lenses.map((lens) => ({
   name: lens.name,
   source: sourceOf(lens),
   state: 'resolving',
+  ...(lens.added && { scope: lens.added.scope }),
 }))
+
+const run = promisify(execFile)
+/** The change's range, as prepare.mjs reads it: the MR's own refs, else what reached the head since the base. */
+const range =
+  review.ownership === 'theirs'
+    ? `${review.base}..${review.headSha}`
+    : `${review.base}...${review.headSha}`
+
+/**
+ * Whether the change under review touches `file`, a file of the project: a
+ * lens is then never cleaned from it, so a branch cannot rewrite the lens
+ * that reviews it.
+ * @param {string} file
+ */
+async function changedHere(file) {
+  const inside = path.relative(review.project, file)
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return false
+  try {
+    const { stdout } = await run('git', [
+      '-C',
+      review.project,
+      'diff',
+      '--name-only',
+      range,
+      '--',
+      inside,
+    ])
+    return stdout.trim() !== ''
+  } catch {
+    // git cannot say: held, rather than cleaned from what the change may have written.
+    return true
+  }
+}
+
+/**
+ * Where an added lens stands against its source: undefined when it cannot
+ * say (the build says why). `held` when the change under review touches its
+ * source or its context skill.
+ * @param {LensSpec} lens
+ */
+async function standing(lens) {
+  if (!lens.added) return undefined
+  try {
+    const stored = await readUserLens(lens.added.dir)
+    const hashes = await hashesOf(stored, review.project)
+    const now = staleness(stored, hashes)
+    const held =
+      now !== 'clean' &&
+      ((await changedHere(hashes.source.file)) ||
+        (hashes.context !== undefined && (await changedHere(hashes.context.file))))
+    return { stored, now, held }
+  } catch (error) {
+    if (error instanceof LensFileRefusal || error instanceof LensRefusal) return undefined
+    throw error
+  }
+}
+
+/** What a lens's row says of a held lens. */
+const HELD =
+  'its source changes in this review: its last version runs until the change is merged'
+
+if (process.argv.includes('--check')) {
+  /** @type {{ name: string, scope: string }[]} */
+  const stale = []
+  for (const [i, lens] of plan.lenses.entries()) {
+    const now = await standing(lens).catch((error) => stepFailed(message(error)))
+    if (now?.now !== 'stale' || now.held || !lens.added) continue
+    Object.assign(rows[i] ?? {}, { cleaning: 'running' })
+    stale.push({ name: lens.name, scope: lens.added.scope })
+  }
+  await writeProgress('resolving', rows)
+  for (const one of stale) console.log(`STALE ${JSON.stringify(one)}`)
+  process.exit(0)
+}
 await writeProgress('resolving', rows)
 
 const previous = await previousLenses()
@@ -176,14 +268,32 @@ const built = []
 for (const [i, lens] of plan.lenses.entries()) {
   const row = rows[i]
   try {
-    const { text, hash, record } = await buildLens(lens, where)
+    // An added lens's paths are the project's, never the recipe's folder.
+    const { text, hash, record } = await buildLens(
+      lens,
+      lens.added ? whereOf(review.project) : where,
+    )
     const { file } = await storeLens(text, hash)
     const before = previous?.get(lens.name)
+    const against = await standing(lens)
+    const cleanedNow = against && against.stored.cleaned.at >= review.createdAt
     Object.assign(row, {
       state: 'ready',
       source: record.source,
       change: before === undefined ? 'new' : before === hash ? 'unchanged' : 'updated',
       ...(record.version && { version: record.version }),
+      // Cleaned again for this review; or its source changed and its last version runs, said why.
+      ...(cleanedNow
+        ? { cleaning: 'again' }
+        : against?.held
+          ? { cleaning: 'held', reason: HELD }
+          : against &&
+            against.now !== 'clean' && {
+              cleaning: 'failed',
+              reason: clip(
+                against.stored.failedCleaning?.reason ?? 'it was not cleaned again',
+              ),
+            }),
     })
     records.push(record)
     built.push({

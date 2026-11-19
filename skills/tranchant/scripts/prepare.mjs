@@ -6,8 +6,11 @@
 // a merge request read with `glab mr view`, `theirs`), reads
 // the recipe in force (--recipe, else the local recipe, else the project's
 // .tranchant/recipe.json at BASE, else the settings' `recipe`, else the
-// plugin's agents/review/recipe.json; without --recipe, the settings'
-// `disabledLenses` are left out), writes the review's envelope, `preparing`
+// plugin's agents/review/recipe.json) and, without --recipe, the lenses the
+// user added for the project and globally (lib/userlens.mjs), under each name
+// the first that is on: a local lens, a global one, the recipe's (the
+// settings' `disabledLenses` turn those off, `lensModels` set their model).
+// It writes the review's envelope, `preparing`
 // with no finding yet, to <state>/inbox/<id>.json and prints `INBOX <file>`,
 // then the lenses whose paths the change touches to <id>.plan.json next to
 // it, with the recipe they come from, and prints `PLAN <file>`: lenses.mjs
@@ -25,6 +28,7 @@ import { REVIEW_VERSION, oneLine } from './lib/format.mjs'
 import { STATE_ROOT } from './lib/project.mjs'
 import { RecipeRefusal, findRecipe, readRecipe } from './lib/lens.mjs'
 import { loadSettings } from './lib/settings.mjs'
+import { lensSet } from './lib/userlens.mjs'
 
 /** @typedef {import('./lib/lens.mjs').LensSpec} Lens */
 
@@ -280,8 +284,22 @@ const lenses = await readRecipe(recipe).then(
     return refuse(`recipe ${recipeName}: ${error.message}`)
   },
 )
-// The lenses turned off are the recipe in force's: a run's own recipe runs whole.
-const disabled = new Set(values.recipe ? [] : settings.disabledLenses)
+// A run's own recipe runs whole: no lens added, none turned off.
+const set = values.recipe
+  ? undefined
+  : await lensSet({
+      project,
+      recipe: lenses,
+      disabled: new Set(settings.disabledLenses),
+      models: settings.lensModels,
+    })
+for (const one of set ?? [])
+  if (one.problem)
+    console.error(`lens ${one.name} (${one.scope}) not run: ${oneLine(one.problem)}`)
+/** @type {Lens[]} */
+const inForce = set
+  ? set.flatMap((one) => (one.runs && one.spec ? [one.spec] : []))
+  : lenses
 // The server's range: the MR's own refs, else what reached the head since the base.
 const range = theirs
   ? `${change.base}..${change.headSha}`
@@ -306,28 +324,32 @@ const touched = async (paths) =>
 
 const changed = await touched(['**'])
 if (!changed.length) refuse(`${change.branch} has no change against ${change.base}`)
+// A lens turned off still holds its files: none goes to the otherwise lens.
+const holding = set
+  ? set.flatMap((one) => (one.spec && !one.spec.otherwise ? [one.spec] : []))
+  : lenses.filter((lens) => !lens.otherwise)
 const covered = new Set()
 /** @type {Map<Lens, string[]>} */
 const matched = new Map()
-for (const lens of lenses) {
-  if (lens.otherwise) continue
+for (const lens of holding) {
   const files = await touched(lens.paths)
   for (const file of files) covered.add(file)
-  if (files.length) matched.set(lens, lens.paths)
+  if (files.length && inForce.includes(lens)) matched.set(lens, lens.paths)
 }
 const uncovered = changed.filter((file) => !covered.has(file))
+// One otherwise lens at most, as in a recipe: the first in precedence.
+const otherwise = inForce.find((lens) => lens.otherwise)
 /** @type {Lens[]} */
-const applied = lenses.flatMap((lens) => {
-  // Turned off in the settings: not run, and its files reviewed by no other lens.
-  if (disabled.has(lens.name)) return []
-  if (lens.otherwise) return uncovered.length ? [{ ...lens, paths: uncovered }] : []
+const applied = inForce.flatMap((lens) => {
+  if (lens.otherwise)
+    return lens === otherwise && uncovered.length ? [{ ...lens, paths: uncovered }] : []
   const paths = matched.get(lens)
   return paths ? [{ ...lens, paths }] : []
 })
 if (!applied.length)
   refuse(
-    lenses.every((lens) => disabled.has(lens.name))
-      ? 'every lens of the recipe is turned off in the settings'
+    !inForce.length
+      ? 'every lens is turned off in the settings (Settings › Lenses)'
       : "no lens of the recipe applies to the change's files",
   )
 

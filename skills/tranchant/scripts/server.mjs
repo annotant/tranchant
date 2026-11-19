@@ -13,10 +13,12 @@
 // It computes the change's diff (/api/diff) once, with git, for the page's main view,
 // and serves the text of its files at its head (/api/lines), for the lines its hunks hide.
 // It serves and writes the user's settings (/api/settings, lib/settings.mjs),
-// one write at a time, with the recipe in force and the recipes imported for
-// the project (lib/imports.mjs), one of which /api/recipe/use puts in force;
-// it pushes `settings` when the file or the imports change. It serves the
-// Lenses step's progress (lenses.json) with the review.
+// one write at a time, with every lens that could run on the project, the
+// recipe's and those the user added (lib/userlens.mjs), and the lenses being
+// cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
+// them again, and prints CLEAN for each cleaning the hooks start an agent on;
+// it pushes `settings` when the file, a lens or a cleaning changes. It serves
+// the Lenses step's progress (lenses.json) with the review.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -27,11 +29,34 @@ import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
-import { PLUGIN_ROOT, PLUGIN_VERSION, SKILL_DIR, findReview } from './lib/project.mjs'
+import {
+  PLUGIN_ROOT,
+  PLUGIN_VERSION,
+  SKILL_DIR,
+  findReview,
+  lockRoot,
+} from './lib/project.mjs'
 import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
 import { readDiscussions, say, syncChange, waitsForAnswer } from './lib/discussion.mjs'
-import { ImportRefusal, importsDir, listImports, useImport } from './lib/imports.mjs'
-import { describeRecipe } from './lib/lens.mjs'
+import {
+  CleaningRefusal,
+  addCleaned,
+  cleanAgain,
+  cleaningsDir,
+  createCleaning,
+  discardCleaning,
+  listCleanings,
+} from './lib/cleaning.mjs'
+import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
+import {
+  LensFileRefusal,
+  describeLenses,
+  isScope,
+  lensPrompt,
+  removeUserLens,
+  scopeDir,
+  updateUserLens,
+} from './lib/userlens.mjs'
 import {
   DEFAULTS,
   SETTINGS_DIR,
@@ -94,6 +119,8 @@ const port = Number(process.env.TRANCHANT_PORT ?? 0)
 // The re-read behind the folder watches, for the mounts whose writes they miss.
 const pollMs = Number(process.env.TRANCHANT_POLL_MS ?? 5000)
 const { project } = review
+/** Where the project's lenses are filed: its git repository, as prepare.mjs and clean.mjs name it. */
+const lensRoot = lockRoot(project)
 const runsDir = path.join(dir, 'runs')
 const findingsDir = path.join(dir, 'findings')
 const agentsDir = path.join(dir, 'reviewers')
@@ -330,15 +357,15 @@ function trackerOnce(values) {
 /**
  * What `GET /api/settings` answers: the file as it stands, the values in
  * force, the keys an environment variable locks, the recipe in force for
- * this review's project (where it comes from, its lenses and their sources,
- * which the page lists to turn off) and the recipes imported for it.
+ * this review's project, every lens that could run on it (Settings ›
+ * Lenses) and the lenses being cleaned.
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
-  const [recipe, imports] = await Promise.all([
-    describeRecipe({ project, base: review.base, settings: values.recipe }),
-    listImports(project).catch((error) => {
-      console.error(`tranchant server: imports unreadable: ${oneLine(String(error))}`)
+  const [described, cleanings] = await Promise.all([
+    describeLenses({ project: lensRoot, base: review.base, values }),
+    listCleanings(lensRoot).catch((error) => {
+      console.error(`tranchant server: cleanings unreadable: ${oneLine(String(error))}`)
       return []
     }),
   ])
@@ -348,15 +375,48 @@ async function settingsPayload() {
     values,
     defaults: DEFAULTS,
     locked,
-    recipe: recipe.file,
-    recipeFrom: recipe.from,
-    recipeLenses: recipe.lenses,
-    lenses: recipe.lenses.map((lens) => lens.name),
-    imports,
-    ...(recipe.problem && { recipeProblem: recipe.problem }),
+    recipe: described.base.file,
+    recipeFrom: described.base.from,
+    lenses: described.lenses
+      .filter((lens) => lens.scope === 'recipe')
+      .map((lens) => lens.name),
+    lensSet: { dirs: described.dirs, lenses: described.lenses },
+    cleanings,
+    ...(described.base.problem && { recipeProblem: described.base.problem }),
     ...(problem && { problem }),
   }
 }
+
+/**
+ * Runs a change to the lenses, then answers the settings as they then
+ * stand; a refusal is the person's to read (409), with its reason.
+ * @param {http.ServerResponse} res
+ * @param {() => Promise<Record<string, unknown> | void>} change
+ */
+async function lensChange(res, change) {
+  let done
+  try {
+    done = await change()
+  } catch (error) {
+    if (error instanceof CleaningRefusal || error instanceof LensFileRefusal)
+      return send(res, 409, { error: error.message })
+    throw error
+  }
+  void lensesChanged()
+  // Done already: a settings payload that fails now is the page's to ask again.
+  const settings = await settingsPayload().catch(() => undefined)
+  return send(res, 200, { ...done, ...(settings && { settings }) })
+}
+
+/** A lens's scope and name from the page, checked as names; undefined when they are not. @param {any} input */
+function lensOf(input) {
+  const scope = input?.scope
+  const name = input?.name
+  if (!isScope(scope) || typeof name !== 'string' || !ID.test(name)) return undefined
+  return { scope, name }
+}
+
+const LENS_REQUIRED = { error: 'scope (global or local) and name are required' }
 
 /** The Lenses step's progress, as lenses.mjs writes it; undefined before it starts. */
 const readLensesStep = () =>
@@ -1095,21 +1155,88 @@ async function handle(req, res) {
     return send(res, 200, { discussion })
   }
 
-  if (req.method === 'POST' && url.pathname === '/api/recipe/use') {
-    const input = await readJson(req)
-    if (typeof input?.id !== 'string' || !ID.test(input.id)) {
-      return send(res, 400, { error: 'id is required' })
-    }
+  if (req.method === 'GET' && url.pathname === '/api/lens/prompt') {
+    const scope = url.searchParams.get('scope') ?? ''
+    const name = url.searchParams.get('name') ?? ''
+    if (!['recipe', 'global', 'local'].includes(scope) || !ID.test(name))
+      return send(res, 400, {
+        error: 'scope (recipe, global or local) and name are required',
+      })
     try {
-      const used = await useImport(project, input.id)
-      void importsChanged()
-      // In force already: a settings payload that fails now is the page's to ask again.
-      const settings = await settingsPayload().catch(() => undefined)
-      return send(res, 200, { ...used, ...(settings && { settings }) })
+      const { values } = await loadSettings()
+      const prompt = await lensPrompt({
+        project: lensRoot,
+        base: review.base,
+        values,
+        scope,
+        name,
+      })
+      return send(res, 200, { prompt })
     } catch (error) {
-      if (error instanceof ImportRefusal) return send(res, 409, { error: error.message })
-      throw error
+      if (error instanceof LensFileRefusal)
+        return send(res, 404, { error: error.message })
+      // A lens that cannot be built says why; anything else is the server's to log.
+      if (!(error instanceof LensRefusal || error instanceof RecipeRefusal)) throw error
+      return send(res, 409, { error: error.message })
     }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/import') {
+    const input = await readJson(req)
+    return lensChange(res, async () => {
+      const made = await createCleaning({
+        project: lensRoot,
+        source: typeof input?.source === 'string' ? input.source : '',
+        scope: String(input?.scope ?? ''),
+        ...(typeof input?.name === 'string' && input.name.trim() && { name: input.name }),
+        ...(typeof input?.context === 'string' &&
+          input.context.trim() && { context: input.context }),
+      })
+      print(`CLEAN ${made.record.id}`)
+      return { cleaning: made.record.id }
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/add') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id))
+      return send(res, 400, { error: 'id is required' })
+    return lensChange(res, () => addCleaned(lensRoot, input.id, input.lens ?? {}))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/discard') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id))
+      return send(res, 400, { error: 'id is required' })
+    return lensChange(res, () => discardCleaning(lensRoot, input.id))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/save') {
+    const input = await readJson(req)
+    const lens = lensOf(input)
+    if (!lens) return send(res, 400, LENS_REQUIRED)
+    const { scope, name } = lens
+    return lensChange(res, () => updateUserLens(lensRoot, scope, name, input.lens))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/remove') {
+    const input = await readJson(req)
+    const lens = lensOf(input)
+    if (!lens) return send(res, 400, LENS_REQUIRED)
+    const { scope, name } = lens
+    return lensChange(res, () => removeUserLens(lensRoot, scope, name))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/clean') {
+    const input = await readJson(req)
+    const lens = lensOf(input)
+    if (!lens) return send(res, 400, LENS_REQUIRED)
+    const { scope, name } = lens
+    return lensChange(res, async () => {
+      const made = await cleanAgain({ project: lensRoot, scope, name })
+      print(`CLEAN ${made.record.id}`)
+      return { cleaning: made.record.id }
+    })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
@@ -1488,27 +1615,32 @@ function pageChanged(_event, file) {
   }, BATCH_MS)
 }
 
-/** The imports' folders and their files' times at the last look: an import that ends changes the page's Settings. */
-let importsSeen = ''
+/** The lenses' and the cleanings' files and their times at the last look: one that changes changes the page's Settings. */
+let lensesSeen = ''
 
-/** Tells the pages the imports changed, when they did since the last look. */
-async function importsChanged() {
-  const root = importsDir(project)
+/** Tells the pages a lens or a cleaning changed, when one did since the last look. */
+async function lensesChanged() {
   const marks = []
-  for (const id of (await readdir(root).catch(() => [])).toSorted((a, b) =>
-    a.localeCompare(b),
-  )) {
-    for (const name of ['import.json', 'recipe.json']) {
-      const mark = await stat(path.join(root, id, name)).then(
-        (one) => `${one.size} ${one.mtimeMs}`,
-        () => '',
-      )
-      marks.push(`${id}/${name} ${mark}`)
+  for (const [root, names] of /** @type {const} */ ([
+    [cleaningsDir(lensRoot), ['cleaning.json', 'report.json', 'lens.md']],
+    [scopeDir('local', lensRoot), ['lens.json', 'lens.md']],
+    [scopeDir('global', lensRoot), ['lens.json', 'lens.md']],
+  ])) {
+    for (const id of (await readdir(root).catch(() => [])).toSorted((a, b) =>
+      a.localeCompare(b),
+    )) {
+      for (const name of names) {
+        const mark = await stat(path.join(root, id, name)).then(
+          (one) => `${one.size} ${one.mtimeMs}`,
+          () => '',
+        )
+        marks.push(`${root}/${id}/${name} ${mark}`)
+      }
     }
   }
   const now = marks.join('\n')
-  if (now === importsSeen) return
-  importsSeen = now
+  if (now === lensesSeen) return
+  lensesSeen = now
   for (const res of listeners) res.write('event: settings\ndata: {}\n\n')
 }
 
@@ -1680,11 +1812,11 @@ server.listen(port, '127.0.0.1', async () => {
   watchFolders()
   await resumeQueued()
   await refreshNext()
-  await importsChanged()
+  await lensesChanged()
   setInterval(() => {
     watchFolders()
     settingsChanged()
-    void importsChanged()
+    void lensesChanged()
     void refreshNext()
   }, pollMs)
 })

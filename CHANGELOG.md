@@ -7,6 +7,33 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Lenses, one by one.** Settings › Lenses lists every lens that could
+  run on the project, the recipe's and those you add, each with its switch,
+  its settings and what its reviewer reads, whole. **Add a lens** takes a
+  team's reviewer (a plugin's skill or agent, or a file): an agent cleans
+  it first, keeping its review and leaving its orchestration, output
+  format, posting and questions out, with added instructions you can edit,
+  and the page shows what it removed and added before you add it. A lens
+  is local (this project) or global (every project), always in
+  `~/.config/tranchant/`, never in the repository. A recipe's lens can be
+  turned off and given its own model.
+- **Lenses cleaned again when their source changes.** Each
+  `/tranchant review` hashes the sources of the added lenses it runs and
+  cleans the changed ones first, your edited rules kept; a cleaning that
+  fails runs the lens's last version and says so, and a source the change
+  under review touches is never cleaned from it.
+
+### Changed
+
+- **`/tranchant import` adds one lens.** It cleans one reviewer into a
+  lens, `--to local` or `--to global`, instead of writing a whole recipe;
+  a whole review process is refused, naming the reviewers to add one by
+  one. Settings › Lenses replaces the recipe in force, the Lenses
+  checkboxes and the imported recipes of the Settings page. A project
+  recipe already committed is still read, but Tranchant writes none.
+
 ## 0.5.1 - 2026-11-11
 
 ### Fixed

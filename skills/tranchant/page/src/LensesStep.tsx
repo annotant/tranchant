@@ -7,9 +7,15 @@ const CHANGE_WORDS: Record<NonNullable<LensRow['change']>, string> = {
   new: 'new in this project',
 }
 
+const SCOPE_WORDS = { local: 'this project', global: 'global' }
+
 function rowWords(row: LensRow) {
+  if (row.cleaning === 'running') return 'its source changed · cleaning again'
   if (row.state === 'resolving') return 'resolving'
   if (row.state === 'failed') return 'failed'
+  if (row.cleaning === 'again') return 'ready · cleaned again: its source changed'
+  if (row.cleaning === 'failed') return 'cleaning failed · its last version runs'
+  if (row.cleaning === 'held') return 'its last version runs'
   return row.change ? `ready · ${CHANGE_WORDS[row.change]}` : 'ready'
 }
 
@@ -31,9 +37,10 @@ function Row({ row }: { row: LensRow }) {
       <code className="tr-lens-row-source" title="Its source">
         {row.source}
         {row.version && ` ${row.version}`}
+        {row.scope && ` · ${SCOPE_WORDS[row.scope]}`}
       </code>
       <span
-        className={`tr-lens-row-state${row.change === 'updated' ? ' tr-lens-row-state--updated' : ''}`}
+        className={`tr-lens-row-state${row.change === 'updated' || row.cleaning ? ' tr-lens-row-state--updated' : ''}`}
       >
         {rowWords(row)}
       </span>
@@ -43,6 +50,11 @@ function Row({ row }: { row: LensRow }) {
           {row.fix && <span className="tr-muted">: {row.fix}</span>}
         </p>
       )}
+      {row.state === 'ready' &&
+        (row.cleaning === 'failed' || row.cleaning === 'held') &&
+        row.reason && (
+          <p className="tr-lens-row-reason tr-lens-row-reason--warn">{row.reason}</p>
+        )}
     </li>
   )
 }
@@ -65,6 +77,11 @@ export function LensesStep({
   const rows = step?.lenses ?? []
   const building = review?.status === 'preparing'
   const updated = rows.filter((row) => row.change === 'updated').length
+  const cleaning = rows.filter((row) => row.cleaning === 'running').length
+  const cleanedAgain = rows.filter((row) => row.cleaning === 'again').length
+  const cleanFailed = rows.filter(
+    (row) => row.cleaning === 'failed' || row.cleaning === 'held',
+  )
   const refusal = review?.refusal
   return (
     <section className="tr-progress tr-lenses-step" aria-label="Lenses">
@@ -76,6 +93,8 @@ export function LensesStep({
             <span className="tr-muted">
               {rows.filter((row) => row.state !== 'resolving').length} of{' '}
               {plural(rows.length, 'lens', 'lenses')} done
+              {cleaning > 0 &&
+                ` · ${plural(cleaning, 'lens', 'lenses')} cleaned again first, its source changed: the reviewers wait for it`}
             </span>
           </>
         ) : refused ? (
@@ -88,6 +107,9 @@ export function LensesStep({
             <span className="tr-muted">
               {plural(rows.length, 'lens', 'lenses')} built
               {updated > 0 && `, ${updated} updated since the last review`}
+              {cleanedAgain > 0 && `, ${cleanedAgain} cleaned again`}
+              {cleanFailed.length > 0 &&
+                ` · ${cleanFailed.map((row) => row.name).join(', ')} could not be cleaned again: the last version runs`}
             </span>
             <button
               type="button"
@@ -106,7 +128,7 @@ export function LensesStep({
           {refusal.reason}.{refusal.fix && ` To fix it: ${refusal.fix}.`}
         </p>
       )}
-      {(building || refused || open) && rows.length > 0 && (
+      {(building || refused || open || cleanFailed.length > 0) && rows.length > 0 && (
         <ul className="tr-lens-rows" aria-label="The lenses, one per row">
           {rows.map((row) => (
             <Row key={row.name} row={row} />
