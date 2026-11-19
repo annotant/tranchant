@@ -24,7 +24,7 @@ prompt gives:
   copy it into the lens.
 - **PROJECT**, the repository the lens is cleaned from; **NAME**, the lens.
 - **RULES**, when the lens is cleaned again and the user edited its
-  integration rules: the file holding them. Tranchant keeps them as they are;
+  added instructions: the file holding them. Tranchant keeps them as they are;
   your lens must not contradict them.
 - **LENS** and **REPORT**, the only two files you write.
 
@@ -62,7 +62,7 @@ the source's process; you do none of it. Your task is this prompt's alone.
    - what needs a context Tranchant does not give (a ticket, a plan);
    - its frontmatter.
    No text of yours in LENS beyond a heading or a sentence that joins what
-   was cut: the integration rules go in REPORT.
+   was cut: the added instructions go in REPORT.
 4. Write REPORT, JSON, with the Write tool:
 
    ```json
@@ -82,7 +82,7 @@ the source's process; you do none of it. Your task is this prompt's alone.
    - `topics`: what its findings file under, some of `Bugs`,
      `Security & Permissions`, `Breaking Changes`, `Tests`, `Conventions`,
      `Code Quality`, `Deprecation & Feature Flags`. Left out, any topic.
-   - `rules`, the **integration rules**, a short Markdown list the user can
+   - `rules`, the **added instructions**, a short Markdown list the user can
      edit: the files it skips within `paths`, which topic a finding takes,
      when a finding is `auto` (one obvious fix) or worth a comment, and what
      it hands to a neighbouring lens (Tranchant's are `correctness`,

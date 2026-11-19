@@ -110,7 +110,7 @@ Beside the recipe's lenses, **Settings › Lenses** adds a team's reviewer as
 a lens of its own: a plugin's skill or agent, or a file. A cleaning agent
 reads it once and writes the lens Tranchant runs, its review kept and its
 orchestration, output format, posting and questions left out, with
-integration rules (the files it takes, its topics, its buckets) the user can
+added instructions (the files it takes, its topics, its buckets) the user can
 edit; the page shows what it removed and added before the lens is used. A
 lens is **local** (this project) or **global** (every project), always in
 `~/.config/tranchant/`, never in the repository; a local lens wins over a

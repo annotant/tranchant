@@ -3,7 +3,7 @@
 // <state>/<project hash>/cleanings/<id>/: cleaning.json (the source, the lens
 // it makes or cleans again, where it stands) and the two files the cleaning
 // agent writes, lens.md (the source's review without its orchestration and
-// output) and report.json (where it runs, its topics, its integration rules,
+// output) and report.json (where it runs, its topics, its added instructions,
 // what was removed and added; or why the source holds no single review). A
 // new lens waits there, unused, until the page adds it; a lens cleaned again
 // takes its new version as soon as the cleaning is checked.
@@ -205,7 +205,7 @@ export async function createCleaning({ project, source, name, scope, context }) 
 
 /**
  * A stored lens's cleaning again, its source changed or asked anew: the
- * integration rules the user edited go to the agent, and stay.
+ * added instructions the user edited go to the agent, and stay.
  * @param {{ project: string, scope: string, name: string }} given
  */
 export async function cleanAgain({ project, scope, name }) {

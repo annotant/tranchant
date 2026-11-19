@@ -157,7 +157,7 @@ test('an added lens is switched, edited and saved through the server, and remove
     target: { value: 'src/**/*.ts, api/**' },
   })
   fireEvent.click(within(editor).getByRole('button', { name: 'Global' }))
-  fireEvent.change(within(editor).getByLabelText('Integration rules'), {
+  fireEvent.change(within(editor).getByLabelText('Added instructions'), {
     target: { value: '- Mine.' },
   })
   fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))

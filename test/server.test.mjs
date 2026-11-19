@@ -2112,7 +2112,7 @@ test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, chang
     await fetch(`${server.base}/api/lens/prompt?scope=local&name=cents`),
   )
   assert.match(prompt.prompt, /A float on a money path is a finding\./)
-  assert.match(prompt.prompt, /## Integration rules/)
+  assert.match(prompt.prompt, /## Added instructions/)
   const builtIn = await json(
     await fetch(`${server.base}/api/lens/prompt?scope=recipe&name=bugs`),
   )

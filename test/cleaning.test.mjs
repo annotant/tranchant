@@ -328,7 +328,7 @@ test('an added lens lives outside the repository, local to its project or global
   const prompt = await readFile(JSON.parse(lensLine?.slice(5) ?? '{}').prompt, 'utf8')
   assert.match(prompt, /## The lens's domain/)
   assert.match(prompt, /a float on a money path is a finding/)
-  assert.match(prompt, /## Integration rules[\s\S]*- My own rule\./)
+  assert.match(prompt, /## Added instructions[\s\S]*- My own rule\./)
   assert.doesNotMatch(prompt, /posted on the MR/)
 })
 

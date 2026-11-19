@@ -735,7 +735,7 @@ back or turn the lens off.
 
 An added lens builds as a `source` does, from what its cleaning wrote: the
 contract, then its context skill fenced as data (never loaded with the
-Skill tool), then its cleaned domain, fenced, then its integration rules,
+Skill tool), then its cleaned domain, fenced, then its added instructions,
 fenced. Its source is still resolved: one that is gone refuses the review,
 as for a recipe's lens.
 
@@ -762,7 +762,7 @@ lens, cleaned first; the page's **Settings › Lenses** does the same with
    without its orchestration (planning, starting other agents, merging
    reports), its output format, posting, questions to the user, scripts and
    frontmatter; and `report.json`, the lens's `paths` (or `otherwise`), its
-   `topics`, its integration **rules**, what it `removed` and why, what it
+   `topics`, its **added instructions**, what it `removed` and why, what it
    `added`. A source that is a whole review process is refused in
    `report.json` (`{ refused, instead }`), naming the reviewers to add one by
    one. `hook.mjs --cleaner` lets the agent write those two files and run

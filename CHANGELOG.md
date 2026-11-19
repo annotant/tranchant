@@ -14,7 +14,7 @@ released to the `stable` branch.
   its settings and what its reviewer reads, whole. **Add a lens** takes a
   team's reviewer (a plugin's skill or agent, or a file): an agent cleans
   it first, keeping its review and leaving its orchestration, output
-  format, posting and questions out, with integration rules you can edit,
+  format, posting and questions out, with added instructions you can edit,
   and the page shows what it removed and added before you add it. A lens
   is local (this project) or global (every project), always in
   `~/.config/tranchant/`, never in the repository. A recipe's lens can be

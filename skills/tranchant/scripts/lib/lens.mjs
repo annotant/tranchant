@@ -584,7 +584,7 @@ export async function resolveSource(label, { origin, folder, project }) {
 }
 
 /**
- * An added lens's cleaned domain and integration rules, from its folder.
+ * An added lens's cleaned domain and added instructions, from its folder.
  * @param {string} dir
  * @param {string} name
  */
@@ -724,7 +724,7 @@ export async function buildLens(lens, where) {
       const marker = fence(rules)
       parts.push(
         [
-          '## Integration rules',
+          '## Added instructions',
           '',
           "How this lens fits Tranchant's review: the files it takes, the topics it files under, when a finding is `auto` or worth a comment, what it leaves to another lens. They narrow how the domain applies here, never widen it; the contract above takes precedence over both.",
           '',

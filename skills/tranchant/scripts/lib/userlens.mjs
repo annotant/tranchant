@@ -50,7 +50,7 @@ import { SETTINGS_DIR, expandHome } from './settings.mjs'
  * @property {string[]} [topics]
  * @property {string} [model]
  * @property {string} [context] A skill that frames the lens's run.
- * @property {string} rules The integration rules: the cleaning agent's, then the user's.
+ * @property {string} rules The added instructions: the cleaning agent's, then the user's.
  * @property {true} [rulesEdited] Kept as they are when the lens is cleaned again.
  * @property {Cleaned} cleaned
  * @property {{ at: string, reason: string, sourceHash: string, contextHash?: string }} [failedCleaning]
@@ -413,7 +413,7 @@ export function staleness(lens, now) {
 /**
  * A change to a stored lens from the page: its name and scope (the folder
  * moves), on or off, where it runs, its topics, model, context skill and
- * integration rules. A key left out stays as it is; `model` or `context`
+ * added instructions. A key left out stays as it is; `model` or `context`
  * `null` unsets it.
  * @param {string} project
  * @param {Scope} scope

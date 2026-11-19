@@ -59,7 +59,7 @@ and `lens.json`:
   "topics": ["Security & Permissions"], // optional: what its findings file under
   "model": "claude-opus-5-5", // optional: its reviewer's model
   "context": "workflow:abac-rules", // optional: a skill that frames its run, given as data
-  "rules": "- A route with no policy check is a finding, bucket review.", // its integration rules
+  "rules": "- A route with no policy check is a finding, bucket review.", // its added instructions
   "rulesEdited": true, // the user edited them: kept as they are when it is cleaned again
   "cleaned": {
     "at": "2026-11-18T09:12:00Z",

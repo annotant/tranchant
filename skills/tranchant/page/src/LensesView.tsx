@@ -743,8 +743,8 @@ function ReadyForm({
       </div>
       <Field
         id={`${id}-rules`}
-        label="Integration rules"
-        help="Yours to edit, now or later: kept, and given back to the agent, when its source changes and the lens is cleaned again."
+        label="Added instructions"
+        help="Appended to the lens, after its domain: what counts as a finding here, which files it skips, when a finding is auto or for review, what it leaves to another lens. Yours to edit, and kept as they are when its source changes and the lens is cleaned again."
       >
         <textarea
           id={`${id}-rules`}
@@ -933,7 +933,7 @@ function Reads({ lens }: { lens: LensEntry }) {
       <p className="tr-field-help">
         {lens.scope === 'recipe'
           ? 'Its whole prompt, as the plugin ships it.'
-          : "Tranchant's contract, the context skill, the lens's domain as it was cleaned, and its integration rules: what the reviewer is given, whole."}
+          : "Tranchant's contract, the context skill, the lens's domain as it was cleaned, and its added instructions: what the reviewer is given, whole."}
       </p>
       {problem ? (
         <p className="tr-recipe-problem">It cannot be built: {problem}</p>
@@ -1165,8 +1165,8 @@ function AddedLens({
           </Field>
           <Field
             id={`${id}-rules`}
-            label="Integration rules"
-            help="Written by the cleaning agent to fit the lens into Tranchant; yours to edit. Once edited, kept as they are when the lens is cleaned again."
+            label="Added instructions"
+            help="Appended to the lens, after its domain: what counts as a finding here, which files it skips, when a finding is auto or for review, what it leaves to another lens. Yours to edit, and kept as they are when its source changes and the lens is cleaned again."
           >
             <textarea
               id={`${id}-rules`}
