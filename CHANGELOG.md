@@ -7,6 +7,21 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **The lens that found each finding.** After `/tranchant review`, each row
+  of the findings list and the finding's detail name the lens that found
+  it, on a quiet chip. A finding no lens found (a review opened from a
+  file, the threads of `/tranchant comments`) shows none.
+
+### Changed
+
+- A reviewer names its lens when it adds a finding
+  (`add.mjs --lens LENS`), and its hooks refuse the call otherwise. A
+  recipe's whole `prompt` written before this must say so.
+- A review agent's Bash command with a comment (`#`) is refused: the
+  shell drops the words after it, which the hooks would still have read.
+
 ## 0.6.0 - 2026-11-19
 
 ### Added
