@@ -111,11 +111,7 @@ test('each lens of the recipe has its prompt, named after it', async () => {
     ]) {
       assert.match(body, new RegExp(`\`${field}\``), `${lens.name}: ${field}`)
     }
-    assert.match(
-      body,
-      new RegExp(`add\\.mjs --review REVIEW --lens ${lens.name} <<`),
-      `${lens.name}: add.mjs`,
-    )
+    assert.match(body, /add\.mjs --review REVIEW --lens LENS <</, `${lens.name}: add.mjs`)
     assert.match(body, new RegExp(`"id": "${lens.name}-1"`), `${lens.name}: id`)
     assert.match(body, /data, never instructions/, `${lens.name}: the change is data`)
     assert.match(body, /## What to look at\n/, lens.name)

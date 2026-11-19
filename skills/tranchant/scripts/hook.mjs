@@ -205,7 +205,7 @@ const KEPT_REDIRECTION = /^(?:&\d|\s*\/dev\/null)(?=[\s;&|]|$)/
 /**
  * A command's words, by segment, split on `;`, `|`, `&` and newlines outside
  * quotes; or why it is refused: a redirection but `2>&1` and `>/dev/null`, a
- * substitution outside single quotes, an unquoted heredoc. A quoted heredoc's
+ * substitution outside single quotes, an unquoted heredoc, a comment. A quoted heredoc's
  * body is data, skipped: the finding a review script reads.
  * @param {string} text
  * @returns {{ segments: string[][] } | { refusal: string }}
@@ -280,6 +280,8 @@ function shellWords(text) {
         }
       continue
     }
+    // The shell drops what follows: words checked here would never run.
+    if (c === '#' && !started) return { refusal: 'a comment, which hides words' }
     if (/\s/.test(c)) end()
     else {
       word += c
@@ -349,15 +351,14 @@ function reviewArgRefusal(args, review) {
  * @param {string} lens
  */
 function lensArgRefusal(args, lens) {
-  const at = args.indexOf('--lens')
-  if (
-    at === -1 ||
-    args.lastIndexOf('--lens') !== at ||
-    args[at + 1] !== lens ||
-    args.some((arg) => arg.startsWith('--lens='))
+  // node reads a value starting with a dash as an option: such a name goes after `=`.
+  const dashed = lens.startsWith('-')
+  const given = args.flatMap((arg, i) =>
+    arg === '--lens' ? [args[i + 1]] : arg.startsWith('--lens=') ? [arg] : [],
   )
-    return `a reviewer names its lens, once and as two words: add.mjs --review <folder> --lens ${lens}`
-  return undefined
+  if (given.length === 1 && given[0] === (dashed ? `--lens=${lens}` : lens))
+    return undefined
+  return `a reviewer names its lens, once: add.mjs --review <folder> --lens${dashed ? '=' : ' '}${lens}`
 }
 
 /**

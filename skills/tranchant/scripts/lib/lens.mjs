@@ -22,7 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './errors.mjs'
-import { TOPICS } from './format.mjs'
+import { LENS_NAME, TOPICS } from './format.mjs'
 import { PLUGIN_ROOT, STATE_ROOT, hashOf } from './project.mjs'
 import { SETTINGS_DIR, expandHome } from './settings.mjs'
 
@@ -36,7 +36,6 @@ const PROJECT_RECIPE = path.join('.tranchant', 'recipe.json')
 /** Where the built prompts are stored, one per hash. */
 const LENSES_DIR = path.join(STATE_ROOT, 'lenses')
 
-const LENS_NAME = /^[\w-]{1,40}$/
 const MAX_LENSES = 12
 const MAX_SKILLS = 6
 /** The most a source, or a skill a lens lists, may weigh. */

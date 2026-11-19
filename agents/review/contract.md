@@ -159,7 +159,7 @@ node SKILL/scripts/add.mjs --review REVIEW --lens LENS <<'EOF'
 EOF
 ```
 
-- `--lens`: LENS, your lens's name, as written: the page shows it on each
+- `--lens LENS`: your lens's name, as written: the page shows it on each
   finding.
 - `id`: your lens's name, `-` and a number from 1, unique in your run: the
   lens's name keeps your ids apart from the other lenses'.
