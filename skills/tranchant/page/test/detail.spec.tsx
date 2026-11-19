@@ -444,6 +444,26 @@ const run = (id: string, outcome?: 'fixed' | 'asking' | 'failed' | 'stopped') =>
   ...(outcome && { outcome }),
 })
 
+test('the detail names the lens that found the finding, and nothing when none did', () => {
+  const { unmount } = render(
+    <FindingDetail
+      review={review('ours')}
+      finding={{ ...bug, lens: 'bugs' }}
+      record={undefined}
+      steps={[]}
+      disabled={false}
+      onDecide={vi.fn()}
+      onAnswer={vi.fn()}
+      onStop={vi.fn()}
+      onDiscuss={vi.fn(async () => true)}
+    />,
+  )
+  expect(screen.getByTitle('Found by the bugs lens').textContent).toBe('bugs')
+  unmount()
+  renderDetail()
+  expect(document.querySelector('.tr-chip--lens')).toBeNull()
+})
+
 test('the chip names the group and its title the state; runs end in human words', () => {
   renderDetail({
     state: 'failed',

@@ -177,7 +177,7 @@ no HTML.
 Each finding is one call of `add.mjs`, the finding's JSON on stdin:
 
 ```
-node SKILL/scripts/add.mjs --review REVIEW <<'EOF'
+node SKILL/scripts/add.mjs --review REVIEW --lens conventions <<'EOF'
 {
   "id": "conventions-1",
   "topic": "Bugs",
@@ -195,6 +195,8 @@ node SKILL/scripts/add.mjs --review REVIEW <<'EOF'
 EOF
 ```
 
+- `--lens conventions`: your lens's name, as written: the page shows it on each
+  finding.
 - `id`: `conventions-` and a number from 1, unique in your run: the lens's
   name keeps your ids apart from the other lenses'.
 - It prints `ADDED <id>`, or `ADD_REFUSED <reason>` and exits 2: the

@@ -722,7 +722,14 @@ export function createStore(dir) {
         // Under the decisions' lock: no decision lands between the check and the write.
         await exclusive(async () => {
           await refuseDecided(id, 'amend')
-          await writeFinding({ ...amended, addedAt: known.addedAt, verified: true })
+          // The lens that found it stays: a verifier corrects a finding, it finds none.
+          const { lens: _lens, ...content } = amended
+          await writeFinding({
+            ...content,
+            ...(known.lens !== undefined && { lens: known.lens }),
+            addedAt: known.addedAt,
+            verified: true,
+          })
         })
       })
     },

@@ -227,6 +227,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Diagram} [diagram]
  * @property {Related[]} [related] Up to 4.
  * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
+ * @property {string} [lens] The name of the lens that found it: set by add.mjs for a reviewer of `/tranchant review`; absent, no lens found it.
  * @property {boolean} [verified] Set by verify.mjs once a verifier confirmed or amended it; read only when the review's `verify` is true.
  * @property {Thread} [thread] The PR/MR thread it comes from: a post replies on it.
  */
@@ -492,6 +493,8 @@ export class FormatError extends Error {}
 const ID = /^[\w-]{1,64}$/
 /** An id safe in a file name and on a protocol line. @param {unknown} value */
 const isId = (value) => typeof value === 'string' && ID.test(value)
+// A lens's name, as a recipe's: lib/lens.mjs checks the same.
+const LENS = /^[\w-]{1,40}$/
 const SHA = /^[0-9a-f]{7,64}$/
 // A tab is the only control character a line of code may hold.
 const CONTROL = /[^\P{Cc}\t]/u
@@ -713,6 +716,12 @@ function checkFinding(finding, where, theirs, problems, forge) {
   }
   if (finding.addedAt !== undefined && !isText(finding.addedAt, 100)) {
     problems.push(`${where}.addedAt: a date is required`)
+  }
+  if (
+    finding.lens !== undefined &&
+    !(typeof finding.lens === 'string' && LENS.test(finding.lens))
+  ) {
+    problems.push(`${where}.lens: a lens's name, up to 40 letters, digits, - and _`)
   }
   if (finding.verified !== undefined && typeof finding.verified !== 'boolean') {
     problems.push(`${where}.verified: true or false`)

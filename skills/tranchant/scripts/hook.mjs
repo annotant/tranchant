@@ -344,9 +344,26 @@ function reviewArgRefusal(args, review) {
 }
 
 /**
+ * Why a reviewer's add.mjs does not name its lens: `--lens` once, and `lens`.
+ * @param {string[]} args After the script.
+ * @param {string} lens
+ */
+function lensArgRefusal(args, lens) {
+  const at = args.indexOf('--lens')
+  if (
+    at === -1 ||
+    args.lastIndexOf('--lens') !== at ||
+    args[at + 1] !== lens ||
+    args.some((arg) => arg.startsWith('--lens='))
+  )
+    return `a reviewer names its lens, once and as two words: add.mjs --review <folder> --lens ${lens}`
+  return undefined
+}
+
+/**
  * Why review agent `name` may not run `command`, or undefined when it may: a
  * chain of reading commands, and the agent's own script (a reviewer's
- * add.mjs; a verifier's verify.mjs or remove.mjs, a discussing agent's
+ * add.mjs, under its lens's name; a verifier's verify.mjs or remove.mjs, a discussing agent's
  * reply.mjs, on its own finding; the summary agent's summarize.mjs), by its
  * path, on its own review.
  * @param {string} name `rv-<lens>`, `vf-<finding id>`, `ds-<finding id>` or `sm-summary`.
@@ -382,6 +399,8 @@ function reviewerRefusal(name, command, review) {
         return `${kind === 'vf' ? 'a verifier gives its verdict' : 'it answers'} on ${name.slice(3)} only`
       const outside = reviewArgRefusal(args.slice(1), review)
       if (outside) return outside
+      const unnamed = kind === 'rv' && lensArgRefusal(args.slice(1), name.slice(3))
+      if (unnamed) return unnamed
       continue
     }
     if (!READERS.has(program)) return `${program} is not a reading command`

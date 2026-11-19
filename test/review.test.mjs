@@ -437,16 +437,23 @@ test('verify.mjs confirms or amends a finding; --pending lists the others', asyn
   assert.equal(pending.stdout, 'UNVERIFIED f-01\nUNVERIFIED f-02\n')
   const confirmed = await verify(['f-01', '--review', dir])
   assert.equal(confirmed.stdout, 'VERIFIED f-01\n', confirmed.stderr)
-  const landed = JSON.parse(await readFile(findingPath(dir, 'f-02'), 'utf8'))
+  // Found by a lens: the amendment, which names another or none, keeps it.
+  const file = findingPath(dir, 'f-02')
+  await writeFile(
+    file,
+    JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), lens: 'bugs' }),
+  )
+  const landed = JSON.parse(await readFile(file, 'utf8'))
   const amended = await verify(
     ['f-02', '--review', dir, '--amend'],
-    JSON.stringify({ ...findings[1], title: 'Amended title' }),
+    JSON.stringify({ ...findings[1], title: 'Amended title', lens: 'other' }),
   )
   assert.equal(amended.stdout, 'AMENDED f-02\n', amended.stderr)
   const after = JSON.parse(await readFile(findingPath(dir, 'f-02'), 'utf8'))
   assert.equal(after.title, 'Amended title')
   assert.equal(after.verified, true)
   assert.equal(after.addedAt, landed.addedAt)
+  assert.equal(after.lens, 'bugs')
   assert.equal((await verify(['--pending', '--review', dir])).stdout, '')
   // The same finding added again, verified since: the same one.
   const again = await run(
@@ -704,8 +711,18 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
     `node ${SCRIPTS}add.mjs --review ${dir} <<FINDING\n{"x": "$(rm -rf src)"}\nFINDING`,
   ])
     assert.match(await hook('pre', bash(command)), /^Refused: /, command)
+  // Its lens named, and no other: the finding records who found it.
+  for (const args of ['', ' --lens tests', ' --lens bugs --lens tests', ' --lens=bugs'])
+    assert.match(
+      await hook(
+        'pre',
+        bash(`node ${SCRIPTS}add.mjs --review ${dir}${args} <<'F'\n{}\nF`),
+      ),
+      /^Refused: a reviewer names its lens, .* --lens bugs\./,
+      args,
+    )
   // Its own script passes, whatever code the finding it pipes in quotes.
-  const add = `node ${SCRIPTS}add.mjs --review ${dir} <<'FINDING'\n{"excerpt":"sed -i x > out"}\nFINDING`
+  const add = `node ${SCRIPTS}add.mjs --review ${dir} --lens bugs <<'FINDING'\n{"excerpt":"sed -i x > out"}\nFINDING`
   assert.equal(await hook('pre', { ...bash(add), tool_use_id: 't2' }), undefined)
   const read = `git -C ${project} diff main...HEAD -- ':(glob)src/**' | head -50 2>&1`
   assert.equal(await hook('pre', { ...bash(read), tool_use_id: 't4' }), undefined)
@@ -752,7 +769,7 @@ test("a review agent's hooks record its steps, and refuse what would write", asy
     steps.map((step) => [step.kind, step.state, step.agent]),
     [
       // The sed, then the seven refused commands.
-      ...Array.from({ length: 8 }, () => ['bash', 'failed', 'a1']),
+      ...Array.from({ length: 12 }, () => ['bash', 'failed', 'a1']),
       // Its own script, the git read, the three quoted patterns and the continued line.
       ...Array.from({ length: 6 }, () => ['bash', 'running', 'a1']),
       ...Array.from({ length: 13 }, () => ['bash', 'failed', 'a1']),

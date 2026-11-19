@@ -90,6 +90,28 @@ test('the same finding again is accepted silently; another under its id is refus
   )
 })
 
+test('--lens records the lens that found the finding, whatever the finding says', async (t) => {
+  const { dir, findings } = await live(t, 'ours', 'live-add-lens')
+  await add(dir, [], JSON.stringify(findings[0]))
+  assert.equal(
+    'lens' in JSON.parse(await readFile(findingPath(dir, 'f-01'), 'utf8')),
+    false,
+  )
+  const named = await add(
+    dir,
+    ['--lens', 'bugs'],
+    JSON.stringify({ ...findings[1], lens: 'another' }),
+  )
+  assert.equal(named.stdout, 'ADDED f-02\n', named.stderr)
+  assert.equal(JSON.parse(await readFile(findingPath(dir, 'f-02'), 'utf8')).lens, 'bugs')
+  // Again under its lens: the same finding.
+  const again = await add(dir, ['--lens', 'bugs'], JSON.stringify(findings[1]))
+  assert.equal(again.stdout, 'ADDED f-02\n', again.stderr)
+  const unsound = await add(dir, ['--lens', 'not a name'], JSON.stringify(findings[2]))
+  assert.equal(unsound.code, 2)
+  assert.match(unsound.stdout, /^ADD_REFUSED finding\.lens: a lens's name/)
+})
+
 test('refuses a finding that is not sound, naming what is wrong, and writes nothing', async (t) => {
   const { dir, findings } = await live(t, 'theirs', 'live-add-3')
   const outside = await add(dir, [], JSON.stringify({ ...findings[0], line: 9999 }))

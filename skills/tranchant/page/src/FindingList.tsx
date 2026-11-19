@@ -55,6 +55,15 @@ export function DiscussionMark({ count }: { count: number }) {
   )
 }
 
+/** The lens that found the finding, by its name. */
+export function LensChip({ lens }: { lens: string }) {
+  return (
+    <span className="tr-chip tr-chip--lens" title={`Found by the ${lens} lens`}>
+      {lens}
+    </span>
+  )
+}
+
 /** A speech bubble: the finding has a comment ready to post. */
 export function CommentMark() {
   return (
@@ -120,6 +129,7 @@ function Row({
           <span className={stateClass(state)} title={STATE_DETAILS[state]}>
             {stateLabel(state)}
           </span>
+          {finding.lens && <LensChip lens={finding.lens} />}
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}
