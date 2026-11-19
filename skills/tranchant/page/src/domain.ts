@@ -132,6 +132,8 @@ export interface Finding {
   addedAt?: string
   /** A verifier confirmed it; read only when the review's `verify` is true. */
   verified?: boolean
+  /** The lens that found it (`/tranchant review`); absent, none did. */
+  lens?: string
   /** The PR/MR thread it comes from (`/tranchant comments`). */
   thread?: Thread
 }

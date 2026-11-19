@@ -186,6 +186,8 @@ a.tr-theme-toggle { text-decoration: none; }
   font-size: 11.5px; font-weight: 600; white-space: nowrap; text-decoration: none;
   background: var(--tr-bg-3); color: var(--tr-muted);
 }
+/* A long name is cut: the title beside it keeps its room. */
+.tr-chip--lens { display: inline-block; flex: none; max-width: 16ch; line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
 .tr-chip--ours { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--theirs { background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-chip--warn { background: var(--tr-warn-bg); color: var(--tr-warn); }

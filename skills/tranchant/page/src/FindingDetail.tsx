@@ -34,6 +34,7 @@ import {
   type Tracker,
 } from './domain'
 import { Excerpt } from './Excerpt'
+import { LensChip } from './FindingList'
 import { FixChanges } from './FixChanges'
 import { Markdown } from './markdown'
 import { RunPanel } from './RunPanel'
@@ -430,6 +431,7 @@ export function FindingDetail({
             {BUCKET_LABELS[finding.bucket]}
           </span>
           <span className="tr-chip">{finding.topic}</span>
+          {finding.lens && <LensChip lens={finding.lens} />}
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
           )}

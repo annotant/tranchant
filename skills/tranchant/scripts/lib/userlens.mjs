@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
-import { TOPICS } from './format.mjs'
+import { LENS_NAME, TOPICS } from './format.mjs'
 import { hashOf } from './project.mjs'
 import {
   LensRefusal,
@@ -57,7 +57,6 @@ import { SETTINGS_DIR, expandHome } from './settings.mjs'
  */
 
 const LENS_VERSION = 1
-const LENS_NAME = /^[\w-]{1,40}$/
 const MODEL = /^[\w.:-]{1,80}$/
 /** Lenses of a scope at most: each is one more agent on every review. */
 export const MAX_SCOPE_LENSES = 12
