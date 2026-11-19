@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // hook.mjs <pre|post|stop|note|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]
 // hook.mjs <pre|post|note> --reviewer <name> --review <dir> --project <root> [--agent <id>]
-// hook.mjs pre --importer <name> --recipe <file>
+// hook.mjs pre --cleaner <name> --write <file> [--write <file>]
 // The hooks of one finding's agent: Claude Code runs them around each of its
 // tools with the event as JSON on stdin. Claude Code runs no plugin mod hook
 // for an agent a plugin starts, so the plugin's hooks module registers each
@@ -26,13 +26,13 @@
 // and takes no lock; its steps go to reviewers/<name>.jsonl. pre allows only reading commands
 // and its own review script in Bash (reviewerRefusal).
 //
-// `--importer`: the import agent's (its name, `im-…`, `/tranchant import`): it
-// writes the recipe file it was given and nothing else, and runs reading
-// commands only (importerRefusal). Unlike the others, its hook fails closed:
-// on any error, the tool is refused.
+// `--cleaner`: a lens's cleaning agent's (its name, `cl-…`): it writes the
+// files it was given and nothing else, and runs reading commands only
+// (cleanerRefusal). Unlike the others, its hook fails closed: on any error,
+// the tool is refused.
 //
 // `--lock-root`: the git repository the project is in, which the hooks module
-// found; the locks are tabled per repository. A hook but the importer's never
+// found; the locks are tabled per repository. A hook but the cleaner's never
 // fails the agent: on any error, it lets the tool run.
 import { realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -391,7 +391,7 @@ function reviewerRefusal(name, command, review) {
   return undefined
 }
 
-/** The tools that write a file, by name: the import agent's only writes. */
+/** The tools that write a file, by name: the cleaning agent's only writes. */
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
 /** A path as the file system reaches it: its folder's real path, then its name. */
@@ -404,21 +404,22 @@ function reachedAs(/** @type {string} */ file) {
 }
 
 /**
- * Why the import agent may not run `tool` with `input`, or undefined when it
- * may: it writes `recipe` alone, and runs reading commands only, git none
+ * Why the cleaning agent may not run `tool` with `input`, or undefined when
+ * it may: it writes `files` alone, and runs reading commands only, git none
  * (a source's folder may hold a repository whose config runs programs); it
  * asks nothing, the hooks started it in the background.
  * @param {string} tool
  * @param {Record<string, unknown>} input
- * @param {string} recipe
+ * @param {string[]} files
  */
-function importerRefusal(tool, input, recipe) {
+function cleanerRefusal(tool, input, files) {
   if (tool === 'AskUserQuestion')
-    return 'the import agent asks nothing: list what it cannot decide in imported.leftOut'
+    return 'the cleaning agent asks nothing: say what it cannot decide in its report'
   const target = writeTarget(tool, input)
   if (target !== undefined || EDITS.has(tool)) {
-    if (!target || reachedAs(target) !== reachedAs(recipe))
-      return `the import agent writes ${recipe} only`
+    const reached = target && reachedAs(target)
+    if (!reached || !files.some((file) => reachedAs(file) === reached))
+      return `the cleaning agent writes ${files.join(' and ')} only`
     return undefined
   }
   if (tool !== 'Bash') return undefined
@@ -427,7 +428,7 @@ function importerRefusal(tool, input, recipe) {
   for (const [program, ...args] of parsed.segments) {
     if (!program) continue
     if (program === 'git')
-      return 'the import agent reads with Read, Grep and Glob, not git'
+      return 'the cleaning agent reads with Read, Grep and Glob, not git'
     if (!READERS.has(program)) return `${program} is not a reading command`
     const refused = argumentRefusal(program, args)
     if (refused) return refused
@@ -843,20 +844,24 @@ const refuseTool = (/** @type {string} */ reason) =>
     }),
   )
 
-/** The import agent's hook: it may write its recipe, and read. */
-async function importer() {
-  const recipe = flag('--recipe')
+/** The cleaning agent's hook: it may write its files, and read. */
+async function cleaner() {
+  const files = process.argv.flatMap((arg, i, all) =>
+    arg === '--write' && all[i + 1] ? [all[i + 1] ?? ''] : [],
+  )
   let text = ''
   for await (const chunk of process.stdin) text += chunk
   /** @type {HookInput} */
   const event = text.trim() ? JSON.parse(text) : {}
-  if (!recipe)
-    return refuseTool('Refused: the import agent was started without its recipe file.')
+  if (!files.length)
+    return refuseTool('Refused: the cleaning agent was started without its files.')
   if (!event.tool_name)
     return refuseTool('Refused: Tranchant could not read this tool call.')
-  const refused = importerRefusal(event.tool_name ?? '', event.tool_input ?? {}, recipe)
+  const refused = cleanerRefusal(event.tool_name ?? '', event.tool_input ?? {}, files)
   if (refused)
-    refuseTool(`Refused: ${refused}. Use Read, Grep and Glob, and Write on ${recipe}.`)
+    refuseTool(
+      `Refused: ${refused}. Use Read, Grep and Glob, and Write on ${files.join(' and ')}.`,
+    )
 }
 
 async function main() {
@@ -918,9 +923,9 @@ async function main() {
     )
 }
 
-if (flag('--importer') !== undefined) {
-  // Fails closed: an import agent reads another team's text, and writes one file.
-  await importer().catch((error) =>
+if (flag('--cleaner') !== undefined) {
+  // Fails closed: a cleaning agent reads another team's text, and writes two files.
+  await cleaner().catch((error) =>
     refuseTool(`Refused: Tranchant could not check this tool (${String(error)}).`),
   )
 } else

@@ -1,11 +1,9 @@
 import { type ReactNode, useState } from 'react'
 import { type SettingsChange, useAccount } from './api'
 import {
-  type ImportedRecipe,
   isChanged,
   KNOWN_MODELS,
   MAX_AGENTS,
-  type RecipeFrom,
   type SettingKey,
   type SettingsPayload,
   type SettingsValues,
@@ -24,152 +22,6 @@ interface Props {
   onDismiss: () => void
   /** Saves the file as `change` makes it from the file as it stands. */
   onSave: (change: SettingsChange) => void
-  /** Use this recipe: puts an imported recipe in force. */
-  onUseRecipe?: (id: string) => void
-}
-
-const IGNORE = () => undefined
-
-/** Marks a part of the settings still being tested: it may change before it is stable. */
-function Preview() {
-  return (
-    <span
-      className="tr-chip tr-chip--warn tr-preview"
-      title="Being tested: how it works, and the recipe's format, may change before it is stable."
-    >
-      Preview
-    </span>
-  )
-}
-
-const FROM_WORDS: Record<RecipeFrom, string> = {
-  run: 'this run',
-  local: 'your local recipe, outside the repository',
-  project: "the project's .tranchant/recipe.json, read at the review's base",
-  settings: 'the settings',
-  plugin: "the plugin's",
-}
-
-/** The recipe in force: where it comes from, and each lens with its source and its status. */
-function RecipeInForce({ settings }: { settings: SettingsPayload }) {
-  const lenses = settings.recipeLenses ?? []
-  return (
-    <div className="tr-setting">
-      <div>
-        <div className="tr-setting-label" id="tr-setting-in-force">
-          <span>Recipe in force</span> <Preview />
-        </div>
-        <p className="tr-setting-help">
-          From {FROM_WORDS[settings.recipeFrom ?? 'plugin']}:{' '}
-          <code>{settings.recipe}</code>. Each lens is built from its source at every
-          review.
-        </p>
-      </div>
-      <div className="tr-setting-control">
-        {settings.recipeProblem ? (
-          <p className="tr-recipe-problem">{settings.recipeProblem}</p>
-        ) : (
-          <ul className="tr-recipe-lenses" aria-labelledby="tr-setting-in-force">
-            {lenses.map((lens) => (
-              <li key={lens.name}>
-                <strong>{lens.name}</strong>
-                <code>{lens.source}</code>
-                {lens.problem ? (
-                  <span className="tr-recipe-problem">
-                    cannot be built: {lens.problem}
-                    {lens.fix && ` (${lens.fix})`}
-                  </span>
-                ) : (
-                  <span className="tr-muted">ready</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  )
-}
-
-const TO_WORDS = {
-  project: 'for the team, committed with the code',
-  local: 'for you alone, outside the repository',
-}
-
-/** A recipe `/tranchant import` wrote, shown whole before Use this recipe puts it in force. */
-function Imported({
-  one,
-  frozen,
-  onUse,
-}: {
-  one: ImportedRecipe
-  frozen: boolean
-  onUse: (id: string) => void
-}) {
-  return (
-    <li className="tr-import" aria-label={`Recipe imported from ${one.source}`}>
-      <div className="tr-import-head">
-        <strong>
-          From <code>{one.source}</code>
-          {one.version && ` ${one.version}`}
-        </strong>
-        <span className="tr-muted">
-          {one.state === 'importing'
-            ? 'the import agent is writing it…'
-            : `to ${one.target}, ${TO_WORDS[one.to]}`}
-        </span>
-        {one.state === 'ready' && (
-          <button
-            type="button"
-            className="tr-btn tr-btn--primary"
-            disabled={frozen}
-            onClick={() => onUse(one.id)}
-          >
-            Use this recipe
-          </button>
-        )}
-      </div>
-      {one.state === 'failed' && (
-        <p className="tr-recipe-problem">It cannot be used: {one.reason}</p>
-      )}
-      {one.lenses.length > 0 && (
-        <ul className="tr-recipe-lenses" aria-label="Its lenses">
-          {one.extends && (
-            <li className="tr-muted">Tranchant's own lenses, beside these:</li>
-          )}
-          {one.lenses.map((lens) => (
-            <li key={lens.name}>
-              <strong>{lens.name}</strong>
-              <code>{lens.source}</code>
-              {lens.skills?.length ? (
-                <span className="tr-muted">with {lens.skills.join(', ')}</span>
-              ) : null}
-              {lens.paths.length > 0 && lens.paths.join() !== '**' && (
-                <span className="tr-muted">on {lens.paths.join(', ')}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {one.leftOut.length > 0 && (
-        <ul className="tr-recipe-lenses" aria-label="Left out">
-          <li className="tr-muted">Left out, as no lens can do it:</li>
-          {one.leftOut.map((part) => (
-            <li key={part.what}>
-              <strong>{part.what}</strong>
-              <span className="tr-muted">{part.why}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {one.to === 'project' && one.state === 'ready' && (
-        <p className="tr-muted">
-          A project recipe is read at the base of each review: commit it, and it reviews
-          the changes made after it.
-        </p>
-      )}
-    </li>
-  )
 }
 
 /** A key whose value is a string the person types. */
@@ -211,6 +63,7 @@ const KEYS: readonly SettingKey[] = [
   'maxReviewAgents',
   'recipe',
   'disabledLenses',
+  'lensModels',
   'postWith',
 ]
 
@@ -227,6 +80,7 @@ const LABELS: Record<SettingKey, string> = {
   maxReviewAgents: 'Review agents at a time',
   recipe: 'Default recipe',
   disabledLenses: 'Lenses',
+  lensModels: "Lenses' models",
   postWith: 'Posts with',
 }
 
@@ -242,7 +96,9 @@ const HELP: Record<SettingKey, string> = {
   maxReviewAgents: 'Reviewers, verifiers and discussions together.',
   recipe:
     "A file in the recipe's shape, used when a run names none. --recipe on a run still wins.",
-  disabledLenses: 'A lens turned off is not run: its findings are not made.',
+  disabledLenses:
+    'One reviewer agent per lens: the recipe’s, and those you add for this project or for every project.',
+  lensModels: 'By lens of the recipe, its reviewer’s model.',
   postWith:
     'The CLI that opens issues when the remote does not say which forge it is on.',
 }
@@ -257,6 +113,7 @@ function defaultText(key: SettingKey, defaults: SettingsValues, lenses: number):
     return choices.find(([value]) => value === defaults[key])?.[1] ?? defaults[key]
   }
   if (key === 'disabledLenses') return lenses ? `all ${lenses}` : 'all'
+  if (key === 'lensModels') return 'the reviewers’'
   if (key === 'recipe') return "the plugin's"
   if (key === 'fixModel' || key === 'reviewModel' || key === 'verifyModel')
     return "the session's"
@@ -336,7 +193,6 @@ export function SettingsView({
   error,
   onDismiss,
   onSave,
-  onUseRecipe = IGNORE,
 }: Props) {
   if (!settings) {
     return (
@@ -465,35 +321,24 @@ export function SettingsView({
       />,
     )
 
-  const off = new Set(values.disabledLenses)
-  const lensesControl = settings.recipeProblem ? (
-    <p className="tr-setting-value tr-error">
-      The recipe cannot be read: {settings.recipeProblem}
-    </p>
-  ) : lenses.length ? (
-    <div className="tr-checks" role="group" aria-labelledby="tr-setting-disabledLenses">
-      {lenses.map((lens) => (
-        <label key={lens}>
-          <input
-            type="checkbox"
-            className="tr-check"
-            checked={!off.has(lens)}
-            disabled={frozen || !!locked.disabledLenses}
-            onChange={(event) =>
-              set(
-                'disabledLenses',
-                event.currentTarget.checked
-                  ? values.disabledLenses.filter((one) => one !== lens)
-                  : [...values.disabledLenses, lens],
-              )
-            }
-          />
-          {lens}
-        </label>
-      ))}
-    </div>
-  ) : (
-    <p className="tr-setting-value tr-muted">The recipe names no lens.</p>
+  const running = settings.lensSet?.lenses.filter((lens) => lens.runs).length
+  const all = settings.lensSet?.lenses.length
+  const lensesControl = (
+    <>
+      {settings.recipeProblem && (
+        <p className="tr-setting-value tr-error">
+          The recipe cannot be read: {settings.recipeProblem}
+        </p>
+      )}
+      <a className="tr-btn tr-btn--small" href="#settings/lenses">
+        Manage the lenses
+      </a>
+      <span className="tr-setting-default">
+        {running === undefined
+          ? `${lenses.length} in the recipe`
+          : `${running} of ${all ?? running} run on this project`}
+      </span>
+    </>
   )
 
   return (
@@ -534,26 +379,17 @@ export function SettingsView({
       </section>
       <section className="tr-section" aria-labelledby="tr-settings-review">
         <h3 id="tr-settings-review">Review</h3>
-        <RecipeInForce settings={settings} />
         {text('recipe', PLUGIN_RECIPE)}
-        {row('disabledLenses', lensesControl)}
+        <div className="tr-setting">
+          <div>
+            <div className="tr-setting-label" id="tr-setting-lenses">
+              Lenses
+            </div>
+            <p className="tr-setting-help">{HELP.disabledLenses}</p>
+          </div>
+          <div className="tr-setting-control">{lensesControl}</div>
+        </div>
       </section>
-      {(settings.imports ?? []).length > 0 && (
-        <section className="tr-section" aria-labelledby="tr-settings-imports">
-          <h3 id="tr-settings-imports">
-            Imported recipes <Preview />
-          </h3>
-          <p className="tr-muted">
-            /tranchant import wrote these from a review process; none is used until you
-            say so.
-          </p>
-          <ul className="tr-recipe-lenses">
-            {(settings.imports ?? []).map((one) => (
-              <Imported key={one.id} one={one} frozen={offline} onUse={onUseRecipe} />
-            ))}
-          </ul>
-        </section>
-      )}
       <section className="tr-section" aria-labelledby="tr-settings-posting">
         <h3 id="tr-settings-posting">Posting</h3>
         {segment('postWith')}

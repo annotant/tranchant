@@ -30,14 +30,15 @@ pattern, read how annotant does it.
   page opens first, and shows that step). A question asked in a finding's
   discussion starts one
   read-only agent among those (`tranchant:ds-<id>-<review>`), which answers
-  with `reply.mjs`. `/tranchant import` starts one import agent
-  (`tranchant:im-<import>`), which `hook.mjs --importer` lets write its
-  recipe file alone.
+  with `reply.mjs`. A lens the user adds (`/tranchant import`, the page's
+  Add a lens, a review whose added lens's source changed) is cleaned by one
+  agent (`tranchant:cl-<cleaning>`), which `hook.mjs --cleaner` lets write
+  its lens and its report alone; the review waits for it.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
-  `agents/discuss.md`, the discussing agent's; `agents/import.md`, the
-  import agent's;
+  `agents/discuss.md`, the discussing agent's; `agents/clean.md`, the
+  cleaning agent's;
   `agents/review/`, the default recipe of `/tranchant review`, its lenses'
   prompts (each a reviewer's whole instructions), `contract.md` (what wraps
   a lens built from a team's source), the summary agent's and
@@ -52,13 +53,16 @@ pattern, read how annotant does it.
   owns the user's settings file (`~/.config/tranchant/settings.json`), which
   the hooks read on their own by the same rules; `lib/lens.mjs` finds the
   recipe in force and builds its lenses from their sources;
-  `lib/imports.mjs` owns the imports of `/tranchant import`.
+  `lib/userlens.mjs` owns the lenses the user adds (global and local, in
+  `~/.config/tranchant/`) and the set they make with the recipe's;
+  `lib/cleaning.mjs` owns their cleanings.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.
 - `docs/review-file.md`: the review, decisions and run files, their schemas
   and the findings' states. `docs/settings.md`: the settings file, its
-  schema, its precedence and its routes.
+  schema, its precedence and its routes. `docs/studies/`: the decisions a
+  study issue ended on, and the pieces left to build.
 - `test/`: `node:test` suites for the scripts and the server;
   `hooks.test.ts` for `claude plugin test`.
 

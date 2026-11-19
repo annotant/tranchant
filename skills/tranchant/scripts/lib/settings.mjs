@@ -36,6 +36,7 @@ const MAX_AGENTS = 8
  * @property {number} [maxReviewAgents] Review agents (reviewers, verifiers, discussers) at a time.
  * @property {string} [recipe] The recipe `/tranchant review` runs without `--recipe`: an absolute path, or `~/…`.
  * @property {string[]} [disabledLenses] The lenses of the recipe not run.
+ * @property {Record<string, string>} [lensModels] By lens of the recipe, its reviewer's model.
  * @property {'auto' | 'glab' | 'gh'} [postWith] The CLI that opens issues: `auto` reads the remote.
  */
 
@@ -52,6 +53,7 @@ const MAX_AGENTS = 8
  * @property {number} maxReviewAgents
  * @property {string | null} recipe
  * @property {string[]} disabledLenses
+ * @property {Record<string, string>} lensModels
  * @property {'auto' | 'glab' | 'gh'} postWith
  */
 
@@ -67,6 +69,7 @@ export const DEFAULTS = Object.freeze({
   maxReviewAgents: 3,
   recipe: null,
   disabledLenses: [],
+  lensModels: {},
   postWith: 'auto',
 })
 
@@ -154,6 +157,20 @@ export function validateSettings(input) {
           `disabledLenses: up to ${MAX_LENSES} lens names, letters, digits, - and _`,
         )
       settings.disabledLenses = [...new Set(value)]
+    } else if (key === 'lensModels') {
+      if (
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        Object.keys(value).length > MAX_LENSES ||
+        !Object.entries(value).every(
+          ([lens, model]) =>
+            LENS_NAME.test(lens) && typeof model === 'string' && MODEL.test(model),
+        )
+      )
+        throw new SettingsRefusal(
+          `lensModels: up to ${MAX_LENSES} lens names, each with a model id`,
+        )
+      if (Object.keys(value).length) settings.lensModels = { ...value }
     } else throw new SettingsRefusal(`${key}: not a setting`)
   }
   return settings
@@ -226,7 +243,7 @@ export async function writeSettings(input, file = SETTINGS_FILE) {
 export function effectiveSettings(settings, env = process.env) {
   /** @type {Values} */
   // The list copied: DEFAULTS is frozen one level deep only.
-  const values = { ...DEFAULTS, disabledLenses: [], ...settings }
+  const values = { ...DEFAULTS, disabledLenses: [], lensModels: {}, ...settings }
   /** @type {Partial<Record<keyof Values, string>>} */
   const locked = {}
   const model = env.TRANCHANT_MODEL?.trim()

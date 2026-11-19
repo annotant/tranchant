@@ -8,7 +8,7 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   branch's own), drops or skips
   it, one at a time or in batches; "/tranchant review [<branch> | <mr url>]"
   reviews a change in the background and streams the findings to the page;
-  "/tranchant import [<source>]" turns a team's review process into a recipe;
+  "/tranchant import [<source>]" cleans a team's reviewer into a lens;
   "/tranchant comments [<pr/mr url>]" brings the unresolved review threads
   of the user's own PR/MR to the page, one finding each;
   "/tranchant status" says what runs, "/tranchant stop" ends the server and
@@ -38,8 +38,8 @@ Everything lives in the skill and in the state folder
 (`~/.cache/tranchant/<project>/reviews/<id>/`): nothing is installed in the
 reviewed repository. The user's settings (models, agents at a time, recipe,
 lenses, posting CLI, display) are the page's **Settings** (the gear), kept in
-`~/.config/tranchant/settings.json`: point the user there rather than editing
-the file.
+`~/.config/tranchant/settings.json`, and the lenses they add are its
+**Settings › Lenses**: point the user there rather than editing the files.
 
 ## Open
 
@@ -54,8 +54,9 @@ findings land and are verified. Never review the change yourself then. For
 `comments`, with `{ "comments": true }`, plus `"target"` (the url) when
 given: the PR/MR's unresolved threads open as findings; never read or answer
 them yourself. For `import`, with `{ "import": "<source>" }` (`""` when none
-was named), plus `"to"` (`project` or `local`) once the user chose it with
-AskUserQuestion; the user names or confirms the source, never you. Pass
+was named), plus `"to"` (`local`, this project, or `global`) once the user
+chose it with AskUserQuestion, and `"name"` or `"context"` when given; the
+user names or confirms the source, never you. Pass
 `recipe` only when the user named the file: a recipe's lenses instruct the
 reviewers. The plugin's hooks read the page's decisions and start
 one background agent per fix, or per question asked in a finding's

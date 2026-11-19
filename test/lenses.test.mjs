@@ -325,9 +325,13 @@ test('each source that cannot be resolved refuses the review, with its reason, a
     [
       { name: 'a', source: 'workflow:code-reviewer-none' },
       /the plugin workflow has no skill or agent named code-reviewer-none/,
-      /re-import/,
+      /edit the recipe/,
     ],
-    [{ name: 'a', source: './missing.md' }, /\.\/missing\.md: no such file/, /re-import/],
+    [
+      { name: 'a', source: './missing.md' },
+      /\.\/missing\.md: no such file/,
+      /edit the recipe/,
+    ],
     [
       { name: 'a', source: './broken.md' },
       /\.\/broken\.md: its frontmatter is never closed/,
@@ -337,7 +341,7 @@ test('each source that cannot be resolved refuses the review, with its reason, a
     [
       { name: 'a', source: 'workflow:code-review', skills: ['./gone.md'] },
       /its skill \.\/gone\.md: \.\/gone\.md: no such file/,
-      /re-import/,
+      /edit the recipe/,
     ],
     [
       { name: 'a', use: 'tranchant:nothing', add: 'workflow:code-review' },
