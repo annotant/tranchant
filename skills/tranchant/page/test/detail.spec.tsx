@@ -219,30 +219,30 @@ test('a fixed finding offers no Fix nor Drop, and shows the run summary and chan
   expect(button('Drop')).toBeNull()
 })
 
-test('posted shows the discussion link; failed and dropped their reason', () => {
-  render(
-    <FindingDetail
-      review={review('theirs')}
-      finding={bug}
-      record={record('posted', {
-        posted: {
-          discussionId: 'd1',
-          url: 'https://gitlab.example/mr/1#note_1',
-          at: 'now',
-        },
-      })}
-      steps={[]}
-      disabled={false}
-      onDecide={vi.fn()}
-      onAnswer={vi.fn()}
-      onStop={vi.fn()}
-      onDiscuss={vi.fn()}
-    />,
-  )
+test('posted shows the discussion link, still once fixed after; failed and dropped their reason', () => {
+  const posted = {
+    discussionId: 'd1',
+    url: 'https://gitlab.example/mr/1#note_1',
+    at: 'now',
+  }
+  const { onDecide } = renderDetail({
+    ownership: 'theirs',
+    state: 'posted',
+    fields: { posted },
+  })
   expect(
     screen.getByRole('link', { name: 'https://gitlab.example/mr/1#note_1' }),
   ).toBeDefined()
   expect(button(/post/i)).toBeNull()
+  // A comment posted rules out no fix.
+  fireEvent.click(button('Fix now')!)
+  expect(onDecide).toHaveBeenCalledWith([{ id: bug.id, action: 'fix' }])
+  cleanup()
+
+  renderDetail({ ownership: 'theirs', state: 'fixed', fields: { posted } })
+  expect(
+    screen.getByRole('link', { name: 'https://gitlab.example/mr/1#note_1' }),
+  ).toBeDefined()
   cleanup()
 
   renderDetail({ state: 'failed', fields: { reason: 'glab: line not in diff' } })
@@ -940,16 +940,21 @@ test("on a thread, the agent's comment is a reply, opened in the editor; a repli
     fields: { posted: { discussionId: 'PRRT_1', url: 'https://x.example/r', at: '' } },
     discussion,
   })
-  // Replied on, the thread lives on: the composer is open, Fix is not offered any more.
+  // Replied on, the thread lives on: the composer is open, and a reply rules out no fix.
   expect(
     within(thread()!).getByRole('textbox', { name: /message to the agent/i }),
   ).toBeDefined()
-  expect(button('Fix with this')).toBeNull()
+  expect(button('Fix now')).not.toBeNull()
   expect(button('Post this')).toBeNull()
   fireEvent.click(button('Reply with this')!)
   const editor = screen.getByLabelText<HTMLTextAreaElement>('Reply on the thread')
   expect(editor.value).toBe('You are right, fixing it.')
   expect(onDecide).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(button('Fix with this')!)
+  expect(onDecide).toHaveBeenCalledWith([
+    { id: THREADED.id, action: 'fix', context: 'Show the reason.' },
+  ])
 })
 
 test("on a thread, the agent's reply is taken once: a note after it is sent, offered again by a later answer", () => {

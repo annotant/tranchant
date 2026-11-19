@@ -1,6 +1,6 @@
 {
   "name": "tranchant",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Settle a code review from a page: fix each finding on your branch with a background agent, or post it on someone else's merge request",
   "author": {
     "name": "Kevin Manson",
