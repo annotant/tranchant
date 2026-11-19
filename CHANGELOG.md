@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-19
+
 ### Added
 
 - **Lenses, one by one.** Settings › Lenses lists every lens that could
