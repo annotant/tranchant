@@ -291,6 +291,18 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-lns-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
 .tr-lns-source { overflow: hidden; color: var(--tr-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .tr-lns-facts { color: var(--tr-muted); font-size: 12px; }
+.tr-lns-origin { font-size: 11px; font-weight: 600; color: var(--tr-muted); padding: 1px 7px; border-radius: 4px; background: var(--tr-bg-3); white-space: nowrap; }
+.tr-lns-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--tr-border); border-radius: 8px; background: var(--tr-bg-2); }
+.tr-lns-filter-search { display: inline-flex; align-items: center; color: var(--tr-muted); }
+.tr-lns-filter .tr-input { flex: 0 1 240px; min-width: 0; width: 240px; }
+.tr-lns-filter .tr-select { flex: 0 1 230px; width: 230px; }
+.tr-lns-filter-count { margin-left: auto; display: inline-flex; align-items: baseline; gap: 10px; font-size: 12.5px; color: var(--tr-muted); white-space: nowrap; }
+.tr-lns-filter-count .tr-btn--link, .tr-lns-empty .tr-btn--link { font-size: inherit; }
+.tr-lns-group-count { font-size: 12px; color: var(--tr-muted); }
+@media (max-width: 720px) {
+  .tr-lns-filter .tr-input, .tr-lns-filter .tr-select { flex: 1 1 100%; width: 100%; }
+  .tr-lns-filter-count { margin-left: 0; }
+}
 .tr-lns-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tr-muted); }
 .tr-lns-state .tr-spinner { width: 9px; height: 9px; border-width: 1.5px; }
 .tr-lns-state--accent { color: var(--tr-accent); font-weight: 600; }

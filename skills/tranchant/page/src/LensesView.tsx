@@ -101,6 +101,75 @@ function ManyLenses({ count, adding }: { count: number; adding?: boolean }) {
   )
 }
 
+/** Where a lens comes from: the recipe's, or one added from an agent, a skill or a command, or from another file. */
+type Origin = 'built-in' | NonNullable<LensEntry['origin']>
+
+const ORIGINS: { value: Origin | undefined; label: string; help: string }[] = [
+  { value: undefined, label: 'All', help: 'Every lens' },
+  { value: 'built-in', label: 'Built-in', help: "The recipe's lenses" },
+  {
+    value: 'picked',
+    label: 'Picked up',
+    help: "Added from an existing agent, skill or command: a plugin's, or a file in an agents or commands folder, or a skill's",
+  },
+  {
+    value: 'custom',
+    label: 'Custom',
+    help: 'Added from any other file: a checklist written for Tranchant',
+  },
+]
+
+/** Undefined for an added lens that cannot be read. */
+const originOf = (lens: LensEntry): Origin | undefined =>
+  lens.scope === 'recipe' ? 'built-in' : lens.origin
+
+/** What a lens's row says of where it comes from. */
+function originText(lens: LensEntry) {
+  switch (originOf(lens)) {
+    case 'built-in':
+      return 'built-in'
+    case 'picked':
+      return lens.sourceKind ? `picked up · ${lens.sourceKind}` : 'picked up'
+    case 'custom':
+      return 'custom · checklist'
+    default:
+      return undefined
+  }
+}
+
+interface Filter {
+  name: string
+  origin: Origin | undefined
+  kind: string
+}
+
+const NO_FILTER: Filter = { name: '', origin: undefined, kind: '' }
+
+const isFiltering = (filter: Filter) =>
+  Boolean(filter.name.trim() || filter.origin || filter.kind)
+
+function matches(lens: LensEntry, filter: Filter) {
+  const name = filter.name.trim().toLowerCase()
+  return (
+    (!name || lens.name.toLowerCase().includes(name)) &&
+    (!filter.origin || originOf(lens) === filter.origin) &&
+    // A lens that declares no topic files its findings under any.
+    (!filter.kind || !lens.topics?.length || lens.topics.includes(filter.kind))
+  )
+}
+
+/** The filters set, in a line: name "co" · built-in · Bugs. */
+function filterWords(filter: Filter) {
+  return [
+    filter.name.trim() && `name “${filter.name.trim()}”`,
+    filter.origin &&
+      ORIGINS.find((one) => one.value === filter.origin)?.label.toLowerCase(),
+    filter.kind,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 /** What a lens's row says of it, in one line: where it runs, its topics, its model. */
 function facts(lens: LensEntry) {
   const on = lens.otherwise
@@ -145,6 +214,7 @@ export function LensesView({
   const [open, setOpen] = useState(focus)
   // The lens the link names, followed when it is renamed or moved: else it reads as one removed.
   const [pointed, setPointed] = useState(focus)
+  const [filter, setFilter] = useState<Filter>(NO_FILTER)
   const listed = settings?.lensSet !== undefined
   // Once the lenses are listed: on a page opened at the link, they load after the mount.
   useEffect(() => {
@@ -176,6 +246,12 @@ export function LensesView({
       .map((one) => `${one.scope}:${one.name}`),
   )
   const runs = lensSet.lenses.filter((lens) => lens.runs).length
+  const filtering = isFiltering(filter)
+  const matched = lensSet.lenses.filter((lens) => matches(lens, filter))
+  // The lens being edited stays shown, never counted: hidden, its editor would drop what is typed.
+  const shown = lensSet.lenses.filter(
+    (lens) => matched.includes(lens) || `${lens.scope}:${lens.name}` === open,
+  )
   const groups: { scope: LensScope; title: string; where: string; empty?: string }[] = [
     {
       scope: 'local',
@@ -309,14 +385,40 @@ export function LensesView({
             onLens={onLens}
           />
         )}
+        <LensFilter
+          filter={filter}
+          shown={matched.length}
+          total={lensSet.lenses.length}
+          onChange={setFilter}
+        />
+        {filtering && !matched.length && (
+          <p className="tr-lns-empty">
+            No lens matches {filterWords(filter)}.{' '}
+            <button
+              type="button"
+              className="tr-btn tr-btn--link"
+              onClick={() => setFilter(NO_FILTER)}
+            >
+              Clear the filters
+            </button>
+          </p>
+        )}
         {groups.map((group) => {
-          const lenses = lensSet.lenses.filter((lens) => lens.scope === group.scope)
-          if (!lenses.length && !group.empty) return null
+          const all = lensSet.lenses.filter((lens) => lens.scope === group.scope)
+          const lenses = shown.filter((lens) => lens.scope === group.scope)
+          // While filtering, a group with no match hides, even one that says it is empty.
+          if (filtering ? !lenses.length : !lenses.length && !group.empty) return null
           return (
             <div className="tr-lns-group" key={group.scope}>
               <div className="tr-lns-group-head">
                 <strong id={`tr-lns-${group.scope}`}>{group.title}</strong>
                 <code className="tr-muted">{group.where}</code>
+                {filtering && (
+                  <span className="tr-lns-group-count">
+                    {matched.filter((lens) => lens.scope === group.scope).length} of{' '}
+                    {all.length}
+                  </span>
+                )}
               </div>
               {lenses.length ? (
                 <ul className="tr-lns-list" aria-labelledby={`tr-lns-${group.scope}`}>
@@ -364,6 +466,97 @@ export function LensesView({
         })}
       </section>
     </main>
+  )
+}
+
+/** The filter above the groups: a name, an origin, a finding kind; they combine. */
+function LensFilter({
+  filter,
+  shown,
+  total,
+  onChange,
+}: {
+  filter: Filter
+  shown: number
+  total: number
+  onChange: (filter: Filter) => void
+}) {
+  const filtering = isFiltering(filter)
+  return (
+    <div className="tr-lns-filter" role="search" aria-label="Filter the lenses">
+      <span className="tr-lns-filter-search" aria-hidden="true">
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="M20 20l-4.2-4.2" />
+        </svg>
+      </span>
+      <label className="tr-sr" htmlFor="tr-lns-filter-name">
+        Filter by name
+      </label>
+      <input
+        id="tr-lns-filter-name"
+        className="tr-input tr-text"
+        type="search"
+        value={filter.name}
+        placeholder="Filter by name"
+        onChange={(event) => onChange({ ...filter, name: event.currentTarget.value })}
+      />
+      <div className="tr-segment" role="group" aria-label="Origin">
+        {ORIGINS.map((one) => (
+          <button
+            key={one.label}
+            type="button"
+            className={`tr-btn tr-btn--small ${filter.origin === one.value ? 'tr-btn--primary' : ''}`}
+            aria-pressed={filter.origin === one.value}
+            title={one.help}
+            onClick={() => onChange({ ...filter, origin: one.value })}
+          >
+            {one.label}
+          </button>
+        ))}
+      </div>
+      <label className="tr-sr" htmlFor="tr-lns-filter-kind">
+        Finding kind
+      </label>
+      <select
+        id="tr-lns-filter-kind"
+        className="tr-input tr-select"
+        value={filter.kind}
+        onChange={(event) => onChange({ ...filter, kind: event.currentTarget.value })}
+      >
+        <option value="">Any finding kind</option>
+        {TOPICS.map((topic) => (
+          <option key={topic} value={topic}>
+            {topic}
+          </option>
+        ))}
+      </select>
+      <span className="tr-lns-filter-count">
+        <span aria-live="polite" className="tr-lns-filter-total">
+          {filtering
+            ? `${shown} of ${plural(total, 'lens', 'lenses')}`
+            : plural(total, 'lens', 'lenses')}
+        </span>
+        {filtering && (
+          <button
+            type="button"
+            className="tr-btn tr-btn--link"
+            onClick={() => onChange(NO_FILTER)}
+          >
+            Clear the filters
+          </button>
+        )}
+      </span>
+    </div>
   )
 }
 
@@ -1206,6 +1399,7 @@ function LensRow({
             {lens.source}
             {lens.version && ` ${lens.version}`}
           </code>
+          {originText(lens) && <span className="tr-lns-origin">{originText(lens)}</span>}
           {lens.replaces && lens.runs && (
             <span className="tr-chip">replaces the {builtIn ? 'next' : 'built-in'}</span>
           )}

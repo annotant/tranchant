@@ -9,6 +9,17 @@ released to the `stable` branch.
 
 ### Added
 
+- **Filter the lenses.** Settings › Lenses has a filter above the groups: a
+  name (as typed, any case), the origin (**All**, **Built-in**, **Picked
+  up**, **Custom**) and the finding kind; they combine, each group counts
+  its matches (*2 of 5*) and hides with none, a count says how many lenses
+  match, and **Clear the filters** sets them back; no match says which
+  filters are set. Each row names its origin: *built-in*, *picked up ·
+  agent* (or skill, or command: a plugin's, or a file in an `agents` or
+  `commands` folder, or a skill's), *custom · checklist*. The lens whose
+  editor is open stays shown while filtering. The plugin's lenses now
+  declare the topics their prompts file under.
+
 - **Pick a lens's source.** In Settings › Lenses, **Add a lens** has
   **Browse…** beside Source: a picker under the field, with a search box
   and four tabs, the three lists counting their matches. **Plugins** lists each installed

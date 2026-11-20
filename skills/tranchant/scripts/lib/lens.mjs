@@ -783,6 +783,7 @@ export async function buildLens(lens, where) {
   return {
     text,
     hash,
+    file: main.file,
     record: {
       name: lens.name,
       source,

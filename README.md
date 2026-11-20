@@ -127,7 +127,9 @@ global one of the same name, which wins over the recipe's. Each
 cleans the changed ones first, keeping the rules the user edited, unless the
 change under review is what changed it; a cleaning that fails runs the
 lens's last version and says so. `/tranchant import` does the same
-from the terminal. See [the settings file](docs/settings.md#the-lenses-you-add).
+from the terminal. Settings › Lenses names where each lens comes from
+(built-in, picked up from an agent, a skill or a command, or custom from a
+checklist) and filters them by name, origin and finding kind. See [the settings file](docs/settings.md#the-lenses-you-add).
 
 ## Install
 
