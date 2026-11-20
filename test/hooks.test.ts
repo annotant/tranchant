@@ -243,6 +243,11 @@ function world(
       if (mode === '--find') return ok('CANDIDATE .claude/skills/team-review\n')
       if (mode === '--check') return ok(cleaned)
       if (mode === '--drop') return ok('CLEAN_FAILED the cleaning agent was stopped\n')
+      if (mode === '--prepare' && e.argv[5] === '.claude/agents/money-review.md')
+        return ok(
+          "CLEAN_REFUSED a lens named money-review is this project's already: edit it, or choose another name\n",
+          2,
+        )
       // Each cleaning the page made is its own: its folder from its id.
       const started = (id: string) => ({
         ...CLEAN_MADE,
@@ -1402,6 +1407,19 @@ test('import asks for the source and the scope first, then starts one cleaning a
   expect((await $.command.run(command('import a b'))).text).toMatch(
     /^Usage: \/tranchant import/,
   )
+  // Named after its source, and that name taken: --name is offered, the context kept.
+  expect(
+    (
+      await $.command.run(
+        command(
+          'import .claude/agents/money-review.md --to local --context workflow:abac-rules',
+        ),
+      )
+    ).text.split('\n'),
+  ).toEqual([
+    "Tranchant cannot import .claude/agents/money-review.md: a lens named money-review is this project's already: edit it, or choose another name",
+    'Give it another name: /tranchant import .claude/agents/money-review.md --to local --name <lens> --context workflow:abac-rules.',
+  ])
 })
 
 test("the page's Add a lens starts its cleaning agent: the server's CLEAN line", async ($, on) => {

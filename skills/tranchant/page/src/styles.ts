@@ -344,6 +344,7 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-field-label { padding-top: 6px; font-weight: 600; font-size: 13px; }
 .tr-field-body { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
 .tr-field-help { color: var(--tr-muted); font-size: 12.5px; max-width: 70ch; }
+.tr-field-help.tr-field-error { color: var(--tr-danger); }
 .tr-field-body code { overflow-wrap: anywhere; }
 .tr-settings .tr-textarea { width: 100%; max-width: 640px; height: auto; padding: 8px 10px; font: inherit; font-size: 13px; line-height: 1.45; resize: vertical; }
 .tr-settings .tr-select { min-width: 240px; }

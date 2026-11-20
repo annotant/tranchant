@@ -459,7 +459,7 @@ test('What the reviewer reads shows what the cleaning removed and added, and the
 
 test('Add a lens sends its source, name, scope and context skill to be cleaned', async () => {
   // A single reviewer: nothing inside it to list.
-  const fetch = stubMatches({ inside: null })
+  const fetch = stubMatches({ inside: null, name: 'code-reviewer-api' })
   try {
     const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
@@ -473,9 +473,9 @@ test('Add a lens sends its source, name, scope and context skill to be cleaned',
     )
     const add = within(form).getByRole('button', { name: 'Import and clean' })
     expect(add).toHaveProperty('disabled', true)
-    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'bugs' } })
+    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'docs' } })
     expect(
-      within(form).getByText('Replaces the built-in bugs where it lives.'),
+      within(form).getByText('Replaces the built-in docs where it lives.'),
     ).toBeDefined()
     fireEvent.click(within(form).getByRole('button', { name: 'Global' }))
     fireEvent.change(within(form).getByLabelText('Context skill'), {
@@ -490,12 +490,63 @@ test('Add a lens sends its source, name, scope and context skill to be cleaned',
     expect(onLens).toHaveBeenCalledWith('import', {
       source: 'workflow:code-reviewer-api',
       scope: 'global',
-      name: 'bugs',
+      name: 'docs',
       context: 'workflow:api-rules',
     })
     await waitFor(() =>
       expect(screen.queryByRole('form', { name: 'Add a lens' })).toBeNull(),
     )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('Add a lens names it after its source before the cleaning; a name taken in that scope says so and waits for another', async () => {
+  stubMatches({ inside: null, name: 'abac' })
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/agents/abac.md' },
+    })
+    const name = form.getByLabelText('Name')
+    await waitFor(() => expect(name).toHaveProperty('value', 'abac'))
+    expect(name.getAttribute('aria-invalid')).toBe('true')
+    expect(form.getByRole('alert').textContent).toBe(
+      "This project's abac is another lens, from workflow:code-reviewer-abac: give this one another name.",
+    )
+    const add = form.getByRole('button', { name: 'Import and clean' })
+    expect(add).toHaveProperty('disabled', true)
+    // Global, the name is free: the source's name goes as it is.
+    fireEvent.click(form.getByRole('button', { name: 'Global' }))
+    expect(form.queryByRole('alert')).toBeNull()
+    expect(add).toHaveProperty('disabled', false)
+    fireEvent.click(form.getByRole('button', { name: 'This project' }))
+    // Emptied, the name is the source's again: still taken.
+    fireEvent.change(name, { target: { value: '' } })
+    expect(name.getAttribute('placeholder')).toBe('abac')
+    expect(form.getByRole('alert')).toBeDefined()
+    expect(add).toHaveProperty('disabled', true)
+    // A lens is a folder: another case is the same name.
+    fireEvent.change(name, { target: { value: 'Abac' } })
+    expect(form.getByRole('alert').textContent).toMatch(
+      /^This project's abac is another lens/,
+    )
+    fireEvent.change(name, { target: { value: 'my lens' } })
+    expect(form.getByRole('alert').textContent).toBe(
+      'A lens name is letters, digits, - and _ only, 40 at most: change this one.',
+    )
+    expect(add).toHaveProperty('disabled', true)
+    fireEvent.change(name, { target: { value: 'abac-files' } })
+    expect(form.queryByRole('alert')).toBeNull()
+    expect(form.getByText('Yours; empty, it is abac, from its source.')).toBeDefined()
+    fireEvent.click(add)
+    expect(onLens).toHaveBeenCalledWith('import', {
+      source: '.claude/agents/abac.md',
+      scope: 'local',
+      name: 'abac-files',
+    })
   } finally {
     vi.unstubAllGlobals()
   }
@@ -1197,7 +1248,7 @@ function stubPicker() {
       })
     if (url.startsWith('/api/lens/folder'))
       return answer(200, { root: 'project', path: '', label: './', entries: [] })
-    return answer(200, { inside: null })
+    return answer(200, { inside: null, name: 'code-reviewer-api' })
   })
   vi.stubGlobal('fetch', fetch)
   return fetch
@@ -1227,9 +1278,12 @@ test("Browse lists the plugins' agents: one picked fills Source, which stays edi
     const add = form.getByRole('button', { name: 'Import and clean' })
     await waitFor(() => expect(add).toHaveProperty('disabled', false))
     fireEvent.click(add)
+    // Only the source was given: the lens takes the skill's name, without the plugin.
+    expect(form.getByLabelText('Name')).toHaveProperty('value', 'code-reviewer-api')
     expect(onLens).toHaveBeenCalledWith('import', {
       source: 'workflow:code-reviewer-api',
       scope: 'local',
+      name: 'code-reviewer-api',
     })
   } finally {
     vi.unstubAllGlobals()

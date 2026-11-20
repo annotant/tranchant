@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { insideOf, insideRefusal } from './inside.mjs'
+import { insideOf, insideRefusal, nameOfSource } from './inside.mjs'
 import { LensRefusal, buildLens } from './lens.mjs'
 import { STATE_ROOT, hashOf } from './project.mjs'
 import {
@@ -186,7 +186,7 @@ export async function createCleaning({
     throw new CleaningRefusal('a source is required, on one line: plugin:name, or a path')
   if (context?.trim() && !isSourceText(context))
     throw new CleaningRefusal('the context skill is one line: plugin:skill, or a path')
-  const lensName = name?.trim() || nameOf(source)
+  const lensName = name?.trim() || nameOfSource(source, project)
   let target
   try {
     target = lensDir(scope, project, lensName)
@@ -195,6 +195,7 @@ export async function createCleaning({
     throw error
   }
   if (existsSync(target))
+    // hooks/register.ts reads this wording to point /tranchant import at --name.
     throw new CleaningRefusal(
       `a lens named ${lensName} is ${scope === 'global' ? 'global' : "this project's"} already: edit it, or choose another name`,
     )
@@ -315,24 +316,6 @@ export async function cleanAgain({ project, scope, name, queued }) {
   })
   if (lens.rulesEdited) await writeText(path.join(made.dir, 'rules.md'), lens.rules)
   return made
-}
-
-/** A name for a lens from its source: its last segment, as a lens name. */
-function nameOf(/** @type {string} */ source) {
-  const last =
-    source
-      .trim()
-      .replace(/\/SKILL\.md$/i, '')
-      .replace(/\.md$/i, '')
-      .split(/[:/]/)
-      .findLast(Boolean) ?? 'lens'
-  return (
-    last
-      .replace(/[^\w-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .replace(/^(?:code-)?review(?:er)?-|-review(?:er)?$/g, '')
-      .slice(0, 40) || 'lens'
-  )
 }
 
 /**

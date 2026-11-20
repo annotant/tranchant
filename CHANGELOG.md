@@ -9,6 +9,15 @@ released to the `stable` branch.
 
 ### Added
 
+- **Only a lens's source is required.** Its name comes from the source: a
+  file's name without its extension (a skill's folder's whole), a
+  `plugin:name`'s name without the plugin; `money-review.md` is no longer
+  shortened to `money`, nor `workflow:code-reviewer-abac` to `abac`. In
+  **Add a lens**, Name shows that name once the source is read, to change,
+  and says before the cleaning starts when it is no lens name or is taken
+  where it would live; `/tranchant import` refused for a taken name gives
+  the command again with `--name`.
+
 - **Filter the lenses.** Settings › Lenses has a filter above the groups: a
   name (as typed, any case), the origin (**All**, **Built-in**, **Picked
   up**, **Custom**) and the finding kind; they combine, each group counts

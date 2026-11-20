@@ -189,12 +189,43 @@ test('clean.mjs refuses a lens in the repository, a source that is not there, an
   const made = cleaningOf(
     await clean(dir, ['--prepare', '.claude/agents/money-review.md', '--to', 'local']),
   )
-  assert.equal(made.name, 'money')
+  assert.equal(made.name, 'money-review')
   assert.equal(made.scope, 'local')
   assert.equal(made.again, false)
   assert.equal(made.file, path.join(dir, '.claude', 'agents', 'money-review.md'))
   assert.equal(path.dirname(made.lens), made.dir)
   assert.ok(made.dir.startsWith(stateDir))
+})
+
+test('a lens with no name given is named after its file, or its skill or agent without the plugin', async (t) => {
+  const dir = await tempDir(t, 'tranchant-names-')
+  // A skill's folder keeps its dot, given as the folder or as its SKILL.md.
+  await mkdir(path.join(dir, '.claude', 'skills', 'api.v2'), { recursive: true })
+  const sources = [
+    '.claude/agents/money-review.md',
+    '~/checklists/checkout.txt',
+    '.claude/skills/i18n-review/SKILL.md',
+    '.claude/skills/i18n-review/',
+    'workflow:code-reviewer-abac',
+    'team:review.v2',
+    '.claude/skills/api.v2',
+    '.claude/skills/api.v2/SKILL.md',
+  ]
+  // A pure rule: imported here, nothing of the test's folders read at import.
+  const { nameOfSource } = await import(path.join(LIB, 'inside.mjs'))
+  assert.deepEqual(
+    sources.map((one) => nameOfSource(one, dir)),
+    [
+      'money-review',
+      'checkout',
+      'i18n-review',
+      'i18n-review',
+      'code-reviewer-abac',
+      'review-v2',
+      'api-v2',
+      'api-v2',
+    ],
+  )
 })
 
 test("the cleaning agent's hook lets it write its two files only, and read", async (t) => {
@@ -307,13 +338,13 @@ test('an added lens lives outside the repository, local to its project or global
 
   const mine = await prepared(one.dir)
   const names = mine.plan.lenses.map((/** @type {any} */ lens) => lens.name)
-  assert.ok(names.includes('money'), names.join())
+  assert.ok(names.includes('money-review'), names.join())
   assert.ok(names.includes('cents'), names.join())
   assert.ok(names.includes('bugs'), names.join())
   const theirs = await prepared(other.dir)
   const theirNames = theirs.plan.lenses.map((/** @type {any} */ lens) => lens.name)
   assert.ok(theirNames.includes('cents'), theirNames.join())
-  assert.ok(!theirNames.includes('money'), theirNames.join())
+  assert.ok(!theirNames.includes('money-review'), theirNames.join())
 
   // Its build: the contract, the cleaned domain, the rules the user wrote.
   const built = await run(
@@ -326,7 +357,7 @@ test('an added lens lives outside the repository, local to its project or global
   assert.equal(built.code, 0, built.stdout + built.stderr)
   const lensLine = built.stdout
     .split('\n')
-    .find((line) => line.startsWith('LENS ') && line.includes('"money"'))
+    .find((line) => line.startsWith('LENS ') && line.includes('"money-review"'))
   const prompt = await readFile(JSON.parse(lensLine?.slice(5) ?? '{}').prompt, 'utf8')
   assert.match(prompt, /## The lens's domain/)
   assert.match(prompt, /a float on a money path is a finding/)
@@ -364,10 +395,10 @@ console.log(JSON.stringify(set.lenses))`),
     const found = find('local', name)
     return [found.origin, found.sourceKind, Boolean(found.problem)]
   }
-  assert.deepEqual(origin('money'), ['picked', 'agent', false])
+  assert.deepEqual(origin('money-review'), ['picked', 'agent', false])
   assert.deepEqual(origin('checkout'), ['custom', undefined, false])
-  assert.deepEqual(origin('i18n'), ['picked', 'skill', false])
-  assert.deepEqual(origin('code'), ['picked', 'agent', false])
+  assert.deepEqual(origin('i18n-review'), ['picked', 'skill', false])
+  assert.deepEqual(origin('code-reviewer'), ['picked', 'agent', false])
   assert.deepEqual(origin('release'), ['picked', 'skill', false])
   // The recipe's lenses carry no origin of their own, and file under the topics their prompts name.
   assert.equal(find('recipe', 'correctness').origin, undefined)
@@ -386,8 +417,8 @@ console.log(JSON.stringify(set.lenses))`),
     JSON.stringify({ version: 2, plugins: {} }),
   )
   described = await describe()
-  assert.deepEqual(origin('i18n'), ['picked', 'skill', true])
-  assert.deepEqual(origin('code'), ['picked', undefined, true])
+  assert.deepEqual(origin('i18n-review'), ['picked', 'skill', true])
+  assert.deepEqual(origin('code-reviewer'), ['picked', undefined, true])
   assert.deepEqual(origin('checkout'), ['custom', undefined, false])
 })
 
@@ -420,7 +451,7 @@ test('a changed source cleans its lens again, the rules the user edited kept; a 
   const { dir } = await repository(t)
   await addLens(dir, ['.claude/agents/money-review.md', '--to', 'local'])
   await lib(
-    `await userlens.updateUserLens(${JSON.stringify(dir)}, 'local', 'money', { rules: '- Edited by me.' })`,
+    `await userlens.updateUserLens(${JSON.stringify(dir)}, 'local', 'money-review', { rules: '- Edited by me.' })`,
   )
   const lensFile = path.join(
     configDir,
@@ -434,7 +465,7 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
       )
     ).trim(),
     'lenses',
-    'money',
+    'money-review',
   )
   // Unchanged: nothing to clean again.
   const quiet = await prepared(dir)
@@ -456,14 +487,16 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
     [LENSES, '--review', review.dir, '--plan', review.planFile, '--check'],
     { env: env() },
   )
-  assert.match(stale.stdout, /^STALE {"name":"money","scope":"local"}$/m)
+  assert.match(stale.stdout, /^STALE {"name":"money-review","scope":"local"}$/m)
   const step = JSON.parse(await readFile(path.join(review.dir, 'lenses.json'), 'utf8'))
   assert.equal(
-    step.lenses.find((/** @type {any} */ row) => row.name === 'money').cleaning,
+    step.lenses.find((/** @type {any} */ row) => row.name === 'money-review').cleaning,
     'running',
   )
 
-  const again = cleaningOf(await clean(dir, ['--again', 'money', '--scope', 'local']))
+  const again = cleaningOf(
+    await clean(dir, ['--again', 'money-review', '--scope', 'local']),
+  )
   assert.equal(again.again, true)
   assert.equal(await readFile(again.rules, 'utf8'), '- Edited by me.')
   await agentWrites(again, 'Amounts are in cents; rounding half to even.\n', {
@@ -471,7 +504,7 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
   })
   assert.match(
     (await clean(dir, ['--check', again.dir])).stdout,
-    /^CLEANED added local money$/m,
+    /^CLEANED added local money-review$/m,
   )
   const now = JSON.parse(await readFile(path.join(lensFile, 'lens.json'), 'utf8'))
   assert.equal(now.rules, '- Edited by me.')
@@ -489,7 +522,7 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
     await readFile(path.join(review.dir, 'lenses.json'), 'utf8'),
   ).lenses
   assert.equal(
-    rows.find((/** @type {any} */ row) => row.name === 'money').cleaning,
+    rows.find((/** @type {any} */ row) => row.name === 'money-review').cleaning,
     'again',
   )
 
@@ -498,7 +531,9 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
     path.join(dir, '.claude', 'agents', 'money-review.md'),
     'Cents, always.\n',
   )
-  const failing = cleaningOf(await clean(dir, ['--again', 'money', '--scope', 'local']))
+  const failing = cleaningOf(
+    await clean(dir, ['--again', 'money-review', '--scope', 'local']),
+  )
   assert.match((await clean(dir, ['--check', failing.dir])).stdout, /^CLEAN_FAILED /m)
   const next = await prepared(dir)
   const after = await run(
@@ -517,7 +552,7 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
   assert.equal(last.code, 0, last.stdout + last.stderr)
   const row = JSON.parse(
     await readFile(path.join(next.dir, 'lenses.json'), 'utf8'),
-  ).lenses.find((/** @type {any} */ one) => one.name === 'money')
+  ).lenses.find((/** @type {any} */ one) => one.name === 'money-review')
   assert.equal(row.state, 'ready')
   assert.equal(row.cleaning, 'failed')
   assert.match(row.reason, /wrote no report/)
@@ -667,7 +702,7 @@ test('a source the change under review touches is never cleaned from it: its las
   assert.equal(built.code, 0, built.stdout + built.stderr)
   const row = JSON.parse(
     await readFile(path.join(review.dir, 'lenses.json'), 'utf8'),
-  ).lenses.find((/** @type {any} */ one) => one.name === 'money')
+  ).lenses.find((/** @type {any} */ one) => one.name === 'money-review')
   assert.equal(row.cleaning, 'held')
   assert.match(row.reason, /its source changes in this review/)
 })
@@ -676,7 +711,9 @@ test('a cleaning stopped records no failure on its source: the next review clean
   const { dir } = await repository(t)
   await addLens(dir, ['.claude/agents/money-review.md', '--to', 'local'])
   await writeFile(path.join(dir, '.claude', 'agents', 'money-review.md'), 'Cents.\n')
-  const again = cleaningOf(await clean(dir, ['--again', 'money', '--scope', 'local']))
+  const again = cleaningOf(
+    await clean(dir, ['--again', 'money-review', '--scope', 'local']),
+  )
   assert.match(
     (await clean(dir, ['--check', again.dir, '--stopped'])).stdout,
     /^CLEAN_FAILED the cleaning agent was stopped/m,
@@ -687,7 +724,7 @@ test('a cleaning stopped records no failure on its source: the next review clean
     [LENSES, '--review', review.dir, '--plan', review.planFile, '--check'],
     { env: env() },
   )
-  assert.match(checked.stdout, /^STALE {"name":"money","scope":"local"}$/m)
+  assert.match(checked.stdout, /^STALE {"name":"money-review","scope":"local"}$/m)
 })
 
 test("a lens's context skill frames its prompt, and a change to it cleans the lens again", async (t) => {
@@ -707,7 +744,8 @@ test("a lens's context skill frames its prompt, and a change to it cleans the le
       env: env(),
     },
   )
-  const line = built.stdout.split('\n').find((one) => one.includes('"money"')) ?? ''
+  const line =
+    built.stdout.split('\n').find((one) => one.includes('"money-review"')) ?? ''
   const prompt = await readFile(JSON.parse(line.slice('LENS '.length)).prompt, 'utf8')
   assert.match(prompt, /## Context[\s\S]*Money is in cents\.[\s\S]*## The lens's domain/)
   await writeFile(
@@ -720,7 +758,7 @@ test("a lens's context skill frames its prompt, and a change to it cleans the le
     [LENSES, '--review', next.dir, '--plan', next.planFile, '--check'],
     { env: env() },
   )
-  assert.match(checked.stdout, /^STALE {"name":"money","scope":"local"}$/m)
+  assert.match(checked.stdout, /^STALE {"name":"money-review","scope":"local"}$/m)
 })
 
 test('a lens turned off keeps its files from the otherwise lens; one otherwise lens runs, the first; lensModels sets a model', async (t) => {
