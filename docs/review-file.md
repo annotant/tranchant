@@ -795,11 +795,13 @@ adds a team's reviewer (a plugin's skill or agent, a file or a folder) as a
 lens, cleaned first; the page's **Settings › Lenses** does the same with
 **Add a lens**, whose source may be a glob (`.claude/agents/*-review.md`,
 `~/.claude/agents/review-*.md`): the page lists its matches before anything
-runs, each with the lens name its file gives it (to rename), a name taken in
-that scope (to rename or uncheck), the lens of another scope it would
-replace, a file that is a lens already or being added, under any name
-(unchecked; under the same name it blocks), and one that starts other
-agents, flagged *not a reviewer* and unchecked; **Add the N lenses** makes one cleaning per checked match, the
+runs, each with the lens name its file gives it (to rename): a file that is
+a lens already or being added, under any name, says so and cannot be
+checked (the server refuses it too); a different file whose name is
+another lens's in that scope, or another match's, has its name marked, to
+change before anything is added; the lens of another scope it would
+replace is said; one that starts other agents is flagged *not a reviewer*
+and unchecked; **Add the N lenses** makes one cleaning per checked match, the
 same scope for all. The page's cleanings (Add a lens, Clean it again now)
 wait for a free cleaning agent: `maxReviewAgents` clean at a time, the
 others say so; one that fails stops none, and the server announces again

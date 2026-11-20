@@ -18,6 +18,8 @@ type Found =
 /** A match as the form shows it: checked or not, under the name it will get. */
 export interface Row extends LensMatch {
   checked: boolean
+  /** Its file is a lens already, or being added: nothing to add, never checked. */
+  present: boolean
   note?: Note | undefined
 }
 
@@ -25,14 +27,17 @@ interface Note {
   tag: string
   text: string
   tone: 'warn' | 'danger' | 'muted'
-  /** Checked, it keeps the batch from being added: rename it, or uncheck it. */
-  blocks?: boolean
+  /** The name it would get is the problem: checked, the batch waits for another one. */
+  name?: boolean
 }
+
+/** Whether a match's file is a lens already, or being added. */
+const isPresent = (match: LensMatch) => Boolean(match.already?.length)
 
 /**
  * The files `glob` matches, asked once typing settles; and which are
  * checked, under which names. A match that reads as no reviewer starts
- * unchecked; the others checked.
+ * unchecked; one that is a lens already, or being added, is never checked.
  */
 export function useGlobPick(glob: string) {
   const [answer, setAnswer] = useState<{ glob: string; found: Found }>()
@@ -48,9 +53,9 @@ export function useGlobPick(glob: string) {
         try {
           const matches = await fetchLensMatches(glob)
           found = { state: 'done', glob, ...matches }
-          // Added already, or no reviewer: left out unless the person checks it.
+          // No reviewer: left out unless the person checks it.
           unchecked = matches.matches
-            .filter((one) => one.notReviewer || one.already?.length)
+            .filter((one) => one.notReviewer)
             .map((one) => one.source)
         } catch (error) {
           found = {
@@ -81,7 +86,8 @@ export function useGlobPick(glob: string) {
     rows: matches.map((one) => ({
       ...one,
       name: names[one.source] ?? one.name,
-      checked: !off.has(one.source),
+      present: isPresent(one),
+      checked: !isPresent(one) && !off.has(one.source),
     })),
     toggle: (source: string) =>
       setOff((now) => {
@@ -99,27 +105,25 @@ export function useGlobPick(glob: string) {
 const SCOPE_WORD = { local: "This project's", global: 'The global' } as const
 const SCOPE_OF = { local: "this project's", global: 'the global' } as const
 
-/** A match's chip when its file is a lens already, or being added. */
-const tagOf = (one: { adding?: true } | undefined) =>
-  one?.adding ? 'being added' : 'added already'
-
-/** The lenses made from a match's file, in words: `this project's api-review already, and being added as the global api`. */
+/** The lenses made from a match's file, in words: `this project's api-review, and being added as the global api`. */
 const lensesOf = (already: NonNullable<LensMatch['already']>) =>
   already
     .map((one) =>
       one.adding
         ? `being added as ${SCOPE_OF[one.scope]} ${one.name}`
-        : `${SCOPE_OF[one.scope]} ${one.name} already`,
+        : `${SCOPE_OF[one.scope]} ${one.name}`,
     )
     .join(', and ')
 
 /**
- * What a match's row says of it: a name that cannot be, or is taken where
- * it would live, or twice in the batch, blocks it; one that wins over a
- * lens of another scope says which; one that is no reviewer says why.
+ * What a match's row says of it: a file that is a lens already, or being
+ * added, says which; a name that cannot be, or is another lens's where it
+ * would live, or another match's, is a problem of its name, to change; one
+ * that wins over a lens of another scope says which; one that is no
+ * reviewer says why.
  */
 export function noteRows(
-  rows: (LensMatch & { checked: boolean })[],
+  rows: (LensMatch & { checked: boolean; present: boolean })[],
   scope: 'local' | 'global',
   lenses: LensEntry[],
 ): Row[] {
@@ -133,43 +137,35 @@ export function noteRows(
     const local = named.find((lens) => lens.scope === 'local' && lens.on)
     const other = named.find((lens) => lens.scope !== scope && lens.runs)
     const already = row.already ?? []
-    // This very file under this very name, where it would live: adding it again fails.
-    const itself = already.find((one) => one.scope === scope && one.name === name)
+    // Unchecked, a name is no problem yet: it is said, not in red.
+    const tone = row.checked ? 'danger' : 'muted'
     let note: Note | undefined
-    if (!LENS_NAME.test(name))
+    if (already.length)
       note = {
-        tag: 'not a name',
-        tone: 'danger',
-        text: 'A lens name is letters, digits, - and _ only, 40 at most.',
-        blocks: true,
+        tag: already[0]?.adding ? 'being added' : 'added already',
+        tone: 'warn',
+        text: `This file is ${lensesOf(already)}${already.every((one) => one.adding) ? '' : ' already'}: nothing to add.`,
       }
-    else if (itself)
+    else if (!LENS_NAME.test(name))
       note = {
-        tag: tagOf(itself),
-        // Checked, it blocks the batch: as a taken name does.
-        tone: row.checked ? 'danger' : 'warn',
-        text: `This file is ${lensesOf([itself])}: uncheck it, or rename this one to add it twice.`,
-        blocks: true,
+        tag: 'name',
+        tone,
+        text: 'A lens name is letters, digits, - and _ only, 40 at most: change this one.',
+        name: true,
       }
     else if (same)
       note = {
-        tag: 'taken',
-        tone: 'danger',
-        text: `${SCOPE_WORD[scope]} ${name} (from ${same.source}) has this name: rename this one, or uncheck it.`,
-        blocks: true,
+        tag: 'name taken',
+        tone,
+        text: `${SCOPE_WORD[scope]} ${name} is another lens, from ${same.source}: give this one another name.`,
+        name: true,
       }
     else if (twice)
       note = {
-        tag: 'twice',
-        tone: 'danger',
-        text: 'Another match above has this name: rename one.',
-        blocks: true,
-      }
-    else if (already.length)
-      note = {
-        tag: tagOf(already[0]),
-        tone: 'warn',
-        text: `This file is ${lensesOf(already)}: checked, it is added once more.`,
+        tag: 'name taken',
+        tone,
+        text: `A match above is named ${name} too: give this one another name.`,
+        name: true,
       }
     else if (scope === 'global' && local)
       note = {
@@ -262,6 +258,7 @@ export function GlobMatches({
         <ul className="tr-lns-list tr-matches-box" aria-labelledby="tr-lns-add-matches">
           {rows.map((row, index) => {
             const id = `tr-lns-match-${index}`
+            const wrongName = row.checked && row.note?.name === true
             return (
               <li
                 key={row.source}
@@ -272,7 +269,7 @@ export function GlobMatches({
                   className="tr-check"
                   id={id}
                   checked={row.checked}
-                  disabled={frozen}
+                  disabled={frozen || row.present}
                   onChange={() => onToggle(row.source)}
                 />
                 <label htmlFor={id} className="tr-match-path">
@@ -284,15 +281,18 @@ export function GlobMatches({
                     className="tr-input"
                     value={row.name}
                     aria-label={`Lens name for ${row.source}`}
-                    aria-invalid={row.checked && row.note?.blocks ? true : undefined}
+                    aria-invalid={wrongName || undefined}
+                    aria-describedby={row.note ? `${id}-note` : undefined}
                     disabled={frozen || !row.checked}
                     onChange={(event) => onRename(row.source, event.currentTarget.value)}
                   />
                 </span>
                 {row.note && (
-                  <p className="tr-match-note">
+                  <p className="tr-match-note" id={`${id}-note`}>
                     <span className={CHIP[row.note.tone]}>{row.note.tag}</span>
-                    <span className="tr-muted">{row.note.text}</span>
+                    <span className={wrongName ? 'tr-error' : 'tr-muted'}>
+                      {row.note.text}
+                    </span>
                   </p>
                 )}
               </li>

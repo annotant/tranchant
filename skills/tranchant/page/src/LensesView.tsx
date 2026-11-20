@@ -664,7 +664,7 @@ function AddLens({
   const pick = useGlobPick(glob ? source.trim() : '')
   const rows = noteRows(pick.rows, scope, lenses)
   const checked = rows.filter((row) => row.checked)
-  const blocked = checked.some((row) => row.note?.blocks)
+  const blocked = checked.some((row) => row.note?.name)
   const replaces = builtIn.includes(name.trim())
   const runs = lenses.filter((lens) => lens.runs).length
   const after = glob

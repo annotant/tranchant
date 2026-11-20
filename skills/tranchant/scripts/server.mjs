@@ -423,10 +423,27 @@ async function lensChange(res, change) {
   return send(res, 200, { ...done, ...(settings && { settings }) })
 }
 
+/** The lenses added and those being added, by source: what a glob's matches are held against. */
+async function knownLenses() {
+  const { values } = await loadSettings()
+  const [described, cleanings] = await Promise.all([
+    describeLenses({ project: lensRoot, base: review.base, values }),
+    listCleanings(lensRoot).catch(() => []),
+  ])
+  return [
+    ...described.lenses,
+    // A failed one adds nothing: its file is free to add again.
+    ...cleanings
+      .filter((one) => !one.again && one.state !== 'failed')
+      .map((one) => ({ ...one, adding: true })),
+  ]
+}
+
 /**
  * A glob's checked matches (`sources`, each `{ source, name? }`), one
  * cleaning each, queued: a CLEAN line for each one made; those refused said
- * with theirs. All refused is a refusal (409).
+ * with theirs, a file that is a lens already, or being added, among them.
+ * All refused is a refusal (409).
  * @param {http.ServerResponse} res
  * @param {any} input
  * @param {string | undefined} context
@@ -448,14 +465,26 @@ function importSeveral(res, input, context) {
       error: `sources: 1 to ${MAX_MATCHES} of { source, name? }`,
     })
   return lensChange(res, async () => {
+    const present = withAlready(
+      lensRoot,
+      sources.map((one) => ({ ...one, name: one.name ?? '' })),
+      await knownLenses(),
+    )
+    const fresh = sources.filter((_, i) => !present[i]?.already)
     const { made, refused } = await createCleanings({
       project: lensRoot,
       scope: String(input?.scope ?? ''),
-      sources,
+      sources: fresh,
       ...(context && { context }),
       ...(typeof input?.from === 'string' &&
         input.from.trim() && { from: input.from.trim().slice(0, 1024) }),
     })
+    for (const one of present)
+      if (one.already)
+        refused.unshift({
+          source: one.source,
+          reason: `added already, as ${one.already.map((lens) => lens.name).join(', ')}`,
+        })
     if (!made.length)
       throw new CleaningRefusal(
         refused.map((one) => `${one.source}: ${one.reason}`).join('; ') ||
@@ -1251,21 +1280,9 @@ async function handle(req, res) {
       return send(res, 409, { error: error.message })
     }
     if (!matched.matches.length) return send(res, 200, matched)
-    const { values } = await loadSettings()
-    const [described, cleanings] = await Promise.all([
-      describeLenses({ project: lensRoot, base: review.base, values }),
-      listCleanings(lensRoot).catch(() => []),
-    ])
-    const known = [
-      ...described.lenses,
-      // A failed one adds nothing: its file is free to add again.
-      ...cleanings
-        .filter((one) => !one.again && one.state !== 'failed')
-        .map((one) => ({ ...one, adding: true })),
-    ]
     return send(res, 200, {
       ...matched,
-      matches: withAlready(lensRoot, matched.matches, known),
+      matches: withAlready(lensRoot, matched.matches, await knownLenses()),
     })
   }
 

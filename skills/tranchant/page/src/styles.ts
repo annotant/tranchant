@@ -314,6 +314,7 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-match-path { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .tr-match-name { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--tr-muted); }
 .tr-match .tr-match-name .tr-input { min-width: 0; width: 100%; height: 28px; font-size: 13px; }
+.tr-match .tr-match-name .tr-input[aria-invalid="true"] { border-color: var(--tr-danger); box-shadow: 0 0 0 1px var(--tr-danger); }
 .tr-match-note { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; }
 .tr-match--off .tr-match-path, .tr-match--off .tr-match-name { opacity: .55; }
 .tr-field { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 4px 16px; align-items: start; }

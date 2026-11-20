@@ -612,14 +612,20 @@ test('a glob lists its matches: a taken name blocks until renamed, one that is n
     expect(
       list.getByText(/Replaces the global bugs \(from \/me\/agents\/bugs\.md\)/),
     ).toBeDefined()
-    // abac is this project's already: nothing is added until it is renamed.
-    expect(list.getByText('taken')).toBeDefined()
+    // abac names another lens of this project: its name is the problem, to change.
+    expect(list.getByText('name taken')).toBeDefined()
+    expect(
+      list.getByText(
+        "This project's abac is another lens, from workflow:code-reviewer-abac: give this one another name.",
+      ),
+    ).toBeDefined()
+    const abacName = list.getByLabelText('Lens name for .claude/agents/abac-review.md')
+    expect(abacName.getAttribute('aria-invalid')).toBe('true')
     const add = form.getByRole('button', { name: 'Add the 4 lenses' })
     expect(add).toHaveProperty('disabled', true)
-    fireEvent.change(list.getByLabelText('Lens name for .claude/agents/abac-review.md'), {
-      target: { value: 'abac-api' },
-    })
-    expect(list.queryByText('taken')).toBeNull()
+    fireEvent.change(abacName, { target: { value: 'abac-api' } })
+    expect(list.queryByText('name taken')).toBeNull()
+    expect(abacName.getAttribute('aria-invalid')).toBeNull()
     fireEvent.click(list.getByLabelText('.claude/agents/perf-review.md'))
     fireEvent.click(form.getByRole('button', { name: 'Add the 3 lenses' }))
     expect(onLens).toHaveBeenCalledWith('import', {
@@ -770,7 +776,7 @@ test('one lens being added shows its card, no bar', () => {
   expect(screen.getByText('waits for a cleaning agent: 3 at a time')).toBeDefined()
 })
 
-test('a match whose file is a lens already, or being added, starts unchecked; under the same name it blocks', async () => {
+test('a match whose file is a lens already, or being added, says so and cannot be checked, whatever its name', async () => {
   stubMatches({
     matches: [
       {
@@ -787,7 +793,7 @@ test('a match whose file is a lens already, or being added, starts unchecked; un
     ],
   })
   try {
-    renderLenses()
+    const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
@@ -797,27 +803,28 @@ test('a match whose file is a lens already, or being added, starts unchecked; un
     expect(form.getByText('1 checked')).toBeDefined()
     expect(list.getByText('added already')).toBeDefined()
     expect(
-      list.getByText(
-        "This file is this project's abac already: uncheck it, or rename this one to add it twice.",
-      ),
+      list.getByText("This file is this project's abac already: nothing to add."),
     ).toBeDefined()
     expect(list.getByText('being added')).toBeDefined()
     expect(
-      list.getByText(
-        "This file is being added as this project's money: checked, it is added once more.",
-      ),
+      list.getByText("This file is being added as this project's money: nothing to add."),
     ).toBeDefined()
-    // Checked, the money one is added once more; the abac one blocks under its own name.
-    fireEvent.click(list.getByLabelText('.claude/agents/money-review.md'))
-    expect(form.getByRole('button', { name: 'Add the 2 lenses' })).toHaveProperty(
-      'disabled',
-      false,
-    )
-    fireEvent.click(list.getByLabelText('.claude/agents/abac-review.md'))
-    expect(form.getByRole('button', { name: 'Add the 3 lenses' })).toHaveProperty(
+    // Not a name problem: no red, and never checked, not even by Check all.
+    expect(list.queryByText('name taken')).toBeNull()
+    const abac = list.getByLabelText('.claude/agents/abac-review.md')
+    expect(abac).toHaveProperty('disabled', true)
+    expect(list.getByLabelText('.claude/agents/money-review.md')).toHaveProperty(
       'disabled',
       true,
     )
+    fireEvent.click(form.getByRole('button', { name: 'Check all' }))
+    expect(abac).toHaveProperty('checked', false)
+    fireEvent.click(form.getByRole('button', { name: 'Add the lens' }))
+    expect(onLens).toHaveBeenCalledWith('import', {
+      sources: [{ source: '.claude/agents/i18n-review.md', name: 'i18n-review' }],
+      from: '.claude/agents/*-review.md',
+      scope: 'local',
+    })
   } finally {
     vi.unstubAllGlobals()
   }

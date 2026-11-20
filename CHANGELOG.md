@@ -13,9 +13,11 @@ released to the `stable` branch.
   a lens** takes a glob as its source (`.claude/agents/*-review.md`,
   `~/.claude/agents/review-*.md`): before anything runs, the page lists its
   matches, each named after its file and renamable, with **Check all** /
-  **Check none**; a name taken where it would live blocks until renamed or unchecked, a
-  lens it would replace is said, a file that is a lens already (or being
-  added), under any name, starts unchecked, and a file that starts other
+  **Check none**. A file that is a lens already, or being added, under any
+  name, says so (*added already*, *being added*) and cannot be checked; a
+  different file whose name is another lens's where it would live, or
+  another match's, has its name marked: the lenses are added once it is
+  changed. A lens it would replace is said, and a file that starts other
   agents is flagged *not a reviewer* and starts unchecked. **Add the N lenses** cleans
   each checked match with its own agent, `maxReviewAgents` at a time; under
   *Lenses being added* a bar counts the lenses cleaned, those still at work

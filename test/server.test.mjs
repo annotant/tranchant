@@ -2227,6 +2227,18 @@ test("/api/lens/matches lists a glob's matches; /api/lens/import with sources cl
     ],
   )
 
+  // A file being added already is refused, whatever name it is sent under.
+  const twice = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      sources: [{ source: '.claude/agents/api-review.md', name: 'api-again' }],
+    }),
+  })
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /api-review\.md: added already, as api-review/)
+
   const allRefused = await fetch(`${server.base}/api/lens/import`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
