@@ -1879,7 +1879,7 @@ test('a settings change the file cannot hold is refused with its key, the file k
     [{ maxReviewAgents: 2.5 }, 'maxReviewAgents: a whole number from 1 to 8'],
     [{ fixModel: 'not a model!' }, 'fixModel: a model id, letters, digits, . : - and _'],
     [{ recipe: 'relative.json' }, 'recipe: an absolute path to a recipe file, or ~/…'],
-    [{ disabledLenses: ['ok', 'not ok'] }, /^disabledLenses: up to 12 lens names/],
+    [{ disabledLenses: ['ok', 'not ok'] }, /^disabledLenses: lens names/],
     [{ postWith: 'curl' }, 'postWith: one of auto, glab, gh'],
     [{ colour: 'red' }, 'colour: not a setting'],
     [{ version: 2 }, 'version: 1 is the only one read'],

@@ -678,6 +678,11 @@ test("the settings choose the agents' models and how many run at a time", async 
       verifyModel: 'haiku',
       maxFixAgents: 1,
       maxReviewAgents: 2,
+      // More names than the 12 lenses once allowed: the settings are still read.
+      disabledLenses: Array.from({ length: 13 }, (_, i) => `l${i}`),
+      lensModels: Object.fromEntries(
+        Array.from({ length: 13 }, (_, i) => [`l${i}`, 'opus']),
+      ),
     },
   })
   await open($, w)

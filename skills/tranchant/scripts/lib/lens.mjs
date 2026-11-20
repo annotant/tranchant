@@ -36,7 +36,6 @@ const PROJECT_RECIPE = path.join('.tranchant', 'recipe.json')
 /** Where the built prompts are stored, one per hash. */
 const LENSES_DIR = path.join(STATE_ROOT, 'lenses')
 
-const MAX_LENSES = 12
 const MAX_SKILLS = 6
 /** The most a source, or a skill a lens lists, may weigh. */
 const MAX_SOURCE_BYTES = 64 * 1024
@@ -250,8 +249,7 @@ export async function readRecipe(ref) {
 /**
  * A recipe's lenses as a review runs them: checked; an add-on with no
  * `paths` or `topics` of its own keeps its lens of Tranchant's; with
- * `extends`, the plugin's lenses first, one of the same name replaced, 12
- * at most in all.
+ * `extends`, the plugin's lenses first, one of the same name replaced.
  * @param {any} raw
  * @returns {Promise<LensSpec[]>}
  */
@@ -271,10 +269,7 @@ export async function expandRecipe(raw) {
   })
   if (raw.extends !== 'tranchant') return lenses
   const mine = new Set(lenses.map((lens) => lens.name))
-  const all = [...plugin.filter((lens) => !mine.has(lens.name)).map(builtIn), ...lenses]
-  if (all.length > MAX_LENSES)
-    throw new RecipeRefusal(`${MAX_LENSES} lenses at most, the plugin's included`)
-  return all
+  return [...plugin.filter((lens) => !mine.has(lens.name)).map(builtIn), ...lenses]
 }
 
 /**
@@ -299,7 +294,6 @@ export function checkRecipe(recipe) {
     throw new RecipeRefusal('version 1 and at least one lens are required')
   if (recipe.extends !== undefined && recipe.extends !== 'tranchant')
     throw new RecipeRefusal('extends: "tranchant" is the only one')
-  if (lenses.length > MAX_LENSES) throw new RecipeRefusal(`${MAX_LENSES} lenses at most`)
   const names = new Set()
   let otherwise = false
   return lenses.map((lens, i) => {

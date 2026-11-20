@@ -15,7 +15,6 @@ import { LensRefusal, buildLens } from './lens.mjs'
 import { STATE_ROOT, hashOf } from './project.mjs'
 import {
   LensFileRefusal,
-  MAX_SCOPE_LENSES,
   isSourceText,
   checkChanges,
   checkUserLens,
@@ -23,7 +22,6 @@ import {
   hashesOf,
   isScope,
   lensDir,
-  listUserLenses,
   readUserLens,
   recordedSource,
   whereOf,
@@ -184,8 +182,6 @@ export async function createCleaning({ project, source, name, scope, context }) 
     throw new CleaningRefusal(
       `a lens named ${lensName} is ${scope === 'global' ? 'global' : "this project's"} already: edit it, or choose another name`,
     )
-  if ((await listUserLenses(scope, project)).length >= MAX_SCOPE_LENSES)
-    throw new CleaningRefusal(`${MAX_SCOPE_LENSES} lenses of a scope at most`)
   const recorded = recordedSource(source, scope, project)
   const recordedContext = context?.trim()
     ? recordedSource(context, scope, project)
@@ -527,8 +523,6 @@ export async function addCleaned(project, id, edits = {}) {
     throw new CleaningRefusal(
       `a lens named ${name} is ${scope === 'global' ? 'global' : "this project's"} already`,
     )
-  if ((await listUserLenses(scope, project)).length >= MAX_SCOPE_LENSES)
-    throw new CleaningRefusal(`${MAX_SCOPE_LENSES} lenses of a scope at most`)
   try {
     await writeUserLens(target, clean, output.domain)
   } catch (error) {
