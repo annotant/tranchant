@@ -189,6 +189,23 @@ export const postStart = (choices: StartChoices, build = false) =>
     body: JSON.stringify(choices),
   })
 
+/** The review's controls: its agents, never its fixes, discussions or posts. */
+export const postPause = (now = false) =>
+  request<unknown>('/api/review/pause', { method: 'POST', body: JSON.stringify({ now }) })
+
+export const postResume = () =>
+  request<unknown>('/api/review/resume', { method: 'POST', body: '{}' })
+
+/** Stop the review; with `reset`, Stop and reset. */
+export const postHalt = (reset = false) =>
+  request<unknown>('/api/review/halt', {
+    method: 'POST',
+    body: JSON.stringify({ reset }),
+  })
+
+export const postReset = () =>
+  request<unknown>('/api/review/reset', { method: 'POST', body: '{}' })
+
 export const postStop = (id: string) =>
   request<unknown>(STOP, { method: 'POST', body: JSON.stringify({ id }) })
 

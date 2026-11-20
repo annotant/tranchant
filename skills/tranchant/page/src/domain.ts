@@ -67,8 +67,8 @@ export interface LensesProgress {
   /** `waiting`: built, the review waits for Start the review. */
   state: 'resolving' | 'ready' | 'refused' | 'waiting'
   lenses: LensRow[]
-  /** While it waits: why (the settings' Start the review by itself, or --no-start). */
-  wait?: 'setting' | 'flag'
+  /** While it waits: why (the settings' Start the review by itself, --no-start, or Reset the review). */
+  wait?: 'setting' | 'flag' | 'reset'
   /** Its own recipe (--recipe): no lens added, none turned off, nothing to save. */
   own?: true
   /** The change's files. */
@@ -220,6 +220,10 @@ export interface Review {
   sources?: { codeReview?: number; reviewPr?: number; both?: number }
   /** Findings land unverified and a verifier confirms each: `/tranchant review` sets it. */
   verify?: boolean
+  /** The page's Pause: no new review agent starts; `now` once Pause now ended those at work. */
+  paused?: { at: string; now?: true }
+  /** The page's Stop the review: no Resume, only Reset the review. */
+  stopped?: { at: string }
   findings: Finding[]
 }
 
@@ -359,7 +363,8 @@ export interface Step {
 export interface ReviewAgent {
   name: string
   running: boolean
-  outcome?: 'done' | 'failed'
+  /** `interrupted`: Pause now ended it; it runs again from the start on Resume. */
+  outcome?: 'done' | 'failed' | 'interrupted'
   /** Its last 50 steps. */
   steps: Step[]
 }

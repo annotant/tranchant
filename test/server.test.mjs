@@ -2785,3 +2785,81 @@ test("/api/lens/group/* makes, renames and deletes a project's groups; a lens re
   assert.equal(deleted.settings.groups.default, undefined)
   assert.equal((await send('lens/group/remove', { name: 'B' })).status, 409)
 })
+
+test("the review's controls write its pause or stop, then print the hooks' lines", async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'reviewing',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const id = imported.review.id
+  /** @param {string} name @param {unknown} [body] */
+  const control = (name, body = {}) =>
+    fetch(`${server.base}/api/review/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  let printed = server.output().length
+  const paused = await control('pause')
+  assert.equal(paused.status, 200)
+  assert.equal(typeof (await json(paused)).review.paused.at, 'string')
+  assert.equal(await server.nextLine('PAUSE ', printed), `PAUSE ${id}`)
+  printed = server.output().length
+  assert.equal((await control('pause', { now: true })).status, 200)
+  assert.equal(await server.nextLine('PAUSE_NOW ', printed), `PAUSE_NOW ${id}`)
+  assert.equal((await control('pause', { now: 'yes' })).status, 400)
+  printed = server.output().length
+  assert.equal((await control('resume')).status, 200)
+  assert.equal(await server.nextLine('RESUME ', printed), `RESUME ${id}`)
+  const again = await control('resume')
+  assert.equal(again.status, 409)
+  assert.match((await json(again)).error, /not paused/)
+  // Nothing to reset before a stop.
+  assert.equal((await control('reset')).status, 409)
+
+  printed = server.output().length
+  assert.equal((await control('halt', { reset: true })).status, 200)
+  assert.equal(await server.nextLine('HALT ', printed), `HALT ${id}`)
+  assert.equal(await server.nextLine('RESET ', printed), `RESET ${id}`)
+  const twice = await control('reset')
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /being reset/)
+  assert.equal((await control('halt')).status, 409)
+  const shown = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(typeof shown.review.stopped.at, 'string')
+})
+
+test('Reset on a review stopped prints RESET, then waits for it before asking again', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'complete',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+      stopped: { at: '2026-11-20T10:00:00.000Z' },
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const reset = () =>
+    fetch(`${server.base}/api/review/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+  const printed = server.output().length
+  assert.equal((await reset()).status, 200)
+  assert.equal(await server.nextLine('RESET ', printed), `RESET ${imported.review.id}`)
+  assert.equal((await reset()).status, 409)
+})

@@ -269,7 +269,15 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
  * @property {string} [group] The group of lenses `/tranchant review` ran, when it ran one.
  * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
+ * @property {Paused} [paused] While `reviewing`: the page's Pause; no new review agent starts.
+ * @property {{ at: string }} [stopped] The page's Stop the review: its agents ended, no Resume; only Reset runs it again.
  * @property {Finding[]} findings At least one, unless the review is not `complete`.
+ */
+
+/**
+ * A review the page paused: when, and `now` once Pause now ended its agents
+ * at work, which run again from the start on Resume.
+ * @typedef {{ at: string, now?: true }} Paused
  */
 
 /**
@@ -909,6 +917,18 @@ export function validateEnvelope(review) {
   if (review.status === 'refused' && review.refusal === undefined) {
     problems.push('refusal: a refused review says why')
   }
+  if (
+    review.paused !== undefined &&
+    (!isObject(review.paused) ||
+      !isText(review.paused.at, 100) ||
+      (review.paused.now !== undefined && review.paused.now !== true))
+  )
+    problems.push('paused: { at, now? }')
+  if (
+    review.stopped !== undefined &&
+    (!isObject(review.stopped) || !isText(review.stopped.at, 100))
+  )
+    problems.push('stopped: { at }')
   if (!isText(review.title, 300)) problems.push('title: a text is required')
   if (typeof review.summary !== 'string')
     problems.push('summary: a Markdown text is required')
@@ -1019,9 +1039,10 @@ export function envelopeOf(review) {
 
 /**
  * What tells a review from another with the same id, as JSON: its envelope,
- * status, `verify` and what its Lenses step recorded left out. A review that
- * grew, or completed, is still the same one, opened again without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, refusal?: unknown }} review
+ * status, `verify`, what its Lenses step recorded and its pause or stop left
+ * out. A review that grew, or completed, is still the same one, opened again
+ * without `--verify` too.
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, refusal?: unknown, paused?: unknown, stopped?: unknown }} review
  */
 export function identityOf(review) {
   const {
@@ -1030,6 +1051,8 @@ export function identityOf(review) {
     lenses: _lenses,
     group: _group,
     refusal: _refusal,
+    paused: _paused,
+    stopped: _stopped,
     ...identity
   } = envelopeOf(review)
   return JSON.stringify(canonical(identity))

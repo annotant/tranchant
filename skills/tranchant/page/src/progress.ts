@@ -1,13 +1,17 @@
 // Where a `/tranchant review` stands, by lens, from its agents. Pure, so it is tested alone.
 import { activityOf, stepKey } from './activity'
-import { plural, type Finding, type ReviewAgent, type Step } from './domain'
+import { plural, type Finding, type Review, type ReviewAgent, type Step } from './domain'
 
-type Outcome = 'running' | 'done' | 'failed'
+/** `interrupted`: Pause now ended it, and it runs again from the start on Resume. */
+type Outcome = 'running' | 'done' | 'failed' | 'interrupted'
 
-/** A lens's reviewer: its state and how many of the findings still standing bear its lens. */
+/**
+ * A lens's reviewer: its state and how many of the findings still standing
+ * bear its lens; `queued` when it has not started yet.
+ */
 export interface LensProgress {
   lens: string
-  state: Outcome
+  state: Outcome | 'queued'
   findings: number
 }
 
@@ -64,11 +68,29 @@ export interface ReviewProgress {
 
 type ReviewFinding = Pick<Finding, 'id' | 'title' | 'verified'>
 
+/** Where a review's agents stand: running, pausing (those at work finish), paused, stopped from the page, or done. */
+export type ReviewPhase = 'running' | 'pausing' | 'paused' | 'stopped' | 'done'
+
+/** The phase of a review, from its status, its pause or stop and its agents still at work. */
+export function phaseOf(
+  review: Pick<Review, 'status' | 'paused' | 'stopped'>,
+  agents: readonly Pick<ReviewAgent, 'running'>[],
+): ReviewPhase {
+  if (review.stopped) return 'stopped'
+  if (review.status !== 'reviewing') return 'done'
+  if (review.paused) return agents.some((agent) => agent.running) ? 'pausing' : 'paused'
+  return 'running'
+}
+
 /** The group of a verifier whose finding matches no reviewer's lens. */
 export const OTHER = 'other'
 
 const stateOf = (agent: ReviewAgent): Outcome =>
-  agent.running ? 'running' : agent.outcome === 'failed' ? 'failed' : 'done'
+  agent.running
+    ? 'running'
+    : agent.outcome === 'failed' || agent.outcome === 'interrupted'
+      ? agent.outcome
+      : 'done'
 
 /** A finding id's lens: reviewers name theirs `<lens>-<n>`; the longest wins, `a-b-1` is `a-b`'s. */
 export function lensOf(id: string, lenses: readonly string[]): string | undefined {
@@ -133,27 +155,36 @@ function checkOf(finding: ReviewFinding, verifier: ReviewAgent | undefined): Che
   return finding.verified === true ? 'verified' : 'unverified'
 }
 
-/** The review's progress from its agents (`sm-summary`, `rv-<lens>`, `vf-<finding id>`) and its findings. */
+/**
+ * The review's progress from its agents (`sm-summary`, `rv-<lens>`, `vf-<finding id>`)
+ * and its findings; `planned`, the lenses it runs, adds those not started yet, queued.
+ */
 export function progressOf(
   agents: readonly ReviewAgent[],
   findings: readonly ReviewFinding[],
   project = '',
+  planned: readonly string[] = [],
 ): ReviewProgress {
   const reviewers = agents.filter((agent) => agent.name.startsWith('rv-'))
-  const names = reviewers.map((agent) => agent.name.slice(3))
+  const started = reviewers.map((agent) => agent.name.slice(3))
+  const queued = planned.filter((lens) => !started.includes(lens))
+  const names = [...started, ...queued]
   const byLensFindings = new Map<string, ReviewFinding[]>()
   for (const finding of findings) {
     const lens = lensOf(finding.id, names)
     if (lens) byLensFindings.set(lens, [...(byLensFindings.get(lens) ?? []), finding])
   }
-  const lenses = reviewers.map((agent) => {
-    const lens = agent.name.slice(3)
-    return {
-      lens,
-      state: stateOf(agent),
-      findings: byLensFindings.get(lens)?.length ?? 0,
-    }
-  })
+  const lenses: LensProgress[] = [
+    ...reviewers.map((agent) => {
+      const lens = agent.name.slice(3)
+      return {
+        lens,
+        state: stateOf(agent),
+        findings: byLensFindings.get(lens)?.length ?? 0,
+      }
+    }),
+    ...queued.map((lens) => ({ lens, state: 'queued' as const, findings: 0 })),
+  ]
 
   const byLens = new Map<string, VerifyProgress>()
   for (const agent of agents) {
@@ -162,9 +193,13 @@ export function progressOf(
     const group = byLens.get(lens) ?? { lens, state: 'done', done: 0, total: 0 }
     const state = stateOf(agent)
     group.total += 1
-    if (state !== 'running') group.done += 1
     if (state === 'running') group.state = 'running'
-    else if (state === 'failed' && group.state === 'done') group.state = 'failed'
+    else if (state === 'interrupted') {
+      if (group.state !== 'running') group.state = 'interrupted'
+    } else {
+      group.done += 1
+      if (state === 'failed' && group.state === 'done') group.state = 'failed'
+    }
     byLens.set(lens, group)
   }
 
@@ -182,11 +217,13 @@ export function progressOf(
     const verdict =
       state === 'running'
         ? doing(agent.steps)
-        : state === 'failed'
-          ? stoppedText(agent.steps)
-          : own.length
-            ? plural(own.length, 'finding')
-            : 'no finding'
+        : state === 'interrupted'
+          ? 'interrupted · runs again on Resume'
+          : state === 'failed'
+            ? stoppedText(agent.steps)
+            : own.length
+              ? plural(own.length, 'finding')
+              : 'no finding'
     return {
       lens,
       state,
@@ -230,8 +267,12 @@ export function progressOf(
         step: relative(doing(agent.steps), project),
       })),
     reports,
-    done: agents.filter((agent) => !agent.running).length,
-    total: agents.length,
+    // An interrupted agent runs again, and a queued lens is still to run: neither is done.
+    done: agents.filter((agent) => {
+      const state = stateOf(agent)
+      return state !== 'running' && state !== 'interrupted'
+    }).length,
+    total: agents.length + queued.length,
     stopped: lenses.filter((one) => one.state === 'failed').map((one) => one.lens),
   }
 }

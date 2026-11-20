@@ -4,6 +4,10 @@ import {
   postAnswer,
   postDiscuss,
   postDecisions,
+  postHalt,
+  postPause,
+  postReset,
+  postResume,
   postStart,
   postStop,
   useDiff,
@@ -39,7 +43,8 @@ import {
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
 import { LensesCenter, LensesControl, ReadyCenter } from './LensesStep'
-import { ReviewAgents } from './ReviewAgents'
+import { phaseOf } from './progress'
+import { ReviewAgents, type ReviewControl } from './ReviewAgents'
 import type { View } from './settings'
 import { LensesView } from './LensesView'
 import { SettingsView } from './SettingsView'
@@ -163,6 +168,14 @@ function Header({
           {review.status === 'preparing' && lenses?.state === 'waiting' ? (
             <span className="tr-chip tr-chip--ready" role="status">
               ready to start
+            </span>
+          ) : review.stopped ? (
+            <span className="tr-chip tr-chip--danger" role="status">
+              review stopped · {plural(review.findings.length, 'finding')}
+            </span>
+          ) : review.paused && review.status === 'reviewing' ? (
+            <span className="tr-chip tr-chip--warn" role="status">
+              review paused · {plural(review.findings.length, 'finding')}
             </span>
           ) : (
             isReviewing(review) && (
@@ -463,6 +476,29 @@ export default function App() {
     [reload],
   )
 
+  // Pause, Resume, Stop and Reset: what the server refuses is said, and the page reads the review again.
+  const control = useCallback(
+    async (which: ReviewControl) => {
+      let done = false
+      try {
+        if (which === 'pause' || which === 'pauseNow')
+          await postPause(which === 'pauseNow')
+        else if (which === 'resume') await postResume()
+        else if (which === 'reset') await postReset()
+        else await postHalt(which === 'haltReset')
+        setNotice(undefined)
+        done = true
+      } catch (failure) {
+        setNotice(
+          failure instanceof Error ? failure.message : 'The server did not answer.',
+        )
+      }
+      await reload()
+      return done
+    },
+    [reload],
+  )
+
   const stop = useCallback(
     async (id: string) => {
       try {
@@ -702,7 +738,17 @@ export default function App() {
       }}
     />
   )
-  const reviewing = isReviewing(review)
+  // Stopped from the page, nothing more lands: no longer in progress, whatever its status.
+  const reviewing = isReviewing(review) && !review.stopped
+  const phase = phaseOf(review, payload?.reviewers ?? [])
+  const agents = (payload?.reviewers ?? []).flatMap((agent) => {
+    // An interrupted agent runs again once resumed (its lens queued meanwhile); ended without it, its lens is not covered.
+    if (agent.outcome === 'interrupted' && phase === 'running') return []
+    if (reviewing) return [agent]
+    // An agent whose end step was never written ended with its review all the same; stopped, before it finished.
+    const cut = (review.stopped && agent.running) || agent.outcome === 'interrupted'
+    return [{ ...agent, running: false, ...(cut && { outcome: 'failed' as const }) }]
+  })
   const detail = current ? (
     <FindingDetail
       key={current.id}
@@ -745,11 +791,10 @@ export default function App() {
       )}
       {header}
       <ReviewAgents
-        agents={(payload?.reviewers ?? []).map((agent) =>
-          // An agent whose end step was never written ended with its review all the same.
-          reviewing ? agent : { ...agent, running: false },
-        )}
-        reviewing={reviewing}
+        agents={agents}
+        phase={phase}
+        planned={review.lenses?.map((lens) => lens.name) ?? []}
+        onControl={review.lenses ? control : undefined}
         findings={review?.findings ?? []}
         verify={review?.verify === true}
         project={review?.project ?? ''}

@@ -5,6 +5,7 @@ import {
   progressOf,
   type LensProgress,
   type LensReport,
+  type ReviewPhase,
   type VerifyProgress,
 } from './progress'
 
@@ -43,6 +44,56 @@ const Cross = () => (
   </svg>
 )
 
+const PauseIcon = ({ size = 12, className }: { size?: number; className?: string }) => (
+  <svg
+    className={className}
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    aria-hidden="true"
+  >
+    <rect x="6" y="5" width="4" height="14" rx="1" />
+    <rect x="14" y="5" width="4" height="14" rx="1" />
+  </svg>
+)
+
+const StopIcon = ({ size = 12, className }: { size?: number; className?: string }) => (
+  <svg
+    className={className}
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    aria-hidden="true"
+  >
+    <rect x="6" y="6" width="12" height="12" rx="1.5" />
+  </svg>
+)
+
+const PlayIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M7 5l12 7-12 7z" />
+  </svg>
+)
+
+const ResetIcon = () => (
+  <svg
+    width="12"
+    height="12"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4 12a8 8 0 1 0 2.4-5.7" />
+    <path d="M4 4v4h4" />
+  </svg>
+)
+
 const NOT_COVERED = 'The agent stopped before it finished: its lens is not covered'
 const NOT_VERIFIED = 'A verifier stopped before it finished: its finding stays unverified'
 
@@ -51,22 +102,26 @@ function Chip({
   state,
   count,
   title,
+  note,
 }: {
   lens: string
   state: LensProgress['state']
   count?: string | undefined
   title?: string | undefined
+  /** What the review's pause or stop makes of it. */
+  note?: string | undefined
 }) {
   return (
-    <li className={`tr-lens tr-lens--${state}`} title={title}>
+    <li className={`tr-lens tr-lens--${state}`} title={title ?? note}>
       {state === 'running' ? (
         <span className="tr-spinner" role="img" aria-label="running" />
       ) : state === 'failed' ? (
         <Cross />
-      ) : (
+      ) : state === 'done' ? (
         <Check />
-      )}
+      ) : null}
       {lens}
+      {note && <span className="tr-rp-note">{note}</span>}
       {count !== undefined && <span className="tr-lens-count">{count}</span>}
     </li>
   )
@@ -107,6 +162,8 @@ function LensRow({
           <span className="tr-spinner" role="img" aria-label="running" />
         ) : report.state === 'failed' ? (
           <Cross />
+        ) : report.state === 'interrupted' ? (
+          <PauseIcon className="tr-lens-icon" />
         ) : (
           <Check />
         )}
@@ -192,31 +249,84 @@ const notCovered = (lenses: readonly string[]) =>
 
 const NO_GROUPS: readonly string[] = []
 
+/** "a", "a and b", "a, b and c". */
+const listOf = (names: readonly string[]) =>
+  names.length < 2
+    ? (names[0] ?? '')
+    : `${names.slice(0, -1).join(', ')} and ${names.at(-1) ?? ''}`
+
+/** What a review's pause or stop makes of a lens, in its chip. */
+function noteOf(phase: ReviewPhase, state: LensProgress['state']) {
+  const paused = phase === 'pausing' || phase === 'paused'
+  if (phase === 'pausing' && state === 'running') return 'finishing'
+  if (paused && state === 'queued') return 'paused'
+  if (paused && state === 'interrupted') return 'interrupted · runs again on Resume'
+  if (phase === 'stopped' && state === 'failed') return 'stopped · not covered'
+  if (phase === 'stopped' && state !== 'done') return 'not covered'
+  return undefined
+}
+
+/** How far the review got. */
+function Bar({ label, done, total }: { label: string; done: number; total: number }) {
+  return (
+    <span
+      className="tr-progress-bar"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={total}
+      aria-valuenow={done}
+    >
+      <span style={{ width: `${total ? (100 * done) / total : 0}%` }} />
+    </span>
+  )
+}
+
+/** A review's controls, as the page sends them. */
+export type ReviewControl =
+  'pause' | 'pauseNow' | 'resume' | 'halt' | 'haltReset' | 'reset'
+
 /** Where the review stands, by lens; one line once it is done. */
 export function ReviewAgents({
   agents,
-  reviewing,
+  phase,
   findings,
   verify,
   project,
   lensGroup,
+  planned = NO_GROUPS,
   others = NO_GROUPS,
   onOpen,
+  onControl,
 }: {
   agents: readonly ReviewAgent[]
-  reviewing: boolean
+  /** Where the review's agents stand: see ReviewPhase. */
+  phase: ReviewPhase
   /** The group of lenses the review runs, when it runs one. */
   lensGroup?: string | undefined
+  /** The lenses the review runs: those not started yet show queued. */
+  planned?: readonly string[]
   /** The project's other groups: a review of one of them is how two are compared. */
   others?: readonly string[]
   findings: readonly Pick<Finding, 'id' | 'title' | 'verified'>[]
   verify: boolean
   project: string
   onOpen: (id: string) => void
+  /** Pause, Resume, Stop and Reset; absent, the panel offers none. */
+  onControl?: ((control: ReviewControl) => Promise<boolean>) | undefined
 }) {
   const [open, setOpen] = useState(false)
-  if (!agents.length) return null
-  const progress = progressOf(agents, findings, project)
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  if (!agents.length && !planned.length) return null
+  const progress = progressOf(agents, findings, project, phase === 'done' ? [] : planned)
+  const control = async (which: ReviewControl) => {
+    if (!onControl || busy) return
+    setBusy(true)
+    const ok = await onControl(which)
+    setBusy(false)
+    if (ok) setConfirming(false)
+  }
   const toggle = (
     <button
       type="button"
@@ -228,27 +338,138 @@ export function ReviewAgents({
     </button>
   )
   const verified = findings.filter((finding) => finding.verified === true).length
+  const lensesOf = (...states: LensProgress['state'][]) =>
+    progress.lenses.filter((one) => states.includes(one.state)).map((one) => one.lens)
+  const covered = lensesOf('done').length
+  const lensCount = progress.lenses.length
+  const inGroup = lensGroup ? ` · group ${lensGroup}` : ''
+  const running = lensesOf('running')
+  const left = lensesOf('queued')
+  const interrupted = lensesOf('interrupted')
+  const paused = phase === 'pausing' || phase === 'paused'
+  const findingCount = plural(findings.length, 'finding')
+  const confirmText = [
+    phase === 'paused'
+      ? [...interrupted, ...left].length > 0 &&
+        `${listOf([...interrupted, ...left])} never start.`
+      : [
+          running.length > 0 && `${listOf(running)} end now, before they finish`,
+          [...interrupted, ...left].length > 0 &&
+            `${listOf([...interrupted, ...left])} never start`,
+        ]
+          .filter(Boolean)
+          .join('; ') + (running.length || left.length || interrupted.length ? '.' : ''),
+    `The review ends as it is: no Resume. Stop the review keeps the ${findingCount} so far, to read and settle; Stop and reset deletes them and goes back to Ready to start.`,
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const controls = onControl && !confirming && (
+    <>
+      {phase === 'running' && (
+        <button
+          type="button"
+          className="tr-btn tr-btn--small"
+          disabled={busy}
+          title="Start no new agent; the running ones finish their work"
+          onClick={() => void control('pause')}
+        >
+          <PauseIcon />
+          Pause
+        </button>
+      )}
+      {phase === 'pausing' && (
+        <button
+          type="button"
+          className="tr-btn tr-btn--small"
+          disabled={busy}
+          title="End the running agents now; they run again from the start on Resume"
+          onClick={() => void control('pauseNow')}
+        >
+          Pause now
+        </button>
+      )}
+      {phase === 'paused' && (
+        <button
+          type="button"
+          className="tr-btn tr-btn--small tr-btn--primary"
+          disabled={busy}
+          onClick={() => void control('resume')}
+        >
+          <PlayIcon />
+          Resume
+        </button>
+      )}
+      {(phase === 'running' || paused) && (
+        <button
+          type="button"
+          className="tr-btn tr-btn--small tr-btn--danger"
+          disabled={busy}
+          title="End the review as it is: no resume"
+          onClick={() => setConfirming(true)}
+        >
+          <StopIcon />
+          Stop the review
+        </button>
+      )}
+      {phase === 'stopped' && (
+        <button
+          type="button"
+          className="tr-btn tr-btn--small"
+          disabled={busy}
+          title="Delete the findings and go back to Ready to start, the lenses built"
+          onClick={() => void control('reset')}
+        >
+          <ResetIcon />
+          Reset the review
+        </button>
+      )}
+    </>
+  )
   return (
-    <section className="tr-progress" aria-label="Review agents">
+    <section
+      className={`tr-progress${paused ? ' tr-rp--paused' : phase === 'stopped' ? ' tr-rp--stopped' : ''}`}
+      aria-label="Review agents"
+    >
       <div className="tr-progress-head">
-        {reviewing ? (
+        {phase === 'running' || phase === 'pausing' ? (
           <>
             <span className="tr-spinner" aria-hidden="true" />
             <span className="tr-progress-title">
-              Reviewing the change{lensGroup && ` · group ${lensGroup}`}
+              {phase === 'pausing' ? 'Pausing' : 'Reviewing the change'}
+              {inGroup}
             </span>
-            <span
-              className="tr-progress-bar"
-              role="progressbar"
-              aria-label="Agents done"
-              aria-valuemin={0}
-              aria-valuemax={progress.total}
-              aria-valuenow={progress.done}
-            >
-              <span style={{ width: `${(100 * progress.done) / progress.total}%` }} />
-            </span>
+            <Bar label="Agents done" done={progress.done} total={progress.total} />
             <span className="tr-muted">
-              {progress.done} of {plural(progress.total, 'agent')} done
+              {phase === 'pausing' && running.length
+                ? `${listOf(running)} ${running.length > 1 ? 'finish their' : 'finishes its'} work; nothing new starts`
+                : `${progress.done} of ${plural(progress.total, 'agent')} done`}
+            </span>
+          </>
+        ) : phase === 'paused' || phase === 'stopped' ? (
+          <>
+            {phase === 'paused' ? (
+              <PauseIcon size={16} className="tr-rp-icon" />
+            ) : (
+              <StopIcon size={16} className="tr-rp-icon tr-rp-icon--stop" />
+            )}
+            <span className="tr-progress-title">
+              {phase === 'paused' ? 'Review paused' : 'Review stopped'}
+              {inGroup}
+            </span>
+            <Bar label="Lenses covered" done={covered} total={lensCount} />
+            <span className="tr-muted">
+              {phase === 'paused'
+                ? [
+                    `${covered} of ${plural(lensCount, 'lens', 'lenses')} done`,
+                    left.length > 0 && `${listOf(left)} start on Resume`,
+                    interrupted.length > 0 &&
+                      `${listOf(interrupted)} ${interrupted.length > 1 ? 'were' : 'was'} interrupted, and run${interrupted.length > 1 ? '' : 's'} again on Resume`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : covered === lensCount
+                  ? `every lens covered`
+                  : `${covered} of ${plural(lensCount, 'lens', 'lenses')} covered · the rest will not run: Reset the review to start it again`}
             </span>
           </>
         ) : (
@@ -267,12 +488,9 @@ export function ReviewAgents({
             >
               <path d="M5 12.5l4 4 10-10" />
             </svg>
-            <span className="tr-progress-title">
-              Review done{lensGroup && ` · group ${lensGroup}`}
-            </span>
+            <span className="tr-progress-title">Review done{inGroup}</span>
             <span className="tr-muted">
-              {plural(progress.lenses.length, 'lens', 'lenses')} ·{' '}
-              {plural(findings.length, 'finding')}
+              {plural(progress.lenses.length, 'lens', 'lenses')} · {findingCount}
               {verify && `, ${verified} verified`}
             </span>
             {progress.stopped.length > 0 && (
@@ -280,8 +498,54 @@ export function ReviewAgents({
             )}
           </>
         )}
-        {toggle}
+        <span className="tr-rp-controls">
+          {controls}
+          {toggle}
+        </span>
       </div>
+      {confirming && (
+        <div
+          className="tr-rp-confirm"
+          role="alertdialog"
+          aria-labelledby="tr-rp-confirm-title"
+          aria-describedby="tr-rp-confirm-text"
+        >
+          <strong id="tr-rp-confirm-title">Stop the review?</strong>
+          <p id="tr-rp-confirm-text">{confirmText}</p>
+          <div className="tr-rp-confirm-actions">
+            <button
+              type="button"
+              className="tr-btn tr-btn--small tr-btn--danger"
+              disabled={busy}
+              title="The findings stay, to read and settle"
+              onClick={() => void control('halt')}
+            >
+              Stop the review
+            </button>
+            <button
+              type="button"
+              className="tr-btn tr-btn--small tr-btn--danger"
+              disabled={busy}
+              title="Delete the findings too, and go back to Ready to start"
+              onClick={() => void control('haltReset')}
+            >
+              Stop and reset
+            </button>
+            <button
+              type="button"
+              className="tr-btn tr-btn--small"
+              disabled={busy}
+              onClick={() => setConfirming(false)}
+            >
+              {paused ? 'Keep it paused' : 'Keep it running'}
+            </button>
+            <span className="tr-muted">
+              A fix under way keeps running, and a fix already made stays on the working
+              tree.
+            </span>
+          </div>
+        </div>
+      )}
       {lensGroup && others.length > 0 && (
         <p className="tr-muted tr-progress-compare" role="note">
           This review runs the group {lensGroup}. To compare, review the same change with{' '}
@@ -294,7 +558,14 @@ export function ReviewAgents({
           : each review keeps its group. Comparing their findings is still to come (#112).
         </p>
       )}
-      {reviewing && (
+      {(paused || phase === 'stopped') && (
+        <p className="tr-muted tr-rp-body">
+          {phase === 'stopped'
+            ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. Reset the review to run it again from Ready to start.`
+            : `Paused: the ${findingCount} below are yours to settle while no reviewer runs.`}
+        </p>
+      )}
+      {phase !== 'done' && (
         <div className="tr-progress-rows">
           {progress.lenses.length > 0 && (
             <>
@@ -304,9 +575,17 @@ export function ReviewAgents({
                   <Chip
                     key={one.lens}
                     lens={one.lens}
-                    state={one.state}
+                    // Stopped, whatever did not finish is not covered.
+                    state={
+                      phase === 'stopped' && one.state !== 'done' ? 'failed' : one.state
+                    }
                     count={one.state === 'done' ? String(one.findings) : undefined}
-                    title={one.state === 'failed' ? NOT_COVERED : undefined}
+                    title={
+                      one.state === 'failed' && phase !== 'stopped'
+                        ? NOT_COVERED
+                        : undefined
+                    }
+                    note={noteOf(phase, one.state)}
                   />
                 ))}
               </ul>

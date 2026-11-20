@@ -73,6 +73,20 @@ export class StoreRefusal extends Error {}
 /** @param {State} state */
 const isWorking = (state) => state === 'working'
 
+/**
+ * Refuses `what` (Pause, Resume, Stop) unless the review's agents run: a
+ * `/tranchant review` (its `lenses` recorded), `reviewing`, not stopped.
+ * @param {Omit<Review, 'findings'>} envelope
+ * @param {string} what
+ */
+function refuseUnlessRunning(envelope, what) {
+  if (!envelope.lenses)
+    throw new StoreRefusal(`${what} refused: only a /tranchant review runs agents`)
+  if (envelope.stopped) throw new StoreRefusal(`${what} refused: the review is stopped`)
+  if (statusOf(envelope) !== 'reviewing')
+    throw new StoreRefusal(`${what} refused: the review is ${statusOf(envelope)}`)
+}
+
 /** The step file of finding `id`'s run in progress. */
 export const progressPath = (/** @type {string} */ dir, /** @type {string} */ id) =>
   path.join(dir, 'runs', `${id}.jsonl`)
@@ -149,9 +163,13 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
 
 /**
  * One review agent, the summary agent (`sm-summary`), a lens's reviewer
- * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until its `end` step.
- * @typedef {{ name: string, running: boolean, outcome?: 'done' | 'failed', steps: Step[] }} ReviewAgent
+ * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until the `end` after its last `start`.
+ * `interrupted`: Pause now ended it, and it runs again from the start on Resume.
+ * @typedef {{ name: string, running: boolean, outcome?: 'done' | 'failed' | 'interrupted', steps: Step[] }} ReviewAgent
  */
+
+/** The label of the `end` step of an agent Pause now ended: the hooks write it, readReviewAgents reads it. */
+const INTERRUPTED = 'Interrupted'
 
 /**
  * The review agents of the review, in the order they started.
@@ -167,12 +185,21 @@ export async function readReviewAgents(dir, limit = PROGRESS_SHOWN) {
     const name = AGENT_FILE.exec(file)?.[1]
     if (!name) continue
     const all = await readSteps(reviewAgentPath(dir, name))
-    const end = all.findLast((step) => step.kind === 'end')
+    // An agent interrupted then started again: its last start opens the run that counts.
+    const last = all.findLastIndex((step) => step.kind === 'start')
+    const end = all.slice(Math.max(last, 0)).findLast((step) => step.kind === 'end')
     agents.push({
       name,
       since: all[0]?.at ?? 0,
       running: !end,
-      ...(end && { outcome: end.state === 'failed' ? 'failed' : 'done' }),
+      ...(end && {
+        outcome:
+          end.state !== 'failed'
+            ? 'done'
+            : end.label === INTERRUPTED
+              ? 'interrupted'
+              : 'failed',
+      }),
       steps: all.slice(-limit),
     })
   }
@@ -552,6 +579,13 @@ export function createStore(dir) {
         if (statusOf(review) === 'refused') {
           throw new StoreRefusal('the review was refused: nothing can be added')
         }
+        if (review.stopped) {
+          throw new StoreRefusal('the review was stopped: nothing can be added')
+        }
+        // Back from a reset, before Start: only an agent of the run before it would add.
+        if (statusOf(review) === 'preparing') {
+          throw new StoreRefusal('the review waits to start: nothing can be added')
+        }
         // Only a verifier verifies: a finding lands unverified, whatever it says.
         const { verified: _verified, ...landed } = finding
         await writeFinding({ ...landed, addedAt: new Date().toISOString() })
@@ -635,6 +669,10 @@ export function createStore(dir) {
         if (isSettled(envelope)) {
           throw new StoreRefusal(`the review is ${statusOf(envelope)}: its summary stays`)
         }
+        if (envelope.stopped || statusOf(envelope) === 'preparing')
+          throw new StoreRefusal(
+            `the review is ${envelope.stopped ? 'stopped' : 'preparing'}: its summary stays`,
+          )
         await writeEnvelope({
           ...envelope,
           summary,
@@ -660,7 +698,9 @@ export function createStore(dir) {
         if (statusOf(envelope) === 'preparing') {
           throw new StoreRefusal('the review is still building its lenses')
         }
-        await writeEnvelope({ ...envelope, status: 'complete' })
+        // A pause that landed as the last agent ended pauses nothing any more.
+        const { paused: _paused, ...rest } = envelope
+        await writeEnvelope({ ...rest, status: 'complete' })
       })
     },
 
@@ -703,6 +743,135 @@ export function createStore(dir) {
     },
 
     /**
+     * The page's Pause: no new review agent starts; with `now`, Pause now,
+     * which ends those at work. Refused unless it runs, `reviewing` and not
+     * stopped. A pause keeps its time; Pause now while it pauses adds `now`.
+     * @param {boolean} [now]
+     * @returns {Promise<import('./format.mjs').Paused>}
+     */
+    pause(now = false) {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        refuseUnlessRunning(envelope, 'pause')
+        const paused = {
+          at: envelope.paused?.at ?? new Date().toISOString(),
+          ...((now || envelope.paused?.now) && { now: /** @type {const} */ (true) }),
+        }
+        await writeChecked({ ...envelope, paused })
+        return paused
+      })
+    },
+
+    /**
+     * The page's Resume: the queue starts where it stopped. Refused unless
+     * the review is paused.
+     * @returns {Promise<void>}
+     */
+    resume() {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        refuseUnlessRunning(envelope, 'resume')
+        if (!envelope.paused)
+          throw new StoreRefusal('resume refused: the review is not paused')
+        const { paused: _paused, ...rest } = envelope
+        await writeChecked(rest)
+      })
+    },
+
+    /**
+     * The page's Stop the review, paused or not: `stopped`, no Resume; the
+     * hooks end its agents, then complete it. Refused unless it runs.
+     * @returns {Promise<{ at: string }>}
+     */
+    halt() {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        refuseUnlessRunning(envelope, 'stop')
+        const { paused: _paused, ...rest } = envelope
+        const stopped = { at: new Date().toISOString() }
+        await writeChecked({ ...rest, stopped })
+        return stopped
+      })
+    },
+
+    /**
+     * Reset a stopped review: back to `preparing`, its summary, its findings,
+     * their decisions, runs and discussions, and its review agents' run files
+     * gone. A finding an agent or a script still holds (`queued`, `working`,
+     * `asking`) or whose discussion waits stays, with all of it: what is under
+     * way belongs to the finding, not to the review. Refused unless stopped.
+     * @returns {Promise<{ kept: string[], removed: string[] }>}
+     */
+    reset() {
+      return withFileLock(reviewFile, async () => {
+        const known = await readReview()
+        if (!known.stopped)
+          throw new StoreRefusal('reset refused: the review is not stopped')
+        return exclusive(async () => {
+          const decisions = await readDecisions()
+          const discussed = path.join(dir, 'discussions')
+          /** @param {string} id */
+          const waits = async (id) => {
+            let text
+            try {
+              text = await readFile(path.join(discussed, `${id}.json`), 'utf8')
+            } catch (error) {
+              // None is no question; one it cannot read may hold one: kept.
+              return errorCode(error) !== 'ENOENT'
+            }
+            try {
+              return JSON.parse(text)?.messages?.at(-1)?.by === 'reviewer'
+            } catch {
+              return true
+            }
+          }
+          /** @type {string[]} */
+          const kept = []
+          /** @type {string[]} */
+          const removed = []
+          for (const finding of known.findings) {
+            const state = decisions.findings[finding.id]?.state
+            const held = state === 'queued' || state === 'working' || state === 'asking'
+            if (held || (await waits(finding.id))) kept.push(finding.id)
+            else removed.push(finding.id)
+          }
+          for (const id of removed) {
+            delete decisions.findings[id]
+            await rm(findingPath(dir, id), { force: true })
+            await rm(progressPath(dir, id), { force: true })
+            await rm(historyPath(dir, id), { force: true })
+            await rm(path.join(discussed, `${id}.json`), { force: true })
+          }
+          await writeDecisions(decisions)
+          // A kept finding's discussing agent may still be at work: its file stays.
+          const agents = path.join(dir, 'reviewers')
+          for (const name of await readdir(agents).catch(() => [])) {
+            const agent = AGENT_FILE.exec(name)?.[1]
+            if (agent && !(agent.startsWith('ds-') && kept.includes(agent.slice(3))))
+              await rm(path.join(agents, name), { force: true })
+          }
+          const envelope = await readEnvelope()
+          const {
+            stopped: _stopped,
+            paused: _paused,
+            refusal: _refusal,
+            ...rest
+          } = envelope
+          await writeChecked({
+            ...rest,
+            status: 'preparing',
+            summary: '',
+            strengths: [],
+            ...(Array.isArray(envelope.findings) && {
+              findings: envelope.findings.filter((one) => kept.includes(one.id)),
+            }),
+          })
+          return { kept, removed }
+        })
+      })
+    },
+
+    /**
      * A verifier confirms finding `id` (`verified: true`), or replaces it with
      * `amended`, the same id, confirmed. Amending is refused once the person
      * decided on it.
@@ -713,6 +882,9 @@ export function createStore(dir) {
     verify(id, amended) {
       return withFileLock(reviewFile, async () => {
         const review = await readReview()
+        // A verifier of the run before a reset never confirms one of the next run's.
+        if (statusOf(review) === 'preparing')
+          throw new StoreRefusal('the review waits to start: nothing is verified')
         const known = review.findings.find((one) => one.id === id)
         if (!known) throw new StoreRefusal(`no finding ${id} in the review`)
         if (amended === undefined) {

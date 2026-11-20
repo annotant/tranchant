@@ -1018,6 +1018,163 @@ test('a review done names its stopped lenses together, and no verified count unl
   expect(agents.textContent).not.toContain('verified')
 })
 
+const LENS_RECORDS = ['bugs', 'tests', 'docs'].map((name) => ({
+  name,
+  source: `tranchant:${name}`,
+  hash: 'a'.repeat(64),
+}))
+
+const interruptedAgent = (name: string) => ({
+  name,
+  running: false,
+  outcome: 'interrupted' as const,
+  steps: [{ at: 2, kind: 'end', label: 'Interrupted', state: 'failed' as const }],
+})
+
+test('a review running offers Pause and Stop the review, confirmed inline with three ways out', async () => {
+  const server = await renderApp({
+    ...payload({
+      review: { status: 'reviewing', verify: true, lenses: LENS_RECORDS, findings: [] },
+    }),
+    reviewers: [
+      { name: 'rv-bugs', running: true, steps: [] },
+      { name: 'rv-tests', running: false, outcome: 'done', steps: [] },
+    ],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  // The lens not started yet shows, queued.
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('docs').closest('li')?.className).toContain(
+    'tr-lens--queued',
+  )
+  fireEvent.click(within(agents).getByRole('button', { name: 'Pause' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/pause',
+      body: { now: false },
+    }),
+  )
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  const confirm = within(agents).getByRole('alertdialog', { name: 'Stop the review?' })
+  expect(confirm.textContent).toContain(
+    'bugs end now, before they finish; docs never start.',
+  )
+  expect(within(agents).queryByRole('button', { name: 'Pause' })).toBeNull()
+  fireEvent.click(within(confirm).getByRole('button', { name: 'Keep it running' }))
+  expect(within(agents).queryByRole('alertdialog')).toBeNull()
+  // Stop the review keeps the findings: no reset asked.
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  fireEvent.click(
+    within(within(agents).getByRole('alertdialog')).getByRole('button', {
+      name: 'Stop the review',
+    }),
+  )
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/halt',
+      body: { reset: false },
+    }),
+  )
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop and reset' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/halt',
+      body: { reset: true },
+    }),
+  )
+})
+
+test('a review pausing offers Pause now; paused, Resume, the lenses left marked', async () => {
+  const server = await renderApp({
+    ...payload({
+      review: {
+        status: 'reviewing',
+        verify: true,
+        lenses: LENS_RECORDS,
+        paused: { at: '2026-11-20T10:00:00Z' },
+        findings: [],
+      },
+    }),
+    reviewers: [{ name: 'rv-bugs', running: true, steps: [] }],
+  })
+  let agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('Pausing')
+  expect(agents.textContent).toContain('bugs finishes its work; nothing new starts')
+  fireEvent.click(within(agents).getByRole('button', { name: 'Pause now' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/pause',
+      body: { now: true },
+    }),
+  )
+
+  cleanup()
+  const paused = await renderApp({
+    ...payload({
+      review: {
+        status: 'reviewing',
+        verify: true,
+        lenses: LENS_RECORDS,
+        paused: { at: '2026-11-20T10:00:00Z', now: true },
+        findings: [],
+      },
+    }),
+    reviewers: [interruptedAgent('rv-bugs')],
+  })
+  agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('Review paused')
+  expect(agents.textContent).toContain('bugs was interrupted, and runs again on Resume')
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('tests').closest('li')?.textContent).toContain('paused')
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  expect(within(agents).getByRole('button', { name: 'Keep it paused' })).toBeTruthy()
+  fireEvent.click(within(agents).getByRole('button', { name: 'Keep it paused' }))
+  fireEvent.click(within(agents).getByRole('button', { name: 'Resume' }))
+  await waitFor(() =>
+    expect(paused.posts).toContainEqual({ url: '/api/review/resume', body: {} }),
+  )
+})
+
+test('a review stopped keeps its findings, marks the rest not covered, and offers only Reset', async () => {
+  const server = await renderApp({
+    ...payload({
+      review: {
+        status: 'complete',
+        verify: true,
+        lenses: LENS_RECORDS,
+        stopped: { at: '2026-11-20T10:00:00Z' },
+        findings: [FINDINGS[0]!],
+      },
+    }),
+    reviewers: [
+      { name: 'rv-bugs', running: false, outcome: 'done', steps: [] },
+      stoppedAgent('rv-tests'),
+    ],
+  })
+  const header = document.querySelector<HTMLElement>('.tr-header')!
+  expect(header.textContent).toContain('review stopped · 1 finding')
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('Review stopped')
+  expect(agents.textContent).toContain('1 of 3 lenses covered')
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('docs').closest('li')?.textContent).toContain(
+    'not covered',
+  )
+  expect(within(lenses).getByText('tests').closest('li')?.className).toContain(
+    'tr-lens--failed',
+  )
+  expect(within(agents).queryByRole('button', { name: 'Pause' })).toBeNull()
+  expect(within(agents).queryByRole('button', { name: 'Stop the review' })).toBeNull()
+  expect(
+    screen.getByRole('option', { name: new RegExp(FINDINGS[0]!.title) }),
+  ).toBeTruthy()
+  fireEvent.click(within(agents).getByRole('button', { name: 'Reset the review' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({ url: '/api/review/reset', body: {} }),
+  )
+})
+
 test('the header switches the theme through the settings, for every page', async () => {
   const server = await renderApp()
   const header = document.querySelector<HTMLElement>('.tr-header')

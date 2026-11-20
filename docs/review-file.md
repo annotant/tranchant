@@ -86,6 +86,8 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `lenses`      | array, optional           | The lenses `/tranchant review` ran, as the Lenses step built them: `{ name, source, version?, hash }`, `source` as the recipe names it, `version` a plugin's, `hash` the SHA-256 of the prompt built (`<state>/lenses/<hash>.md`). |
 | `group`       | string, optional          | The group of lenses `/tranchant review` ran ([groups of lenses](settings.md#groups-of-lenses)), set once the Lenses step built them; the page's header and progress bar name it. Not part of what tells a review from another. |
 | `refusal`     | object, optional          | With `refused`: `{ lens, source, reason, fix? }`, the lens that could not be built, its source, why, and what fixes it. |
+| `paused`      | object, optional          | The page's **Pause** on a `/tranchant review` still `reviewing`: `{ at, now? }`; no review agent starts until **Resume** removes it, and the review does not complete. `now`: **Pause now** ended the agents at work, which run again from the start on Resume. See [pause, stop and reset](#pause-stop-and-reset). |
+| `stopped`     | object, optional          | The page's **Stop the review**: `{ at }`; its agents ended, no Resume, nothing more lands (`add.mjs` and `summarize.mjs` refuse), and the hooks complete it. Only **Reset the review** runs it again. |
 | `mr.forge`    | `github` or `gitlab`, optional | `gitlab` when absent. On GitHub (`/tranchant comments`), `mr.project` is `owner/repo` and `mr.iid` the pull request's number; it has no `diffRefs` (refused there): its findings are replied on, never posted as comments of their own. `mr.url` names no user or password before its host, the host a reply's token goes to. |
 | `mr.viewer`   | string, optional          | Who imported its threads (`/tranchant comments`: GitHub's `viewer`, `glab api user`): the page marks their comments in a thread as theirs. |
 | `mr.diffRefs` | object                    | GitLab's `diff_refs` of the MR version reviewed: a positioned comment needs all three, and its `headSha` to be the review's `headSha` (an `ours` branch ahead of or behind its MR cannot post: push it first). |
@@ -394,7 +396,7 @@ left goes, the run that fixed it having finished it.
 settings' `startReview` off (**Start the review by itself**, on by default)
 without `--start`, builds the lenses and starts no reviewer. The flag is
 never saved. `prepare.mjs` writes in the plan why it waits (`wait`:
-`flag` or `setting`), how many files the change has (`changed`), how many of them
+`flag` or `setting`; `reset` once [Reset the review](#pause-stop-and-reset) wrote it), how many files the change has (`changed`), how many of them
 each lens reads (`files`) and `others`, the lenses that could run but do
 not: off in the settings (`off: true`), or reading none of its files. The
 Lenses step builds the lenses that run, leaves the review `preparing` and
@@ -439,6 +441,40 @@ nor `remember` on a run's own recipe; Remember checks the settings file
 before it writes anything. `/tranchant stop` refuses a review that waits,
 or whose Start is at work.
 
+## Pause, stop and reset
+
+The page's progress panel of a `/tranchant review` that runs has two
+controls with two intents, **Pause** (I'll come back to it) and **Stop the
+review** (I'm done with it), and a stopped one has a third, **Reset the
+review**. None of them touches a fix, a discussion or a
+post under way: those belong to the findings, not to the review.
+
+- **Pause** writes `paused`: no agent of the review's queue starts, those at
+  work finish theirs and their findings land (*Pausing*). **Pause now**,
+  while it pauses, ends them; each is queued again first and runs from the
+  start on Resume: its run file ends with an `end` step labelled
+  `Interrupted` (`outcome: "interrupted"` in `/api/review`), and the page
+  says *interrupted · runs again on Resume*. Once none runs: *Review
+  paused*. **Resume** starts the queue where it stopped; with nothing left,
+  the review completes.
+- **Stop the review**, paused or not, asks first, inline: **Keep it
+  running** (*Keep it paused*), **Stop the review** or **Stop and reset**. It
+  writes `stopped`: the agents at work end now, the queued ones never start,
+  there is no Resume, and the hooks complete the review. The lenses left are
+  *not covered*; the findings that landed stay to read and settle.
+- **Reset the review** (and **Stop and reset**), the one control of a
+  stopped review, with no confirmation (the stop had one): `reset.mjs`
+  removes its findings and their decisions, keeps the lenses built and its
+  plan, and `lenses.mjs --replan` brings the page to **Ready to start the
+  review** ([waiting to start](#waiting-to-start), `wait: "reset"`), the
+  lenses it ran on. **Start the review** runs it again from scratch, on the
+  same commits (`headSha`): a fix already made stays on the working tree,
+  where the reviewers read the files, but in the diff only once committed and
+  reviewed again; a finding still held by a fix, a post, an issue or a
+  question stays.
+
+`/tranchant stop` still ends everything, a paused review's agents included.
+
 ## The run files
 
 One JSON object per line, as the hooks record the agent's tools:
@@ -464,8 +500,11 @@ finding), its tools and its notes (whole, line breaks kept, up to 8,000
 characters: the page shows its last as the lens's report), and an `end`
 step when it ends (`done`) or
 is stopped (`failed`). It is never moved: `/api/review` lists every review
-agent, running until its `end`; one whose session closed before it ended
-keeps showing running.
+agent, running until the `end` after its last `start` (an agent Pause now
+ended starts again in the same file); one whose session closed before it
+ended keeps showing running. A reset removes them, but a discussing agent's
+whose finding stays; a review agent's step that lands on a review back to
+`preparing` is not written.
 
 ## `/tranchant review`
 
@@ -546,7 +585,8 @@ reviews a change with no producer of your own:
 6. Once the summary agent, every reviewer and every verifier ended, the hooks start a verifier for any
    finding still unverified that had none (`verify.mjs --pending`), then call
    `complete.mjs`. `/tranchant stop` ends the review agents and completes the
-   review too.
+   review too, and so does the page's **Stop the review**
+   ([pause, stop and reset](#pause-stop-and-reset)).
 
 Nothing is written in the reviewed working tree; a merge request's head is
 fetched into its `.git` when the checkout lacks it.
@@ -637,6 +677,9 @@ locks and show no progress.
 | `DISCUSS <id>`                                             | The reviewer asked about finding `id`: the hooks start its discussing agent. Again at start for each question still waiting. |
 | `CLEAN <id>`                                               | The page added a lens, or asked for one to be cleaned again: the hooks start cleaning `id`'s agent (`clean.mjs --start`). |
 | `START <review id>`, `BUILD <review id>`                   | The page's Start the review, or Build the lenses again, on a review waiting to start: the hooks run `lenses.mjs --start` or `--replan`. |
+| `PAUSE <review id>`, `PAUSE_NOW <review id>`, `RESUME <review id>` | The page's Pause, Pause now and Resume, `paused` written already (removed, for `RESUME`): the hooks start no review agent, end those at work and queue them again first, or start the queue again. |
+| `HALT <review id>`                                         | The page's Stop the review, `stopped` written already: the hooks end the review's agents, empty its queue and complete it. |
+| `RESET <review id>`                                        | The page's Reset the review, or Stop and reset after `HALT`: the hooks run `reset.mjs`, then `lenses.mjs --check --replan` on its plan. |
 | `PORT_BUSY <port> is used by <owner>`                      | Could not listen.                                                                |
 | `REVIEW_REFUSED <reason>`                                  | The review folder is unreadable or its version unknown.                          |
 | `HOOKS_MISSING …`                                          | Started outside the plugin's hooks (`TRANCHANT_HOOKS` unset).                    |
@@ -652,6 +695,7 @@ locks and show no progress.
 | `GET /api/account`    | `{ username, tool }`: the account `tool` posts as, `glab api user`'s `username` or `gh api user`'s `login`, run from `project` and kept once known; `null` when the tool cannot say (not installed, not logged in, an error), asked again next time. `tool` is `?tool=glab` or `?tool=gh` when the query names one (the batch bar asks for glab's: MR comments go through glab), else the settings' `postWith`, or with `auto` `gh` on a GitHub tracker and `glab` otherwise. The page names it in a post's confirmation, or says "your glab account", and in the Settings. |
 | `GET /api/settings`, `PUT /api/settings` | The user's settings file, read and written, with the recipe in force for the review's project, every lens that could run on it and the lenses being cleaned: see [the settings file](settings.md). |
 | `POST /api/review/start`, `POST /api/review/build` | `{ lenses: { <name>: true \| false }, remember, group? }`: on a review `preparing` whose `lenses.json` is `waiting` (else 409), the page's choices to `choices.json`, then `START` or `BUILD`. `group`, a group's name or `null` for every lens that is on, plans the lenses again with it; Start with a group other than the one `lenses.json` names answers 409. With `remember`, Start saves them first as Settings › Lenses does, or in the group the review runs; a settings or groups file it cannot read, a lens it cannot change, or a group left with no lens answers 409. 400 for unsound choices. |
+| `POST /api/review/pause`, `/resume`, `/halt`, `/reset` | The review's controls ([pause, stop and reset](#pause-stop-and-reset)), on a `/tranchant review` only. `pause` with `{ now? }` (Pause now) writes `paused` and prints `PAUSE` or `PAUSE_NOW`; `resume` removes it and prints `RESUME`; `halt` with `{ reset? }` writes `stopped` and prints `HALT`, then with `reset` `RESET`; each answers `{ review }`, its envelope, and 409 unless the review is `reviewing` and not stopped (`resume`: paused). `reset`, on a stopped review only, prints `RESET` and answers `{ ok: true }`; 409 for the same stop for 30 seconds, the hooks' reset still at work, then taken again. |
 | `GET /api/lens/prompt`, `POST /api/lens/*` | The lenses the user adds, one by one: see [the settings file's routes](settings.md#the-routes). |
 | `GET /api/tracker`    | `{ kind, web, prefix }`: where the project's issues go, from its `origin` remote, as `issue.mjs` reads it (both name the same project): `kind` `github` for `github.com`, `*.ghe.com` and `github.<domain>` hosts, `gitlab` for a host that names gitlab or any host when the review has an `mr`, and the settings' `postWith` (`glab` or `gh`) for a host neither names (one the other forge owns is refused, with the reason); an SSH endpoint (`ssh.github.com`, `altssh.gitlab.com`) or an account alias (`github.com-work`) names the forge itself. `web` the project's page; `prefix` the project's folder in its repository (the page links an issue's anchor to `<web>/blob/<ref>/<prefix><path>#L<line>`, `/-/blob/` on GitLab, `<ref>` the commit reviewed when it is the MR's head, else the branch). `{ kind: null, reason }` when there is none (no `origin`, not a url, another forge, git failing); a failure is read again on the next request. |
 | `GET /api/diff`       | `{ base, head, files, diff }`: the change's unified diff, `git diff <base>...<headSha>` run in `project` (`baseSha..headSha` with `mr.diffRefs` at the review's `headSha`; on `theirs`, refs at another head are refused, on `ours` the branch's own range is used), its paths relative to `project` like the findings', and its files, each `{ path, oldPath?, additions, deletions, binary }`. Computed once; a failure is computed again on the next request. Answers 409 with the reason when git is missing, `project` is not a git repository, a commit is not there, `base` is not a revision, the diff is empty or past `TRANCHANT_MAX_DIFF_MIB` (32), or git fails; the server logs git's words on stderr, and the page shows its list view. |
@@ -687,6 +731,7 @@ server's.
 | `issue.mjs <id>`                                                                                                            | Opens the issue the reviewer wrote (`issue.title`, `issue.body`) on the project `/api/tracker` names (the settings' `postWith` naming the forge for a host neither tool recognises), run from `project`: on GitHub `gh api --method POST --hostname <host> --header 'Content-Type: application/json' --input - repos/<owner>/<repo>/issues` with `{ title, body }`; on GitLab `glab api --method POST --hostname <host> … projects/<the remote's path, encoded>/issues` with `{ title, description }`. The tool has 60 seconds (`TRANCHANT_TOOL_TIMEOUT_MS`). Then `queued` → `moved` with `issue.url` and `issue.ref` (`#<number>`, `#<iid>`, absent when the answer has none), or `failed` with the tool's first error line; an answer without the issue's url fails saying where to check, since the issue may be open. Prints `moved <url>` or `failed <reason>`. Run by the server on an `issue` decision, never by an agent; a run that ends without a reason (a crash) is failed by the server, as a post is. |
 | `open.mjs <review.json> [--verify \| --refresh]`                                                                                         | Validates and imports a review: the envelope into `review.json`, each inline finding into `findings/<id>.json`; prints `REVIEW <dir>`. `verify` and `verified` are dropped; `--verify`, which `/tranchant review` passes, keeps `verify`. Review and finding ids match `[\w-]{1,64}`: they become folder names and words on protocol lines. An id already imported with the same envelope (`status`, `verify` and `findings` aside: a review grows) is reused, decisions kept, its inline findings not there yet added; with another envelope, or a finding of other content, it is refused (`REVIEW_REFUSED id <id> exists with other content`, `REVIEW_REFUSED finding <id> exists with other content`): the producer mints a new id. `--refresh`, which `/tranchant comments` passes, takes the same PR/MR of the same project again: the envelope replaced (its `createdAt` kept), the findings new or changed written (their `addedAt` kept), the decisions untouched. |
 | `add.mjs --review <dir> [--lens <name>] [--file <finding.json>]`                                                            | Adds one finding, from the file or stdin, to a review still `reviewing`: checked as a review's are (id, anchor, `comment` when `theirs`), written to `findings/<id>.json` with `addedAt`, and with `--lens` the lens that found it (`lens`); prints `ADDED <id>`. The same finding again is accepted silently; another one under the same id, an unsound one, or any once the review is complete prints `ADD_REFUSED <reason>` and exits 2.                                                                                                                                                                                                                                   |
+| `reset.mjs --review <dir>` | The page's Reset the review, run by the hooks once the review's agents ended: on a review `stopped`, its plan (`<state>/inbox/<id>.plan.json`) read first, then the review back to `preparing`, its summary and strengths blank, and its findings, their decisions, runs and discussions and the review agents' run files removed, but for a finding a fix, a post or an issue holds (`queued`, `working`, `asking`) or whose discussion waits, kept with all of it; the plan written back with `wait: "reset"`, and `choices.json`, unless the page wrote one, turning on the lenses the review ran. Prints `RESET <plan file>`, the findings kept on stderr. `RESET_REFUSED <reason>`, exit 2, removing nothing: not stopped, or no sound plan. The plan and the choices are written before anything is removed. |
 | `complete.mjs --review <dir>`                                                                                               | Sets `status` to `complete`; prints `COMPLETE`. On a review complete already, `COMPLETE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `prepare.mjs [<branch> \| <mr url>] [--recipe <file> \| --group <name>] [--start \| --no-start]` | Run from the session's folder: writes the envelope of `/tranchant review`, `preparing`, to `<state>/inbox/<id>.json` and prints `INBOX <file>`, then the plan, `{ recipe, lenses }`, the lenses the change touches: the recipe in force's ([where it comes from](#where-the-recipe-comes-from)) and, unless `--recipe`, those the user added, under each name the first that is on (the settings' `disabledLenses` turn a recipe's lens off, `lensModels` set its model; one `otherwise` lens at most, the first); a settings file it cannot read is said on stderr and read as none), to `<id>.plan.json` and prints `PLAN <file>`. `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying (or every one turned off), a merge request glab cannot read (glab's reason), both `--start` and `--no-start`. A review that waits ([waiting to start](#waiting-to-start)) plans `others` too, and is refused only when no lens could read the change. With `--group`, or the project's default group, the plan runs that group's lenses, whatever their switches, and names it (`group`), with its `notes`, each also on stderr as `group: <note>`; an unknown group, a groups file it cannot read with `--group`, or `--group` with `--recipe` is refused; a groups file it cannot read without `--group` is said on stderr (`groups: …`) and read as none. |
 | `lenses.mjs --review <dir> --plan <file> [--check \| --replan \| --start]` | The Lenses step, once the page is open. With `--check`, first: each added lens's source hashed again; one changed since its last cleaning, and not by the change under review, prints `STALE {name, scope}`, its row `cleaning: "running"`. Without: builds each lens of the plan, writing `lenses.json` as it goes (an added lens's row with its `scope` and, when its source changed, `cleaning`: `again`, `failed` or `held`, with the reason); every lens built, the review becomes `reviewing` with its `lenses` and it prints one `LENS <json>` per lens (`{ name, prompt, paths, model?, topics? }`, `prompt` the built file, `model` on Auto-detect its source's frontmatter's or `inherit`, the session's), each ready row naming the model its reviewer runs on (`model`, absent the session's; `modelFrom`: `forced`, `auto`, `lens` or `reviewers`; `autoWhy` on Auto-detect's fallback: `none`, `inherit`, `foreign`, `unreadable`, or `held` when the change under review edits an added lens's source). A source that cannot be resolved makes the review `refused` and prints `REVIEW_REFUSED lens <name> (<source>): <reason>; <fix>`, exit 2, no `LENS` line. A plan that waits prints `WAITING` instead ([waiting to start](#waiting-to-start)); `--replan` and `--start` make the plan again, the page's `choices.json` applied. |

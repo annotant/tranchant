@@ -9,6 +9,17 @@ released to the `stable` branch.
 
 ### Added
 
+- **Pause, stop and reset a review.** The progress panel of a
+  `/tranchant review` gets **Pause**: no new agent starts, those at work
+  finish (*Pausing*), and **Pause now** ends them, each running again from
+  the start on **Resume**. **Stop the review**, paused or not, asks inline
+  (**Keep it running**, **Stop the review**, **Stop and reset**): the agents
+  at work end, the queued ones never start, the lenses left are *not
+  covered*, and the findings that landed stay to read and settle, with no
+  Resume. **Reset the review** removes its findings and decisions, keeps the
+  lenses built, and brings the page back to **Ready to start the review**.
+  A fix, a post, an issue or a discussion under way goes on through each,
+  its finding kept by a reset.
 - **A lens's model on Auto-detect: its source's, else the session's.** A
   lens's **Model** select starts with **Auto-detect**, the default of a lens
   you add: the model its agent's, skill's or command's frontmatter names

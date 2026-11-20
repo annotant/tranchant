@@ -793,6 +793,15 @@ async function onLine(
     case 'START':
     case 'BUILD':
       return startWaiting($, watched, kind)
+    case 'PAUSE':
+    case 'PAUSE_NOW':
+      return pauseReview($, watched.dir, kind === 'PAUSE_NOW')
+    case 'RESUME':
+      return resumeReview($, watched.dir)
+    case 'HALT':
+      return haltReview($, watched.dir)
+    case 'RESET':
+      return resetReview($, watched)
     default:
       // POSTED, POST_FAILED, MOVED, ISSUE_FAILED, AGENT_ENDED: the server's own doing.
       return debug($, `${tag(id)}: ${kind}`)
@@ -1222,8 +1231,14 @@ async function workerDone($: $, agent: string, answer: string) {
 // at a time (or as the settings say), started
 // with no model turn; once every one ended, the review completes.
 
-/** Review agents starting, by key: their review folder, and whether a stop came meanwhile. */
-const startingReview = new Map<string, { dir: string; since: number; stop: boolean }>()
+/**
+ * Review agents being started, by key: `end` once a stop came meanwhile, which
+ * ends each once started; `requeue` (Pause now) queues it again first.
+ */
+const startingReview = new Map<
+  string,
+  { dir: string; since: number; kind: ReviewJob['kind']; end?: 'stop' | 'requeue' }
+>()
 let reviewDispatching: Promise<void> = Promise.resolve()
 let completing: Promise<void> = Promise.resolve()
 
@@ -1418,7 +1433,10 @@ async function startReviewQueued($: $) {
   while ((await busyReviewing($)) < cap) {
     let next: { dir: string; job: ReviewJob } | undefined
     await update($, reviewRuns, (all) => {
-      const dir = Object.keys(all).find((one) => all[one]?.queue.length)
+      // A paused review keeps its queue for Resume.
+      const dir = Object.keys(all).find(
+        (one) => all[one]?.queue.length && !all[one]?.paused,
+      )
       const run = dir === undefined ? undefined : all[dir]
       if (dir === undefined || !run) return all
       const [job, ...queue] = run.queue
@@ -1466,7 +1484,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
   const key = agentKey(name, dir)
   const kind = job.kind
   const instructions = reviewInstructions($, job)
-  startingReview.set(key, { dir, since: Date.now(), stop: false })
+  startingReview.set(key, { dir, since: Date.now(), kind })
   const label = spawnName(name, dir)
   const lensModel = job.kind === 'reviewer' ? job.lens.model : undefined
   const started = await (async () =>
@@ -1521,6 +1539,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     since: meanwhile?.since ?? Date.now(),
     model,
     ...(lensModel && { lensModel }),
+    job,
   }
   await setReviewAgent($, key, one)
   await reviewNote($, one, agent, [
@@ -1538,7 +1557,15 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     },
   ])
   await debug($, `${tag(name)}: agent ${agent} started`)
-  if (meanwhile?.stop) await endReviewAgent($, key, one, 'stopped', 'Stopped')
+  if (!meanwhile?.end) return
+  await endReviewAgent(
+    $,
+    key,
+    one,
+    'stopped',
+    meanwhile.end === 'requeue' ? INTERRUPTED : 'Stopped',
+  )
+  if (meanwhile.end === 'requeue') await requeue($, dir, [job])
 }
 
 /** A review agent ended, or was ended: its last step, and what comes next. */
@@ -1635,8 +1662,10 @@ async function verifyLanded($: $, dir: string, id: string) {
     queued = true
     return {
       ...all,
+      // The whole run kept: a finding that lands while it pauses leaves it paused.
       [dir]: {
-        queue: [...run.queue, { kind: 'verifier', id }],
+        ...run,
+        queue: [...run.queue, { kind: 'verifier' as const, id }],
         verifying: [...run.verifying, id],
       },
     }
@@ -1662,8 +1691,9 @@ async function unverified($: $, dir: string) {
  */
 async function completeIfDone($: $, dir: string) {
   const run = (await read($, reviewRuns))[dir]
-  // Waiting for a lens's cleaning, or for Start: no reviewer started yet.
-  if (!run || run.queue.length || run.waiting || run.ready || run.starting) return
+  // Waiting for a lens's cleaning, or for Start: no reviewer started yet; paused, for Resume.
+  if (!run || run.queue.length || run.waiting || run.ready || run.starting || run.paused)
+    return
   if ([...startingReview.values()].some((one) => one.dir === dir)) return
   const agents = Object.values(await read($, reviewAgents))
   if (agents.some((one) => one.review === dir && one.running)) return
@@ -1703,7 +1733,7 @@ async function sayNoSummary($: $, dir: string, agents: ReviewAgent[]) {
   )
 }
 
-/** Ends review `dir`'s run: complete.mjs, and the toast; `stopped` by /tranchant stop. */
+/** Ends review `dir`'s run: complete.mjs, and the toast; `stopped` by /tranchant stop or the page's Stop the review. */
 async function finishReview($: $, dir: string, why: string, stopped = false) {
   await update($, reviewRuns, (all) => {
     if (!(dir in all)) return all
@@ -1750,7 +1780,7 @@ async function reviewAgentDone($: $, agent: string, answer: string) {
 
 /** Ends every review agent and empties the queues: `/tranchant stop`. */
 async function stopReviewing($: $) {
-  for (const pending of startingReview.values()) pending.stop = true
+  for (const pending of startingReview.values()) pending.end = 'stop'
   // The questions waiting for an agent get none: each is answered as failed.
   const asked = await read($, discussing)
   await update($, discussing, () => noDiscussing)
@@ -1817,6 +1847,172 @@ async function stopReviewing($: $) {
   for (const dir of runs) await finishReview($, dir, '/tranchant stop', true)
   return running.length + cleaners.length
 }
+
+/** The `end` step's label of an agent Pause now ended: readReviewAgents reads it (lib/store.mjs's INTERRUPTED). */
+const INTERRUPTED = 'Interrupted'
+
+/** Review `dir`'s agents at work that its controls end: the discussing agents belong to their findings. */
+async function reviewAgentsAtWork($: $, dir: string) {
+  return Object.entries(await read($, reviewAgents)).filter(
+    ([, one]) => one.review === dir && one.running && one.kind !== 'discusser',
+  )
+}
+
+/**
+ * Ends review `dir`'s agents at work with `label`, each read again first:
+ * one whose turn ended meanwhile is left as it ended. Answers those it ended.
+ */
+async function endAtWork($: $, dir: string, label: string) {
+  const cut: ReviewAgent[] = []
+  for (const [key] of await reviewAgentsAtWork($, dir)) {
+    const one = (await read($, reviewAgents))[key]
+    if (!one?.running) continue
+    // An agent with no job (started before this version) cannot run again: stopped, not interrupted.
+    const why = label === INTERRUPTED && !one.job ? 'Stopped' : label
+    await endReviewAgent($, key, one, 'stopped', why)
+    cut.push(one)
+  }
+  return cut
+}
+
+/** `jobs` back at the head of review `dir`'s queue, in order: they run again from the start. */
+async function requeue($: $, dir: string, jobs: ReviewJob[]) {
+  if (!jobs.length) return
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run) return all
+    return { ...all, [dir]: { ...run, queue: [...jobs, ...run.queue] } }
+  })
+}
+
+/**
+ * The page's Pause (`PAUSE`): no agent of the queue starts, those at work
+ * finish theirs. Pause now (`PAUSE_NOW`) ends them, and queues each again
+ * first, to run from the start on Resume.
+ */
+async function pauseReview($: $, dir: string, now: boolean) {
+  let found = false
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run) return all
+    found = true
+    return { ...all, [dir]: { ...run, paused: true as const } }
+  })
+  if (!found) {
+    $.ui.toast('Tranchant did not pause the review: no agent of it runs in this session.')
+    return
+  }
+  await debug($, `${dir}: paused${now ? ' now' : ''}`)
+  if (!now) return
+  for (const pending of startingReview.values())
+    if (pending.dir === dir && pending.kind !== 'discusser' && !pending.end)
+      pending.end = 'requeue'
+  const cut = await endAtWork($, dir, INTERRUPTED)
+  const lost = cut.filter((one) => !one.job).map((one) => one.name)
+  if (lost.length)
+    $.ui.toast(
+      `Tranchant stopped ${lost.join(', ')} for good: started before this version, ${lost.length > 1 ? 'they do' : 'it does'} not run again on Resume.`,
+    )
+  await requeue(
+    $,
+    dir,
+    cut.flatMap((one) => (one.job ? [one.job] : [])),
+  )
+}
+
+/** The page's Resume: the queue starts where it stopped; nothing left, the review completes. */
+async function resumeReview($: $, dir: string) {
+  let found = false
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run) return all
+    found = true
+    const { paused: _paused, ...rest } = run
+    return { ...all, [dir]: rest }
+  })
+  if (!found) {
+    $.ui.toast(
+      'Tranchant did not resume the review: this session holds no run of it. Stop the review on the page, then reset it.',
+    )
+    return
+  }
+  await pumpReviews($)
+  await checkComplete($, dir)
+}
+
+/**
+ * Ends review `dir`'s agents at work, and those being started, and empties
+ * its queue: out of the runs first, so an agent that ends meanwhile starts
+ * and completes nothing.
+ */
+async function endReviewRun($: $, dir: string) {
+  for (const pending of startingReview.values())
+    if (pending.dir === dir && pending.kind !== 'discusser') pending.end = 'stop'
+  await update($, reviewRuns, (all) => {
+    if (!(dir in all)) return all
+    const { [dir]: _gone, ...rest } = all
+    return rest
+  })
+  await endAtWork($, dir, 'Stopped')
+}
+
+/** The page's Stop the review (`HALT`): its agents end now, its queue never starts, and it completes, stopped. */
+async function haltReview($: $, dir: string) {
+  await endReviewRun($, dir)
+  await finishReview($, dir, 'stopped from the page', true)
+}
+
+/**
+ * The page's Reset the review (`RESET`), on a review stopped: reset.mjs
+ * removes its findings, then the Lenses step builds its lenses again
+ * (`--replan`), and it waits for Start the review, as with `--no-start`.
+ */
+async function resetReview($: $, watched: Watch) {
+  const dir = watched.dir
+  const run = (await read($, reviewRuns))[dir]
+  if (run?.ready || run?.starting || run?.waiting) {
+    await debug($, `${dir}: reset already under way`)
+    return
+  }
+  // Whatever still runs ends before its findings go: none lands on the reset review.
+  await endReviewRun($, dir)
+  const ran = await $.process
+    .run(['node', `${skillDir($)}/scripts/reset.mjs`, '--review', dir])
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const lines = linesOf(ran.stdout)
+  const plan = lines.find((line) => line.startsWith('RESET '))?.slice('RESET '.length)
+  if (!plan) {
+    const refused = lines.find((line) => line.startsWith('RESET_REFUSED '))
+    $.ui.toast(
+      `Tranchant did not reset the review: ${refused ? refused.slice('RESET_REFUSED '.length) : short(crashOf(ran.stderr) || `reset.mjs exited ${ran.exitCode}`, 300)}`,
+    )
+    return
+  }
+  const kept = ran.stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('kept '))
+  if (kept) await debug($, `${dir}: ${kept}`)
+  await update($, reviewRuns, (all) => ({
+    ...all,
+    [dir]: { queue: [], verifying: [], starting: { plan } },
+  }))
+  const [said = ''] = await checkThenBuild(
+    $,
+    dir,
+    plan,
+    watched.review?.project ?? '',
+    '--replan',
+  )
+  $.ui.toast(short(said, 300))
+}
+
+/** A script's crash in one line: Node prints the source excerpt first, the error after it. */
+const crashOf = (stderr: string) =>
+  stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => /^\w*Error\b/.test(line)) ?? stderr.trim()
 
 /** After a reload, the review agents at work get their hooks back. */
 async function registerReviewAgentsAgain($: $) {
@@ -2589,7 +2785,7 @@ async function reviewStatus($: $, dir: string) {
   if (run?.ready) return ['  Lenses built: waiting for Start the review on the page.']
   const cap = (await settingsOf($)).maxReviewAgents
   return [
-    `  Reviewing${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${cap} review agents at work.`,
+    `  ${run?.paused ? 'Paused' : 'Reviewing'}${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${cap} review agents at work.`,
     ...lines.map((line) => `    ${line}`),
     ...(queue.length
       ? ['  Review agents waiting, in order:', ...queue.map((one) => `    ${one}`)]

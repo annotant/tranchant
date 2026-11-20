@@ -152,7 +152,7 @@ const review = await store.readReview().catch((error) => stepFailed(message(erro
 /**
  * @type {{ recipe: RecipeRef, lenses: PlannedLens[], own?: true, group?: string,
  *   notes?: string[], removed?: import('./lib/groups.mjs').Member[],
- *   wait?: 'setting' | 'flag', changed?: number, others?: PlannedLens[] }}
+ *   wait?: 'setting' | 'flag' | 'reset', changed?: number, others?: PlannedLens[] }}
  */
 let plan = await readFile(String(planFile), 'utf8')
   .then((text) => JSON.parse(text))

@@ -57,6 +57,8 @@ export type ReviewRun = {
   ready?: { plan: string }
   /** The page's Start or Build the lenses again at work: its plan, until lenses.mjs ends. */
   starting?: { plan: string }
+  /** The page's Pause: no agent of the queue starts until Resume, and the review does not complete. */
+  paused?: true
 }
 
 /**
@@ -78,6 +80,8 @@ export type ReviewAgent = {
   model?: string
   /** A reviewer's: the model its lens asks for, registered again after a reload. */
   lensModel?: string
+  /** What started it: queued again from the start when Pause now ends it. */
+  job?: ReviewJob
 }
 
 /**
