@@ -1063,3 +1063,254 @@ test('a source that could not be read for its agents says so, and is imported as
     vi.unstubAllGlobals()
   }
 })
+
+const CATALOG = {
+  plugins: [
+    {
+      name: 'dba',
+      version: '1.2.0',
+      folder: '~/.claude/plugins/dba/',
+      enabled: false,
+      items: [{ kind: 'agent', name: 'sql-review', source: 'dba:sql-review' }],
+    },
+    {
+      name: 'workflow',
+      version: '2.5.0',
+      folder: '~/.claude/plugins/workflow/',
+      enabled: true,
+      items: [
+        {
+          kind: 'agent',
+          name: 'code-reviewer-abac',
+          source: 'workflow:code-reviewer-abac',
+          already: [{ scope: 'local', name: 'abac' }],
+        },
+        {
+          kind: 'agent',
+          name: 'code-reviewer-api',
+          source: 'workflow:code-reviewer-api',
+        },
+        { kind: 'command', name: 'review-mr', source: 'workflow:review-mr' },
+      ],
+    },
+  ],
+  project: {
+    folder: '.claude/',
+    items: [
+      { kind: 'agent', name: 'money-review', source: '.claude/agents/money-review.md' },
+    ],
+  },
+  user: { folder: '~/.claude/', items: [] },
+  roots: [
+    'this project (~/dev/people-app)',
+    '~/.claude/',
+    "the installed plugins' folders",
+  ],
+}
+
+const DOCS = {
+  root: 'project',
+  path: 'docs',
+  label: 'docs/',
+  entries: [
+    { name: 'checklists', kind: 'folder' },
+    { name: 'private', kind: 'unreadable', reason: 'cannot be read: not opened' },
+    { name: '.env', kind: 'hidden', reason: 'hidden: shown, never opened' },
+    { name: 'shared', kind: 'link', reason: 'leaves this folder: not followed' },
+    { name: 'review-checklist.md', kind: 'file', source: 'docs/review-checklist.md' },
+  ],
+}
+
+const answer = (status: number, body: unknown) =>
+  Promise.resolve(new Response(JSON.stringify(body), { status }))
+
+/** The server as the picker asks it: the catalog, the folders, and nothing inside a source. */
+function stubPicker() {
+  const fetch = vi.fn((url: string) => {
+    if (url === '/api/lens/catalog') return answer(200, CATALOG)
+    if (url.startsWith('/api/lens/folder?go=')) {
+      return url.includes('Documents')
+        ? answer(409, {
+            error:
+              '~/Documents/checklists is not listed: it lies outside the folders Tranchant may list',
+          })
+        : answer(200, DOCS)
+    }
+    if (url.endsWith('path=docs%2Fchecklists'))
+      return answer(200, {
+        root: 'project',
+        path: 'docs/checklists',
+        label: 'docs/checklists/',
+        entries: [
+          { name: 'security.md', kind: 'file', source: 'docs/checklists/security.md' },
+        ],
+      })
+    if (url.startsWith('/api/lens/folder'))
+      return answer(200, { root: 'project', path: '', label: './', entries: [] })
+    return answer(200, { inside: null })
+  })
+  vi.stubGlobal('fetch', fetch)
+  return fetch
+}
+
+test("Browse lists the plugins' agents: one picked fills Source, which stays editable, and is imported", async () => {
+  stubPicker()
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const picker = within(screen.getByRole('region', { name: 'Pick a source' }))
+    await picker.findByText('workflow')
+    expect(picker.getByRole('tab', { name: 'Plugins 4' })).toBeDefined()
+    // A plugin turned off: its items stay pickable, said so.
+    expect(picker.getByText('turned off for this project')).toBeDefined()
+    expect(picker.getByText('plugin off here: the lens would not build')).toBeDefined()
+    expect(picker.getByText('already lens abac · this project')).toBeDefined()
+    fireEvent.click(picker.getByRole('button', { name: /code-reviewer-api/ }))
+    expect(screen.queryByRole('region', { name: 'Pick a source' })).toBeNull()
+    const source = form.getByLabelText('Source')
+    expect(source).toHaveProperty('value', 'workflow:code-reviewer-api')
+    expect(
+      form.getByText('Picked workflow:code-reviewer-api. The field stays yours to edit.'),
+    ).toBeDefined()
+    const add = form.getByRole('button', { name: 'Import and clean' })
+    await waitFor(() => expect(add).toHaveProperty('disabled', false))
+    fireEvent.click(add)
+    expect(onLens).toHaveBeenCalledWith('import', {
+      source: 'workflow:code-reviewer-api',
+      scope: 'local',
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('an item already a lens stays pickable: the help says a second lens is made from it', async () => {
+  stubPicker()
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const picker = within(screen.getByRole('region', { name: 'Pick a source' }))
+    fireEvent.click(await picker.findByRole('button', { name: /code-reviewer-abac/ }))
+    expect(
+      form.getByText(
+        'Picked workflow:code-reviewer-abac: it is already the source of lens abac · this project. Adding it again makes a second lens from it. The field stays yours to edit.',
+      ),
+    ).toBeDefined()
+    // Typed over, it is the user's again.
+    fireEvent.change(form.getByLabelText('Source'), { target: { value: 'workflow:x' } })
+    expect(form.queryByText(/^Picked/)).toBeNull()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a search filters every tab, each counting its matches; an empty one says where they are', async () => {
+  stubPicker()
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Browse…' }))
+    const picker = within(screen.getByRole('region', { name: 'Pick a source' }))
+    await picker.findByText('workflow')
+    fireEvent.change(picker.getByLabelText('Search by name'), {
+      target: { value: 'money' },
+    })
+    expect(picker.getByRole('tab', { name: 'Plugins 0' })).toBeDefined()
+    expect(picker.getByRole('tab', { name: 'This project 1' })).toBeDefined()
+    expect(
+      picker.getByText('Nothing named “money” here: 1 in This project.'),
+    ).toBeDefined()
+    fireEvent.click(picker.getByRole('tab', { name: 'This project 1' }))
+    expect(picker.getByText('.claude/agents/')).toBeDefined()
+    expect(picker.getByRole('button', { name: /money-review/ })).toBeDefined()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('Files: hidden files, links out and unreadable folders are shown, never opened; a folder outside the roots is refused', async () => {
+  const fetch = stubPicker()
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const picker = within(screen.getByRole('region', { name: 'Pick a source' }))
+    fireEvent.click(picker.getByRole('tab', { name: 'Files' }))
+    await picker.findByText('Nothing in this folder.')
+    expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+      '/api/lens/folder?root=project&path=',
+    )
+    const goTo = picker.getByLabelText('Go to a folder')
+    fireEvent.change(goTo, { target: { value: 'docs' } })
+    fireEvent.click(picker.getByRole('button', { name: 'Go' }))
+    await picker.findByText('review-checklist.md')
+    expect(picker.getByRole('button', { name: /\.env/ })).toHaveProperty('disabled', true)
+    expect(picker.getByRole('button', { name: /shared/ })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(picker.getByRole('button', { name: /private\// })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(picker.getByText('leaves this folder: not followed')).toBeDefined()
+    fireEvent.change(goTo, { target: { value: '~/Documents/checklists' } })
+    fireEvent.keyDown(goTo, { key: 'Enter' })
+    const refused = await picker.findByRole('alert')
+    expect(refused.textContent).toContain(
+      '~/Documents/checklists is not listed: it lies outside the folders Tranchant may list.',
+    )
+    expect(refused.textContent).toContain(
+      "Tranchant may list this project (~/dev/people-app), ~/.claude/, the installed plugins' folders.",
+    )
+    // The folder open stays: its file is still there to pick.
+    fireEvent.click(picker.getByRole('button', { name: /review-checklist\.md/ }))
+    expect(form.getByLabelText('Source')).toHaveProperty(
+      'value',
+      'docs/review-checklist.md',
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("Enter in the picker's search or Go to a folder never submits Add a lens; a folder opens, and the breadcrumb goes back", async () => {
+  const fetch = stubPicker()
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), { target: { value: 'workflow:x' } })
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const picker = within(screen.getByRole('region', { name: 'Pick a source' }))
+    // fireEvent returns false when the default (the form's submit) was prevented.
+    expect(
+      fireEvent.keyDown(picker.getByLabelText('Search by name'), { key: 'Enter' }),
+    ).toBe(false)
+    fireEvent.click(picker.getByRole('tab', { name: 'Files' }))
+    const goTo = picker.getByLabelText('Go to a folder')
+    fireEvent.change(goTo, { target: { value: 'docs' } })
+    expect(fireEvent.keyDown(goTo, { key: 'Enter' })).toBe(false)
+    expect(onLens).not.toHaveBeenCalled()
+    fireEvent.click(await picker.findByRole('button', { name: /checklists\// }))
+    await picker.findByText('security.md')
+    expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+      '/api/lens/folder?root=project&path=docs%2Fchecklists',
+    )
+    const crumbs = within(picker.getByRole('navigation', { name: 'Folder' }))
+    expect(crumbs.getByText('checklists').getAttribute('aria-current')).toBe('location')
+    fireEvent.click(crumbs.getByRole('button', { name: 'docs' }))
+    await waitFor(() =>
+      expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+        '/api/lens/folder?root=project&path=docs',
+      ),
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})

@@ -107,7 +107,10 @@ whose source settles how a library behaves.
 `--recipe <path>` runs your own, in the same shape.
 
 Beside the recipe's lenses, **Settings › Lenses** adds a team's reviewer as
-a lens of its own: a plugin's skill or agent, or a file; a glob
+a lens of its own: a plugin's skill or agent, or a file, typed or picked
+with **Browse…** (the installed plugins', the project's and `~/.claude`'s
+skills, agents and commands, and a file browser limited to the project,
+`~/.claude/` and the plugins' folders, names only); a glob
 (`.claude/agents/*-review.md`) adds every file it matches, listed first to
 check and rename, one cleaning agent each. A command
 (`pr-review-toolkit:review-pr`), or an agent that starts agents it names, is

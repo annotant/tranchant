@@ -414,6 +414,17 @@ async function jsonOf(/** @type {string} */ file) {
  * @param {string} project
  */
 export async function installedPlugin(name, project) {
+  return (await installedPlugins(project)).find((one) => one.name === name)
+}
+
+/**
+ * Every plugin Claude Code has installed for the project at `project`, as
+ * installedPlugin finds each: the first key of a name with an install usable
+ * here, its project's install before the user's, on or off by the settings. Throws a LensRefusal when its
+ * register cannot be read.
+ * @param {string} project
+ */
+export async function installedPlugins(project) {
   const file = path.join(claudeDir(), 'plugins', 'installed_plugins.json')
   const register = await jsonOf(file)
   if (register === undefined && existsSync(file))
@@ -421,10 +432,14 @@ export async function installedPlugin(name, project) {
       `${file} cannot be read`,
       "check Claude Code's plugins (/plugin), then review again",
     )
+  /** @type {{ name: string, key: string, root: string, enabled: boolean, version?: string }[]} */
+  const found = []
   const plugins = register?.plugins
-  if (!plugins || typeof plugins !== 'object') return undefined
+  if (!plugins || typeof plugins !== 'object') return found
+  const names = new Set()
   for (const [key, entries] of Object.entries(plugins)) {
-    if (key.split('@')[0] !== name || !Array.isArray(entries)) continue
+    const name = key.split('@')[0] ?? ''
+    if (names.has(name) || !Array.isArray(entries)) continue
     // The project's own install first: it is the one Claude Code loads there.
     const entry =
       entries.find(
@@ -443,15 +458,17 @@ export async function installedPlugin(name, project) {
       if (typeof set === 'boolean') enabled = set
     }
     const version = typeof entry.version === 'string' ? entry.version.trim() : ''
-    return {
+    names.add(name)
+    found.push({
+      name,
       key,
       root: entry.installPath,
       enabled,
       // A manifest's own words: review.json takes a short one only.
       ...(version && version.length <= 100 && { version }),
-    }
+    })
   }
-  return undefined
+  return found
 }
 
 /** The plugin's lenses, by name: a built-in lens's prompt file. */
