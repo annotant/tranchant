@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { expect, test, vi } from 'vitest'
 import type { SettingsChange } from '../src/api'
 import App from '../src/App'
@@ -200,6 +201,125 @@ test('an added lens is switched, edited and saved through the server, and remove
   await waitFor(() =>
     expect(onLens).toHaveBeenLastCalledWith('remove', { scope: 'local', name: 'abac' }),
   )
+})
+
+test('a lens being renamed shows its new name on its row as it is typed, and its saved one once closed', () => {
+  renderLenses()
+  const local = group('This project')
+  fireEvent.click(local.getByRole('button', { name: 'Edit' }))
+  const editor = screen.getByRole('region', { name: 'abac' })
+  fireEvent.change(within(editor).getByLabelText('Name'), {
+    target: { value: 'policies' },
+  })
+  expect(local.getByText('policies')).toBeDefined()
+  expect(screen.getByRole('region', { name: 'policies' })).toBe(editor)
+  fireEvent.change(within(editor).getByLabelText('Name'), { target: { value: '  ' } })
+  expect(local.getByText('abac')).toBeDefined()
+  fireEvent.change(within(editor).getByLabelText('Name'), {
+    target: { value: 'policies' },
+  })
+  fireEvent.click(local.getByRole('button', { name: 'Close' }))
+  expect(local.getByText('abac')).toBeDefined()
+  expect(local.queryByText('policies')).toBeNull()
+  fireEvent.click(local.getByRole('button', { name: 'Edit' }))
+  expect(
+    within(screen.getByRole('region', { name: 'abac' })).getByLabelText('Name'),
+  ).toHaveProperty('value', 'abac')
+})
+
+/** The settings the server answers with these lenses. */
+const answered = (lenses: LensEntry[]) =>
+  settingsPayload(
+    {},
+    {
+      recipeFrom: 'plugin',
+      lensSet: { dirs: { global: '/g', local: '/l' }, lenses },
+    },
+  )
+
+/** One field of a request's body, read without trusting its shape. */
+const field = (value: unknown, key: string): unknown =>
+  typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
+
+/** The lenses as the server answers them, renamed and moved by each save. */
+function renderSaving(focus?: string) {
+  function Saving() {
+    const [settings, setSettings] = useState(() => answered(LENSES))
+    return (
+      <LensesView
+        settings={settings}
+        focus={focus}
+        offline={false}
+        onDismiss={() => undefined}
+        onSave={() => undefined}
+        onLens={async (route, body) => {
+          const name = field(body['lens'], 'name')
+          const scope = field(body['lens'], 'scope')
+          if (route !== 'save' || name === 'refused') throw new Error('refused')
+          const lenses = (settings.lensSet?.lenses ?? []).map((one) =>
+            one.scope === body['scope'] && one.name === body['name']
+              ? {
+                  ...one,
+                  name: typeof name === 'string' ? name : one.name,
+                  scope: scope === 'global' || scope === 'local' ? scope : one.scope,
+                }
+              : one,
+          )
+          setSettings(answered(lenses))
+          return {}
+        }}
+      />
+    )
+  }
+  render(<Saving />)
+}
+
+/** The open editor, under the lens's saved name or the one typed. */
+const renamedEditor = () => screen.getByRole('region', { name: /^(abac|policies)$/ })
+
+test('once saved, a renamed lens is listed under its new name, its editor still open on it', async () => {
+  renderSaving()
+  fireEvent.click(group('This project').getByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(renamedEditor()).getByLabelText('Name'), {
+    target: { value: 'policies' },
+  })
+  fireEvent.click(within(renamedEditor()).getByRole('button', { name: 'Global' }))
+  fireEvent.click(within(renamedEditor()).getByRole('button', { name: 'Save' }))
+  const moved = await screen.findByRole('region', { name: 'policies' })
+  expect(group('Global · every project').getByText('policies')).toBeDefined()
+  expect(within(moved).getByLabelText('Name')).toHaveProperty('value', 'policies')
+  expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1)
+  expect(screen.queryByText('abac')).toBeNull()
+})
+
+test('a refused rename keeps the editor open, with what was typed', async () => {
+  renderSaving()
+  fireEvent.click(group('This project').getByRole('button', { name: 'Edit' }))
+  const editor = screen.getByRole('region', { name: 'abac' })
+  fireEvent.change(within(editor).getByLabelText('Name'), {
+    target: { value: 'refused' },
+  })
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))
+  await act(() => Promise.resolve())
+  expect(screen.getByRole('region', { name: 'refused' })).toBe(editor)
+  expect(within(editor).getByLabelText('Name')).toHaveProperty('value', 'refused')
+})
+
+test('the lens the page was opened at, renamed, is no lens gone: the link follows it', async () => {
+  location.hash = '#settings/lenses/local%3Aabac'
+  try {
+    renderSaving('local:abac')
+    const editor = screen.getByRole('region', { name: 'abac' })
+    fireEvent.change(within(editor).getByLabelText('Name'), {
+      target: { value: 'policies' },
+    })
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))
+    await screen.findByRole('region', { name: 'policies' })
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(location.hash).toBe('#settings/lenses/local%3Apolicies')
+  } finally {
+    location.hash = ''
+  }
 })
 
 test('What the reviewer reads shows what the cleaning removed and added, and the prompt whole', async () => {
