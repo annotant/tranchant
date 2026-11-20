@@ -22,7 +22,9 @@ import {
 } from './LensGlob'
 import { alreadyText, type Picked, SourcePicker } from './SourcePicker'
 import {
+  AUTO_MODEL,
   type CleaningEntry,
+  type Detected,
   type GroupsPayload,
   KNOWN_MODELS,
   type LensEntry,
@@ -181,18 +183,64 @@ function filterWords(filter: Filter) {
     .join(' · ')
 }
 
-/** What a lens's row says of it, in one line: where it runs, its topics, its model. */
+/** What a lens's row says of it, in one line: where it runs, its topics. */
 function facts(lens: LensEntry) {
   const on = lens.otherwise
     ? 'the files no other lens takes'
     : lens.paths.join(', ') || '**'
-  return [
-    on,
-    lens.topics?.length ? lens.topics.join(', ') : undefined,
-    lens.model ?? undefined,
-  ]
+  return [on, lens.topics?.length ? lens.topics.join(', ') : undefined]
     .filter(Boolean)
     .join(' · ')
+}
+
+/** The reviewers' model (Settings › Agents), and TRANCHANT_MODEL's when it is set. */
+interface Models {
+  review: string | null
+  forced: string | undefined
+}
+
+const SESSION_MODEL = "the session's model"
+
+/** The model a review would run a lens's reviewer on, and whether its source asks for one it cannot run. */
+function modelFact(lens: LensEntry, models: Models) {
+  if (models.forced) return { text: `TRANCHANT_MODEL · ${models.forced}`, warn: false }
+  if (lens.model === AUTO_MODEL)
+    return {
+      text: `auto · ${lens.detected?.id ?? lens.detected?.model ?? SESSION_MODEL}`,
+      warn: lens.detected?.why === 'foreign',
+    }
+  if (lens.model) return { text: lens.model, warn: false }
+  return { text: `reviewers' · ${models.review ?? SESSION_MODEL}`, warn: false }
+}
+
+/** What a model choice resolves to, and why, in one line beside its select. */
+function resolvesTo(value: string, detected: Detected | undefined, models: Models) {
+  if (models.forced)
+    return {
+      text: `TRANCHANT_MODEL is set: every reviewer runs on ${models.forced}, whatever this says.`,
+      warn: false,
+    }
+  if (value === AUTO_MODEL) {
+    if (!detected)
+      return { text: `→ its source's model, else ${SESSION_MODEL}`, warn: false }
+    const { file, asked } = detected
+    if (detected.why === 'source')
+      return {
+        text: `→ ${file} asks for model: ${asked} → ${detected.id ?? detected.model}`,
+        warn: false,
+      }
+    if (detected.why === 'inherit')
+      return { text: `→ ${file} says model: inherit → ${SESSION_MODEL}`, warn: false }
+    if (detected.why === 'foreign')
+      return {
+        text: `→ ${file} asks for model: ${asked}, not a Claude model → ${SESSION_MODEL}`,
+        warn: true,
+      }
+    return { text: `→ ${file} names no model → ${SESSION_MODEL}`, warn: false }
+  }
+  if (!value)
+    return { text: `→ Settings › Agents: ${models.review ?? SESSION_MODEL}`, warn: false }
+  return undefined
 }
 
 /** Where a lens stands, in a word or two. */
@@ -257,6 +305,10 @@ export function LensesView({
       </main>
     )
   const { lensSet, values, defaults, groups } = settings
+  const models: Models = {
+    review: values.reviewModel,
+    forced: settings.locked.reviewModel ? (values.reviewModel ?? undefined) : undefined,
+  }
   const groupList = groups?.list ?? []
   const frozen = offline || settings.problem !== undefined
   const cleanings = (settings.cleanings ?? []).filter((one) => !one.again)
@@ -301,10 +353,10 @@ export function LensesView({
         next = withSetting(next, defaults, 'disabledLenses', [...off])
       }
       if (change.model !== undefined) {
-        const models = { ...stored.lensModels }
-        if (change.model) models[name] = change.model
-        else delete models[name]
-        next = withSetting(next, defaults, 'lensModels', models)
+        const byLens = { ...stored.lensModels }
+        if (change.model) byLens[name] = change.model
+        else delete byLens[name]
+        next = withSetting(next, defaults, 'lensModels', byLens)
       }
       return next
     })
@@ -545,6 +597,7 @@ export function LensesView({
                             return done
                           }}
                           modelOf={values.lensModels[lens.name]}
+                          models={models}
                           groups={groups ? groupsOf(groupList, lens) : undefined}
                           onGroup={(name) => {
                             setTab('groups')
@@ -738,34 +791,55 @@ function Switch({
   )
 }
 
-function ModelSelect({
+const MODEL_HELP =
+  "Auto-detect: the model its source's frontmatter names (model:), else the model of the session that runs /tranchant review. The source is read again at each review."
+
+/** A lens's Model field: Auto-detect, the reviewers', or an id; beside it, what it resolves to. */
+function ModelField({
   id,
   value,
   disabled,
+  detected,
+  models,
   onChange,
 }: {
   id: string
   value: string
   disabled: boolean
+  detected: Detected | undefined
+  models: Models
   onChange: (model: string) => void
 }) {
-  const models =
-    value && !KNOWN_MODELS.includes(value) ? [value, ...KNOWN_MODELS] : KNOWN_MODELS
+  const ids =
+    value && value !== AUTO_MODEL && !KNOWN_MODELS.includes(value)
+      ? [value, ...KNOWN_MODELS]
+      : KNOWN_MODELS
+  const line = resolvesTo(value, detected, models)
   return (
-    <select
-      id={id}
-      className="tr-input tr-select"
-      value={value}
-      disabled={disabled}
-      onChange={(event) => onChange(event.currentTarget.value)}
-    >
-      <option value="">The reviewers&rsquo; (Settings › Agents)</option>
-      {models.map((model) => (
-        <option key={model} value={model}>
-          {model}
-        </option>
-      ))}
-    </select>
+    <Field id={id} label="Model" help={MODEL_HELP}>
+      <span className="tr-lns-model">
+        <select
+          id={id}
+          className="tr-input tr-select"
+          value={value}
+          disabled={disabled || models.forced !== undefined}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        >
+          <option value={AUTO_MODEL}>Auto-detect</option>
+          <option value="">The reviewers&rsquo; (Settings › Agents)</option>
+          {ids.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+        {line && (
+          <span className={`tr-lns-resolves${line.warn ? ' tr-warn' : ''}`}>
+            {line.text}
+          </span>
+        )}
+      </span>
+    </Field>
   )
 }
 
@@ -1521,6 +1595,7 @@ function LensRow({
   onRecipeModel,
   onLens,
   modelOf,
+  models,
   groups,
   onGroup,
 }: {
@@ -1535,6 +1610,7 @@ function LensRow({
   onRecipeModel: (model: string | null) => void
   onLens: Props['onLens']
   modelOf: string | undefined
+  models: Models
   /** The groups it is in; undefined from a server that has none. */
   groups: string[] | undefined
   /** Opens a group's editor, on the Groups tab. */
@@ -1548,6 +1624,7 @@ function LensRow({
   const [draft, setDraft] = useState<string>()
   const name = (open && draft?.trim()) || lens.name
   const id = `tr-lns-${lens.scope}-${lens.name}`
+  const model = modelFact(lens, models)
   return (
     <li className={`tr-lns-item${open ? ' tr-lns-item--open' : ''}`}>
       <div className="tr-lns-row">
@@ -1569,7 +1646,10 @@ function LensRow({
           {lens.replaces && lens.runs && (
             <span className="tr-chip">replaces the {builtIn ? 'next' : 'built-in'}</span>
           )}
-          <span className="tr-lns-facts">{facts(lens)}</span>
+          <span className="tr-lns-facts">
+            {facts(lens)} ·{' '}
+            <span className={model.warn ? 'tr-warn' : undefined}>{model.text}</span>
+          </span>
           {groups && groups.length > 0 && (
             <span
               className="tr-grp-in"
@@ -1622,6 +1702,7 @@ function LensRow({
               lens={lens}
               frozen={frozen}
               model={modelOf}
+              models={models}
               onModel={onRecipeModel}
             />
           ) : (
@@ -1630,6 +1711,7 @@ function LensRow({
               groups={groups ?? []}
               lens={lens}
               frozen={frozen}
+              models={models}
               onLens={onLens}
               onName={setDraft}
               onMoved={onMoved}
@@ -1716,11 +1798,13 @@ function RecipeLens({
   lens,
   frozen,
   model,
+  models,
   onModel,
 }: {
   lens: LensEntry
   frozen: boolean
   model: string | undefined
+  models: Models
   onModel: (model: string | null) => void
 }) {
   const [tab, setTab] = useState<'settings' | 'reads'>('settings')
@@ -1750,14 +1834,14 @@ function RecipeLens({
               <span>{lens.topics?.join(', ') ?? 'any topic'}</span>
             </div>
           </div>
-          <Field id={`${id}-model`} label="Model">
-            <ModelSelect
-              id={`${id}-model`}
-              value={model ?? ''}
-              disabled={frozen}
-              onChange={(next) => onModel(next || null)}
-            />
-          </Field>
+          <ModelField
+            id={`${id}-model`}
+            value={model ?? ''}
+            disabled={frozen}
+            detected={lens.detected}
+            models={models}
+            onChange={(next) => onModel(next || null)}
+          />
         </div>
       )}
     </>
@@ -1769,6 +1853,7 @@ function AddedLens({
   lens,
   groups,
   frozen,
+  models,
   onLens,
   onName,
   onMoved,
@@ -1777,6 +1862,7 @@ function AddedLens({
   /** The groups it is in: removed, it leaves them. */
   groups: string[]
   frozen: boolean
+  models: Models
   onLens: Props['onLens']
   /** The name as it is typed, for the row to show it. */
   onName: (name: string) => void
@@ -1862,6 +1948,16 @@ function AddedLens({
             <span className="tr-field-label">Source</span>
             <div className="tr-field-body">
               <code>{lens.source}</code>
+              {lens.frontmatter && (
+                <span
+                  className="tr-field-help"
+                  title="Its frontmatter, read at each review"
+                >
+                  {Object.entries(lens.frontmatter)
+                    .map(([key, value]) => `${key}: ${value}`)
+                    .join(' · ')}
+                </span>
+              )}
               {lens.cleaned && (
                 <span className="tr-field-help">
                   Cleaned {new Date(lens.cleaned.at).toLocaleString()}. Its source is
@@ -1916,14 +2012,14 @@ function AddedLens({
               <span className="tr-field-help">None checked: any topic.</span>
             </div>
           </div>
-          <Field id={`${id}-model`} label="Model">
-            <ModelSelect
-              id={`${id}-model`}
-              value={model}
-              disabled={frozen}
-              onChange={setModel}
-            />
-          </Field>
+          <ModelField
+            id={`${id}-model`}
+            value={model}
+            disabled={frozen}
+            detected={lens.detected}
+            models={models}
+            onChange={setModel}
+          />
           <Field
             id={`${id}-rules`}
             label="Added instructions"

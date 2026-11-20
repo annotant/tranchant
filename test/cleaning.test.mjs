@@ -557,6 +557,66 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
   assert.match(row.reason, /wrote no report/)
 })
 
+test("a lens added from an agent is on Auto-detect: it runs on the agent's model, read again at each review with no new cleaning", async (t) => {
+  const { dir } = await repository(t)
+  const agent = path.join(dir, '.claude', 'agents', 'money-review.md')
+  const write = (/** @type {string} */ model) =>
+    writeFile(
+      agent,
+      `---\nname: money-review\n${model}---\n\nAmounts are integers in cents.\n`,
+    )
+  await write('model: haiku\n')
+  await addLens(dir, ['.claude/agents/money-review.md', '--to', 'local'])
+  const stored = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await userlens.readUserLens(userlens.lensDir('local', ${JSON.stringify(dir)}, 'money-review'))))`,
+    ),
+  )
+  assert.equal(stored.model, 'auto')
+  /** The model its LENS line and its row name, once checked for staleness. */
+  const models = async () => {
+    const one = await prepared(dir)
+    const checked = await run(
+      process.execPath,
+      [LENSES, '--review', one.dir, '--plan', one.planFile, '--check'],
+      { env: env() },
+    )
+    assert.doesNotMatch(checked.stdout, /^STALE /m)
+    const built = await run(
+      process.execPath,
+      [LENSES, '--review', one.dir, '--plan', one.planFile],
+      { env: env() },
+    )
+    assert.equal(built.code, 0, built.stdout + built.stderr)
+    const line = built.stdout
+      .split('\n')
+      .filter((text) => text.startsWith('LENS '))
+      .map((text) => JSON.parse(text.slice('LENS '.length)))
+      .find((lens) => lens.name === 'money-review')
+    const row = JSON.parse(
+      await readFile(path.join(one.dir, 'lenses.json'), 'utf8'),
+    ).lenses.find((/** @type {any} */ lens) => lens.name === 'money-review')
+    return [line?.model, row.model, row.autoWhy]
+  }
+  assert.deepEqual(await models(), ['haiku', 'claude-haiku-5-5', undefined])
+  await write('model: sonnet\n')
+  assert.deepEqual(await models(), ['sonnet', 'claude-sonnet-5-5', undefined])
+  // No model named: the session's, which the hooks read when the reviewer starts.
+  await write('')
+  assert.deepEqual(await models(), ['inherit', undefined, 'none'])
+})
+
+test("a lens added with the reviewers' model chosen keeps none of its own", async (t) => {
+  const { dir } = await repository(t)
+  await addLens(dir, ['.claude/agents/money-review.md', '--to', 'local'], { model: null })
+  const stored = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await userlens.readUserLens(userlens.lensDir('local', ${JSON.stringify(dir)}, 'money-review'))))`,
+    ),
+  )
+  assert.equal(stored.model, undefined)
+})
+
 test('clean.mjs --find lists the reviewers of the project, for the user to name one', async (t) => {
   const { dir } = await repository(t)
   await mkdir(path.join(dir, '.claude', 'skills', 'team-review'), { recursive: true })

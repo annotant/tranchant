@@ -16,6 +16,7 @@ import { hashOf } from './project.mjs'
 import {
   LensRefusal,
   RecipeRefusal,
+  autoModel,
   buildLens,
   checkRecipe,
   findRecipe,
@@ -353,26 +354,49 @@ export function recordedSource(label, scope, project) {
 }
 
 /**
+ * A source's text as its hash reads it: its frontmatter's `model:` line left
+ * out, since each review reads that line anew (Auto-detect).
+ * @param {string} text
+ */
+function hashedText(text) {
+  const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+  if (!head?.[1]) return text
+  const kept = head[1]
+    .split('\n')
+    .filter((line) => !line.startsWith('model:'))
+    .join('\n')
+  const at = head[0].indexOf('\n') + 1
+  return text.slice(0, at) + kept + text.slice(at + head[1].length)
+}
+
+/**
  * The hash of a lens's source as it stands, and the source found; throws a
- * LensRefusal when it cannot be found.
+ * LensRefusal when it cannot be found. `wholeHash`, its whole text's: a
+ * lens cleaned before the model line was left out recorded that one.
  * @param {{ source: string }} lens
  * @param {string} project
  */
 export async function hashesOf(lens, project) {
   const source = await resolveSource(lens.source, whereOf(project))
-  return { source, sourceHash: hashText(source.text) }
+  return {
+    source,
+    sourceHash: hashText(hashedText(source.text)),
+    wholeHash: hashText(source.text),
+  }
 }
 
 /**
  * Whether `lens` must be cleaned again: its source changed since its last
  * cleaning, and no cleaning failed on it as it stands (the page's Clean it
- * again tries anew).
+ * again tries anew). Its `model:` line alone changing is no change.
  * @param {UserLens} lens
- * @param {{ sourceHash: string }} now
+ * @param {{ sourceHash: string, wholeHash?: string }} now
  */
 export function staleness(lens, now) {
-  if (now.sourceHash === lens.cleaned.sourceHash) return 'clean'
-  return lens.failedCleaning?.sourceHash === now.sourceHash ? 'failed' : 'stale'
+  const is = (/** @type {string | undefined} */ hash) =>
+    hash !== undefined && (hash === now.sourceHash || hash === now.wholeHash)
+  if (is(lens.cleaned.sourceHash)) return 'clean'
+  return is(lens.failedCleaning?.sourceHash) ? 'failed' : 'stale'
 }
 
 /**
@@ -596,10 +620,14 @@ export async function describeLenses({ project, base, values }) {
       try {
         const built = await buildLens(spec, spec.added ? whereOf(project) : recipeWhere)
         const standing = lens ? staleness(lens, await hashesOf(lens, project)) : undefined
+        const shown = frontmatterOf(built.fields)
         return {
           ...row,
           ...(spec.added && originOfSource(row.source, built.file)),
           ...(built.record.version && { version: built.record.version }),
+          // What Auto-detect finds, whatever the lens's model: the page says it before it is chosen.
+          detected: { file: path.basename(built.file), ...autoModel(built.fields.model) },
+          ...(shown && { frontmatter: shown }),
           ...(standing && standing !== 'clean' && { stale: standing }),
         }
       } catch (error) {
@@ -638,6 +666,20 @@ function originOfSource(label, file) {
   if (!kind && plugin && file && named.split(path.sep).includes('agents')) kind = 'agent'
   if (kind) return { origin: 'picked', sourceKind: kind }
   return { origin: plugin ? 'picked' : 'custom' }
+}
+
+/**
+ * What Settings › Lenses shows of a source's frontmatter: its name, tools
+ * and model, each cut short; undefined when it names none of them.
+ * @param {Record<string, string>} fields
+ */
+function frontmatterOf(fields) {
+  const shown = Object.fromEntries(
+    ['name', 'tools', 'model'].flatMap((key) =>
+      fields[key] ? [[key, fields[key].slice(0, 120)]] : [],
+    ),
+  )
+  return Object.keys(shown).length ? shown : undefined
 }
 
 /** How a lens names its source. @param {LensSpec} lens */

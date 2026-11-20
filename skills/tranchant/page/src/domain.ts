@@ -45,6 +45,12 @@ export interface LensRow {
   scope?: 'global' | 'local'
   /** Its source changed: being cleaned again, cleaned again, its cleaning failed, or held: the change under review changed it. */
   cleaning?: 'running' | 'again' | 'failed' | 'held'
+  /** With `ready`: the model its reviewer runs on; absent, the session's. */
+  model?: string
+  /** What chose it: TRANCHANT_MODEL, Auto-detect, the lens's own, or Settings › Agents. */
+  modelFrom?: 'forced' | 'auto' | 'lens' | 'reviewers'
+  /** On Auto-detect, why the session's: no model in its source, `inherit`, or not a Claude model. */
+  autoWhy?: 'none' | 'inherit' | 'foreign'
 }
 
 /** The page's choices on a review waiting to start: by lens name, on or off for this review. */

@@ -4,7 +4,12 @@ import { expect, test, vi } from 'vitest'
 import type { SettingsChange } from '../src/api'
 import App from '../src/App'
 import { LensesView } from '../src/LensesView'
-import type { CleaningEntry, LensEntry, StoredSettings } from '../src/settings'
+import type {
+  CleaningEntry,
+  LensEntry,
+  SettingsPayload,
+  StoredSettings,
+} from '../src/settings'
 import { fakeServer, payload, settingsPayload } from './fixture'
 
 const cleaned = {
@@ -80,8 +85,10 @@ function renderLenses(
   stored: StoredSettings = {},
   focus?: string,
   lenses: LensEntry[] = LENSES,
+  extra: Partial<SettingsPayload> = {},
 ) {
   const settings = settingsPayload(stored, {
+    ...extra,
     recipeFrom: 'plugin',
     lensSet: {
       dirs: {
@@ -167,7 +174,8 @@ test('the lenses show in three groups, each with its switch, its source and wher
   expect(screen.getByText(/2 lenses run on this project/)).toBeDefined()
   const local = group('This project')
   expect(local.getByText('workflow:code-reviewer-abac')).toBeDefined()
-  expect(local.getByText('**/*.ts · Security & Permissions')).toBeDefined()
+  expect(local.getByText(/^\*\*\/\*\.ts · Security & Permissions ·/)).toBeDefined()
+  expect(local.getByText("reviewers' · the session's model")).toBeDefined()
   const global = group('Global · every project')
   expect(global.getByText('replaces the built-in')).toBeDefined()
   expect(global.getByText('cleaning failed · its last version runs')).toBeDefined()
@@ -1520,4 +1528,102 @@ test('the lens being edited stays shown while a filter would hide it, with what 
   expect(screen.getByLabelText<HTMLTextAreaElement>('Added instructions').value).toBe(
     '- Cents only.',
   )
+})
+
+const MONEY: LensEntry = {
+  name: 'money',
+  scope: 'local',
+  on: true,
+  runs: true,
+  source: '.claude/agents/money-review.md',
+  paths: ['**'],
+  model: 'auto',
+  detected: {
+    file: 'money-review.md',
+    model: 'opus',
+    id: 'claude-opus-5-5',
+    asked: 'opus',
+    why: 'source',
+  },
+  frontmatter: { name: 'money-review', tools: 'Read, Grep', model: 'opus' },
+  rules: '',
+  cleaned,
+}
+
+test("a lens on Auto-detect names its source's model on its row and beside its select, and its frontmatter under its source", () => {
+  const { onLens } = renderLenses([], {}, 'local:money', [MONEY])
+  const local = group('This project')
+  expect(local.getByText('auto · claude-opus-5-5')).toBeDefined()
+  const editor = screen.getByRole('region', { name: 'money' })
+  const select = within(editor).getByLabelText('Model')
+  expect(select).toHaveProperty('value', 'auto')
+  expect(
+    within(editor).getByText('→ money-review.md asks for model: opus → claude-opus-5-5'),
+  ).toBeDefined()
+  expect(
+    within(editor).getByText('name: money-review · tools: Read, Grep · model: opus'),
+  ).toBeDefined()
+  // The reviewers' instead: the line says where that model comes from.
+  fireEvent.change(select, { target: { value: '' } })
+  expect(
+    within(editor).getByText("→ Settings › Agents: the session's model"),
+  ).toBeDefined()
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))
+  expect(onLens).toHaveBeenLastCalledWith('save', {
+    scope: 'local',
+    name: 'money',
+    lens: { model: null },
+  })
+})
+
+test("a source that names a model that is not Claude's runs on the session's, said in amber", () => {
+  renderLenses([], {}, 'local:money', [
+    {
+      ...MONEY,
+      detected: { file: 'money-review.md', asked: 'gpt-5', why: 'foreign' },
+    },
+  ])
+  const fact = group('This project').getByText("auto · the session's model")
+  expect(fact.className).toContain('tr-warn')
+  const line = screen.getByText(
+    "→ money-review.md asks for model: gpt-5, not a Claude model → the session's model",
+  )
+  expect(line.className).toContain('tr-warn')
+})
+
+test('a lens switched to Auto-detect says what it resolves to before it is saved', () => {
+  const { onLens } = renderLenses([], {}, 'local:money', [
+    {
+      ...MONEY,
+      model: 'claude-haiku-5-5',
+      detected: { file: 'money-review.md', why: 'none' },
+    },
+  ])
+  const editor = screen.getByRole('region', { name: 'money' })
+  fireEvent.change(within(editor).getByLabelText('Model'), { target: { value: 'auto' } })
+  expect(
+    within(editor).getByText("→ money-review.md names no model → the session's model"),
+  ).toBeDefined()
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))
+  expect(onLens).toHaveBeenLastCalledWith('save', {
+    scope: 'local',
+    name: 'money',
+    lens: { model: 'auto' },
+  })
+})
+
+test("TRANCHANT_MODEL locks a lens's model, and its row names the one it forces", () => {
+  renderLenses([], {}, 'local:money', [MONEY], {
+    locked: { reviewModel: 'TRANCHANT_MODEL' },
+  })
+  expect(
+    group('This project').getByText('TRANCHANT_MODEL · claude-sonnet-5-5'),
+  ).toBeDefined()
+  const editor = screen.getByRole('region', { name: 'money' })
+  expect(within(editor).getByLabelText('Model')).toHaveProperty('disabled', true)
+  expect(
+    within(editor).getByText(
+      'TRANCHANT_MODEL is set: every reviewer runs on claude-sonnet-5-5, whatever this says.',
+    ),
+  ).toBeDefined()
 })

@@ -292,6 +292,9 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-lns-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
 .tr-lns-source { overflow: hidden; color: var(--tr-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .tr-lns-facts { color: var(--tr-muted); font-size: 12px; }
+.tr-lns-model { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.tr-lns-resolves { color: var(--tr-muted); font-size: 12.5px; }
+.tr-lns-resolves.tr-warn { color: var(--tr-warn); }
 .tr-lns-origin { font-size: 11px; font-weight: 600; color: var(--tr-muted); padding: 1px 7px; border-radius: 4px; background: var(--tr-bg-3); white-space: nowrap; }
 .tr-lns-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--tr-border); border-radius: 8px; background: var(--tr-bg-2); }
 .tr-lns-filter-search { display: inline-flex; align-items: center; color: var(--tr-muted); }

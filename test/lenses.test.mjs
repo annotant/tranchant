@@ -8,6 +8,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import {
+  autoModel,
   buildLens,
   expandRecipe,
   findRecipe,
@@ -305,6 +306,73 @@ test('lenses.mjs builds every lens, records them, and prints one LENS line each'
     [
       ['abac', 'unchanged'],
       ['money', 'updated'],
+    ],
+  )
+})
+
+test("autoModel takes a Claude model from a source's frontmatter, an alias as Claude Code takes it; else the session's, and why", () => {
+  assert.deepEqual(autoModel('opus'), {
+    model: 'opus',
+    id: 'claude-opus-5-5',
+    asked: 'opus',
+    why: 'source',
+  })
+  assert.deepEqual(autoModel(' "Sonnet" '), {
+    model: 'sonnet',
+    id: 'claude-sonnet-5-5',
+    asked: 'Sonnet',
+    why: 'source',
+  })
+  assert.equal(autoModel('claude-haiku-5-5').model, 'claude-haiku-5-5')
+  assert.equal(autoModel('us.anthropic.claude-opus-4-1-20250805-v1:0').why, 'source')
+  assert.deepEqual(autoModel(undefined), { why: 'none' })
+  assert.deepEqual(autoModel(''), { why: 'none' })
+  assert.deepEqual(autoModel('inherit'), { asked: 'inherit', why: 'inherit' })
+  assert.deepEqual(autoModel('gpt-5'), { asked: 'gpt-5', why: 'foreign' })
+  // An alias is a key of its own, never one an object inherits.
+  assert.deepEqual(autoModel('constructor'), { asked: 'constructor', why: 'foreign' })
+})
+
+test("a lens on Auto-detect runs on its source's model, else the session's: its LENS line and its row say which", async (t) => {
+  const { dir } = await repository(t)
+  const recipe = await recipeFile(
+    t,
+    {
+      lenses: [
+        { name: 'abac', source: 'workflow:code-reviewer-abac', model: 'auto' },
+        { name: 'money', source: 'money.md', model: 'auto' },
+        { name: 'cents', source: 'cents.md', model: 'auto' },
+        { name: 'fixed', source: 'cents.md', model: 'claude-haiku-5-5' },
+      ],
+    },
+    {
+      'money.md': '---\nname: money\nmodel: claude-opus-5-5\n---\n\nLook at the money.\n',
+      'cents.md': '---\nmodel: gpt-5\n---\n\nLook at the cents.\n',
+    },
+  )
+  const ran = await review(dir, ['--recipe', recipe])
+  assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+  assert.deepEqual(
+    ran.lenses.map((lens) => [lens.name, lens.model]),
+    [
+      ['abac', 'inherit'],
+      ['money', 'claude-opus-5-5'],
+      ['cents', 'inherit'],
+      ['fixed', 'claude-haiku-5-5'],
+    ],
+  )
+  assert.deepEqual(
+    ran.progress.lenses.map((/** @type {any} */ row) => [
+      row.name,
+      row.model,
+      row.modelFrom,
+      row.autoWhy,
+    ]),
+    [
+      ['abac', undefined, 'auto', 'none'],
+      ['money', 'claude-opus-5-5', 'auto', undefined],
+      ['cents', undefined, 'auto', 'foreign'],
+      ['fixed', 'claude-haiku-5-5', 'lens', undefined],
     ],
   )
 })

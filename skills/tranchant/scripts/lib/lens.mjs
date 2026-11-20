@@ -47,6 +47,16 @@ const PLUGIN_NAME = /^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/
 /** Whether `label` names a skill or agent (`plugin:name`), not a path. */
 export const isPluginName = (/** @type {string} */ label) => PLUGIN_NAME.test(label)
 const MODEL = /^[\w.:-]{1,80}$/
+/** A lens's model that asks for its source's model, else the session's. */
+export const AUTO_MODEL = 'auto'
+/** Claude Code's aliases, and the ids they stand for today: the page names them. */
+const MODEL_ALIASES = /** @type {Record<string, string>} */ ({
+  opus: 'claude-opus-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  haiku: 'claude-haiku-5-5',
+})
+/** A Claude model id, a cloud's included (`us.anthropic.claude-…`). */
+const CLAUDE_ID = /(?:^|[.:])claude-[\w.:-]+$/
 const LENS_KEYS = new Set([
   'name',
   'prompt',
@@ -393,6 +403,44 @@ function splitFrontmatter(text) {
   return { body: normalized.slice(after).replace(/^\n+/, ''), fields }
 }
 
+/**
+ * A source's frontmatter fields, or none when it cannot be read: the build
+ * says why, never the model it names.
+ * @param {string} text
+ */
+const fieldsOf = (text) => {
+  try {
+    return splitFrontmatter(text).fields
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * What Auto-detect runs a lens on, from the `model:` its source's
+ * frontmatter names: that model when it is Claude's (an alias as Claude Code
+ * takes it, `id` the one it stands for), else the session's (`model`
+ * absent), and why: it names none, says `inherit`, or names a model that is
+ * not Claude's.
+ * @param {string | undefined} asked
+ * @returns {{ model?: string, id?: string, asked?: string, why: 'source' | 'none' | 'inherit' | 'foreign' }}
+ */
+export function autoModel(asked) {
+  const named = (asked ?? '')
+    .trim()
+    .replace(/^(["'])(.*)\1$/, '$2')
+    .trim()
+  if (!named) return { why: 'none' }
+  const shown = named.slice(0, 80)
+  const lower = named.toLowerCase()
+  if (lower === 'inherit') return { asked: shown, why: 'inherit' }
+  const alias = Object.hasOwn(MODEL_ALIASES, lower) ? MODEL_ALIASES[lower] : undefined
+  if (alias) return { model: lower, id: alias, asked: shown, why: 'source' }
+  if (MODEL.test(named) && CLAUDE_ID.test(named))
+    return { model: named, id: named, asked: shown, why: 'source' }
+  return { asked: shown, why: 'foreign' }
+}
+
 /** Claude Code's folder: its settings and its installed plugins. */
 export const claudeDir = () =>
   process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -653,8 +701,8 @@ function bodyOf(/** @type {Resolved} */ source) {
 }
 
 /**
- * A lens of the recipe, built: the prompt its reviewer runs, its hash, and
- * what review.json records of it. A whole prompt (`prompt`, a lens of
+ * A lens of the recipe, built: the prompt its reviewer runs, its hash, its
+ * source's frontmatter fields, and what review.json records of it. A whole prompt (`prompt`, a lens of
  * Tranchant's) is its body; a source is the shared contract, then the
  * source fenced as the lens's domain; an add-on is the built-in lens, then
  * the source fenced as its addition; the skills it lists follow, fenced.
@@ -763,6 +811,8 @@ export async function buildLens(lens, where) {
     text,
     hash,
     file: main.file,
+    // Read at each build: a source that changes its model changes the lens's, with no cleaning.
+    fields: fieldsOf(main.text),
     record: {
       name: lens.name,
       source,

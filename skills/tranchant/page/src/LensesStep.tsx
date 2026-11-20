@@ -19,6 +19,19 @@ const SCOPE_WORDS = { local: 'this project', global: 'global' }
 
 const names = (rows: LensRow[]) => rows.map((row) => row.name).join(', ')
 
+const FROM_WORDS: Record<NonNullable<LensRow['modelFrom']>, string> = {
+  forced: 'TRANCHANT_MODEL',
+  auto: 'auto',
+  lens: 'its own',
+  reviewers: "reviewers'",
+}
+
+/** The model a ready lens's reviewer runs on, as its row names it: `auto · claude-opus-5-5`. */
+function modelWords(row: LensRow) {
+  if (!row.modelFrom) return undefined
+  return `${FROM_WORDS[row.modelFrom]} · ${row.model ?? "the session's model"}`
+}
+
 function rowWords(row: LensRow) {
   if (row.cleaning === 'running') return 'its source changed · cleaning again'
   if (row.state === 'resolving') return 'resolving'
@@ -49,6 +62,7 @@ function Row({ row, fixable }: { row: LensRow; fixable: boolean }) {
         {row.source}
         {row.version && ` ${row.version}`}
         {row.scope && ` · ${SCOPE_WORDS[row.scope]}`}
+        {modelWords(row) && ` · ${modelWords(row)}`}
       </code>
       <span
         className={`tr-lens-row-state${row.change === 'updated' || row.cleaning ? ' tr-lens-row-state--updated' : ''}`}
@@ -583,6 +597,7 @@ export function ReadyCenter({
                 {row.source}
                 {row.version && ` ${row.version}`}
                 {row.scope && ` · ${SCOPE_WORDS[row.scope]}`}
+                {lit && modelWords(row) && ` · ${modelWords(row)}`}
               </code>
               <span
                 className={`tr-lens-row-state${moved || row.cleaning ? ' tr-lens-row-state--updated' : ''}`}

@@ -86,7 +86,12 @@ export interface LensEntry {
   paths: string[]
   otherwise?: boolean
   topics?: string[]
+  /** Its model: `auto` (Auto-detect), an id; absent, the reviewers'. */
   model?: string
+  /** What Auto-detect finds in its source, whatever its model. */
+  detected?: Detected
+  /** Its source's frontmatter: what Auto-detect reads. */
+  frontmatter?: { name?: string; tools?: string; model?: string }
   rules?: string
   rulesEdited?: boolean
   cleaned?: Cleaned
@@ -158,6 +163,22 @@ export interface CleaningEntry {
 
 /** The most agents of a kind the settings allow at a time. */
 export const MAX_AGENTS = 8
+
+/**
+ * What Auto-detect finds in a lens's source: the model its frontmatter
+ * names when it is Claude's (`id` the one an alias stands for), else the
+ * session's, and why.
+ */
+export interface Detected {
+  file: string
+  model?: string
+  id?: string
+  asked?: string
+  why: 'source' | 'none' | 'inherit' | 'foreign'
+}
+
+/** A lens's model that asks for its source's, else the session's. */
+export const AUTO_MODEL = 'auto'
 
 /** Model ids the page suggests; any id or alias Claude Code takes may be typed. */
 export const KNOWN_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']
