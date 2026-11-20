@@ -3,9 +3,17 @@
 // would get and whether it reads as a reviewer. `*` and `?` stay within one
 // folder (no `**`), and match no name starting with a dot unless the pattern
 // does, as a shell's glob; `[` is a character like any other, as in a path.
-import os from 'node:os'
 import path from 'node:path'
-import { open, readdir, stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
+import {
+  insideFile,
+  kindOfPath,
+  labelOf,
+  nameOfFile,
+  notReviewerReason,
+  readHead,
+  sourceLabel,
+} from './inside.mjs'
 import { expandHome } from './settings.mjs'
 
 /**
@@ -13,7 +21,10 @@ import { expandHome } from './settings.mjs'
  * @property {string} source
  * @property {string} name
  * @property {string} [notReviewer]
+ * @property {import('./inside.mjs').Kind} [kind]
  * @property {Already[]} [already] The lenses, and the lenses being added, made from this same file.
+ * @property {Match[]} [starts] A command's, or an agent's that starts others: the reviewers it starts, never a lens itself.
+ * @property {number} [more] With `starts`: those named past the most listed.
  */
 /** @typedef {{ scope: 'local' | 'global', name: string, adding?: true }} Already */
 
@@ -23,7 +34,6 @@ export const MAX_MATCHES = 40
 const MAX_VISITS = 5000
 /** The file names a glob that matches nothing lists, to help mend it. */
 const MAX_LISTED = 20
-const MAX_READ = 64 * 1024
 
 /** A glob this Tranchant refuses, and why. */
 export class GlobRefusal extends Error {}
@@ -57,50 +67,6 @@ function wildMatch(pattern, name) {
   }
   while (pattern[p] === '*') p++
   return p === pattern.length
-}
-
-/**
- * The lens name a matched file gets: its file name without the extension,
- * a skill's folder name for its SKILL.md; made a lens name.
- * @param {string} file
- */
-function nameOfFile(file) {
-  const base = path.basename(file)
-  const stem = /^SKILL\.md$/i.test(base)
-    ? path.basename(path.dirname(file))
-    : base.replace(/\.[^.]+$/, '')
-  return (
-    stem
-      .replace(/[^\w-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40) || 'lens'
-  )
-}
-
-/**
- * Why a source reads as no reviewer of its own, or undefined: one that
- * starts other agents (its tools give it Task or Agent, or it names
- * subagent types) would end its cleaning without a lens.
- * @param {string} text
- */
-function notReviewerReason(text) {
-  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? ''
-  const tools = /^tools:\s*(.*)$/m.exec(front)?.[1] ?? ''
-  if (/\b(?:Task|Agent)\b/.test(tools) || /\bsubagent_type\b/.test(text))
-    return 'It starts other agents and holds no review of its own: its cleaning would end without a lens.'
-  return undefined
-}
-
-/** How a matched path is written as a source: as the glob was, from the project, `~/` or absolute. */
-function labelOf(
-  /** @type {string} */ file,
-  /** @type {'project' | 'home' | 'absolute'} */ from,
-  /** @type {string} */ project,
-) {
-  if (from === 'absolute') return file
-  const base = from === 'home' ? os.homedir() : project
-  const relative = path.relative(base, file).split(path.sep).join('/')
-  return from === 'home' ? `~/${relative}` : relative
 }
 
 /** The file a matched entry is read as: itself, or a skill folder's SKILL.md; undefined for neither. */
@@ -180,10 +146,25 @@ export async function matchSources(project, pattern) {
   for (const { entry, file } of found.slice(0, MAX_MATCHES)) {
     const text = await readHead(file)
     const notReviewer = text === undefined ? undefined : notReviewerReason(text)
+    const kind = kindOfPath(file)
+    const source = labelOf(entry, from, project)
+    // Written as the glob is: the page knows a match it starts by its source.
+    const inside = await insideFile(project, {
+      label: source,
+      file,
+      kind,
+      text,
+      labelFile: (one) => sourceLabel(one, from, project),
+    })
     matches.push({
-      source: labelOf(entry, from, project),
+      source,
       name: nameOfFile(file),
+      ...(kind && { kind }),
       ...(notReviewer && { notReviewer }),
+      ...(inside && {
+        starts: inside.starts,
+        ...(inside.more && { more: inside.more }),
+      }),
     })
   }
   return {
@@ -228,26 +209,13 @@ export function withAlready(project, matches, known) {
       },
     ])
   }
-  return matches.map((match) => {
+  /** @returns {Match} */
+  const mark = (/** @type {Match} */ match) => {
     const already = byFile.get(fileKey(project, match.source))
-    return already ? { ...match, already } : match
-  })
-}
-
-/** A file's first bytes, enough to tell a reviewer, never the whole file; undefined when it cannot be read. */
-async function readHead(/** @type {string} */ file) {
-  try {
-    const handle = await open(file, 'r')
-    try {
-      const buffer = Buffer.alloc(MAX_READ)
-      const { bytesRead } = await handle.read(buffer, 0, MAX_READ, 0)
-      return buffer.subarray(0, bytesRead).toString('utf8')
-    } finally {
-      await handle.close()
-    }
-  } catch {
-    return undefined
+    const marked = already ? { ...match, already } : match
+    return match.starts ? { ...marked, starts: match.starts.map(mark) } : marked
   }
+  return matches.map(mark)
 }
 
 /**

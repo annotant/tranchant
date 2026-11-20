@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { insideOf, insideRefusal } from './inside.mjs'
 import { LensRefusal, buildLens } from './lens.mjs'
 import { STATE_ROOT, hashOf } from './project.mjs'
 import {
@@ -162,7 +163,8 @@ async function found(lens, project) {
 /**
  * A new lens's cleaning, for the project at `project`: the source found
  * first, so a name that does not resolve starts no agent, and the name free
- * in its scope. `queued` when the page asks for it: the hooks start its
+ * in its scope; a command, or a source that starts reviewers it names, is
+ * refused with them. `queued` when the page asks for it: the hooks start its
  * agent once one is free.
  * @param {{ project: string, source: string, name?: string, scope: string, context?: string, queued?: boolean, from?: string }} given
  * @returns {Promise<{ dir: string, record: Cleaning }>}
@@ -197,6 +199,9 @@ export async function createCleaning({
       `a lens named ${lensName} is ${scope === 'global' ? 'global' : "this project's"} already: edit it, or choose another name`,
     )
   const recorded = recordedSource(source, scope, project)
+  // Before any agent: a command, or a source that starts reviewers it names, holds the lenses, never is one.
+  const inside = await insideOf(project, recorded)
+  if (inside) throw new CleaningRefusal(insideRefusal(inside))
   const recordedContext = context?.trim()
     ? recordedSource(context, scope, project)
     : undefined

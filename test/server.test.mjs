@@ -2339,3 +2339,60 @@ test('a review waiting to start: Build and Start print their line with the choic
   assert.equal(own.status, 409)
   assert.deepEqual((await stored()).disabledLenses, ['bugs'])
 })
+
+test('/api/lens/inside lists the agents a command starts, those being added said; the command itself is refused as a lens', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  const dotClaude = path.join(server.project, '.claude')
+  await mkdir(path.join(dotClaude, 'agents'), { recursive: true })
+  await mkdir(path.join(dotClaude, 'commands'), { recursive: true })
+  for (const name of ['code-review', 'test-review'])
+    await writeFile(path.join(dotClaude, 'agents', `${name}.md`), `Review ${name}.\n`)
+  await writeFile(
+    path.join(dotClaude, 'commands', 'review-pr.md'),
+    'Run code-review, then test-review, and merge their reports.\n',
+  )
+  const inside = (/** @type {string} */ source) =>
+    fetch(`${server.base}/api/lens/inside?${new URLSearchParams({ source }).toString()}`)
+  const command = '.claude/commands/review-pr.md'
+
+  const found = (await json(await inside(command))).inside
+  assert.equal(found.kind, 'command')
+  assert.deepEqual(
+    found.starts.map((/** @type {any} */ one) => [one.source, one.name, one.already]),
+    [
+      ['.claude/agents/code-review.md', 'code-review', undefined],
+      ['.claude/agents/test-review.md', 'test-review', undefined],
+    ],
+  )
+  // A single reviewer, and a source that is not there: the usual add.
+  assert.equal((await json(await inside('.claude/agents/code-review.md'))).inside, null)
+  assert.equal((await json(await inside('.claude/agents/gone.md'))).inside, null)
+  assert.equal((await inside('')).status, 400)
+
+  const importing = (/** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/lens/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const whole = await importing({ scope: 'local', source: command })
+  assert.equal(whole.status, 409)
+  assert.match(
+    (await json(whole)).error,
+    /is a command, never a lens itself: add the 2 reviewers it starts instead \(code-review, test-review\)/,
+  )
+  const added = await importing({
+    scope: 'local',
+    from: command,
+    sources: [{ source: '.claude/agents/code-review.md', name: 'code-review' }],
+  })
+  assert.equal(added.status, 200)
+  const again = (await json(await inside(command))).inside
+  assert.deepEqual(again.starts[0].already, [
+    { scope: 'local', name: 'code-review', adding: true },
+  ])
+})

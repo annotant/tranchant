@@ -272,14 +272,31 @@ const fetchSettings = () => request<SettingsPayload>(SETTINGS)
 /** The changes to the lenses the server takes, by route. */
 export type LensRoute = 'import' | 'add' | 'discard' | 'save' | 'remove' | 'clean'
 
-/** One file a glob typed in Add a lens matches: its source, the lens name it gets, why it reads as no reviewer. */
+/** What a source is, from where it lies: a command is never a lens. */
+type LensKind = 'agent' | 'skill' | 'command'
+
+/** One file a glob typed in Add a lens matches, or one reviewer a command starts: its source, the lens name it gets, why it reads as no reviewer. */
 export interface LensMatch {
   source: string
   name: string
+  kind?: LensKind
   notReviewer?: string
   /** The lenses made from this same file, and those being added from it. */
   already?: { scope: 'local' | 'global'; name: string; adding?: true }[]
+  /** A command's, or a file's that starts agents: the reviewers it starts. It is never a lens itself. */
+  starts?: LensMatch[]
+  /** With `starts`: how many more it names, left out. */
+  more?: number
 }
+
+/** What `GET /api/lens/inside` answers: the reviewers inside a source, or null for a single one. */
+export interface LensInside {
+  inside: { kind: LensKind; label: string; starts: LensMatch[]; more?: number } | null
+}
+
+/** The reviewers a command, or a source that starts agents, holds, read from its file with no agent. */
+export const fetchLensInside = (source: string) =>
+  request<LensInside>(`/api/lens/inside?${new URLSearchParams({ source }).toString()}`)
 
 /** What `GET /api/lens/matches` answers: the matches, how many more were left out, or the folder of a glob that matched nothing. */
 export interface LensMatches {

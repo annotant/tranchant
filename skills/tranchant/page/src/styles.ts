@@ -317,6 +317,17 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-match .tr-match-name .tr-input[aria-invalid="true"] { border-color: var(--tr-danger); box-shadow: 0 0 0 1px var(--tr-danger); }
 .tr-match-note { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; }
 .tr-match--off .tr-match-path, .tr-match--off .tr-match-name { opacity: .55; }
+.tr-match--locked .tr-match-path, .tr-match--locked .tr-match-name { opacity: .55; }
+.tr-kind { display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: 4px; background: var(--tr-bg-3); color: var(--tr-muted); font-size: 11px; font-weight: 600; vertical-align: 1px; }
+.tr-match-path label { cursor: pointer; }
+.tr-match--group { background: var(--tr-bg-2); }
+.tr-match--group > .tr-match-path code { font-weight: 600; }
+.tr-match-aside { font-size: 12.5px; color: var(--tr-muted); }
+.tr-match-kids { grid-column: 1 / -1; display: flex; flex-direction: column; margin: 6px 0 0 9px; padding: 0 0 0 18px; list-style: none; border-left: 2px solid var(--tr-border); }
+.tr-match-kids .tr-match { padding: 6px 0; background: transparent; }
+.tr-match-kids .tr-match + .tr-match { border-top: 1px dashed var(--tr-border); }
+.tr-reading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 820px; margin: 0; padding: 10px 12px; border: 1px solid var(--tr-border); border-radius: 8px; font-size: 13px; }
+.tr-reading .tr-spinner { width: 12px; height: 12px; border-width: 2px; }
 .tr-field { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 4px 16px; align-items: start; }
 .tr-field-label { padding-top: 6px; font-weight: 600; font-size: 13px; }
 .tr-field-body { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }

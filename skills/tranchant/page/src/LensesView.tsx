@@ -6,7 +6,18 @@ import {
   type SettingsChange,
 } from './api'
 import { TOPICS } from './domain'
-import { GlobMatches, isGlob, noteRows, useGlobPick } from './LensGlob'
+import {
+  GlobMatches,
+  InsideMatches,
+  MAX_BATCH,
+  InsideUnread,
+  ReadingSource,
+  isGlob,
+  noteRows,
+  useGlob,
+  useInside,
+  usePick,
+} from './LensGlob'
 import {
   type CleaningEntry,
   KNOWN_MODELS,
@@ -636,7 +647,8 @@ function batchLine(cleanings: CleaningEntry[]) {
 /**
  * Add a lens: its source, its name, where it lives, its context skill; then
  * the cleaning agent. A source with a `*` or a `?` is a glob: its matches
- * replace the name, one cleaning agent each.
+ * replace the name, one cleaning agent each. A source typed whole is read
+ * first: a command, or one that starts agents, lists them in its place.
  */
 function AddLens({
   frozen,
@@ -660,19 +672,40 @@ function AddLens({
   const [scope, setScope] = useState<Added>('local')
   const [context, setContext] = useState('')
   const [busy, setBusy] = useState(false)
-  const glob = isGlob(source.trim())
-  const pick = useGlobPick(glob ? source.trim() : '')
+  const typed = source.trim()
+  const glob = isGlob(typed)
+  const globLook = useGlob(glob ? typed : '')
+  const insideLook = useInside(glob ? '' : typed)
+  // A source typed whole is read first: a command, or one that starts agents, lists them instead.
+  const reading =
+    !glob &&
+    Boolean(typed) &&
+    (insideLook.state === 'idle' || insideLook.state === 'loading')
+  const inside =
+    !glob && insideLook.state === 'done'
+      ? (insideLook.answer.inside ?? undefined)
+      : undefined
+  const many = glob || Boolean(inside)
+  const entries = glob
+    ? globLook.state === 'done'
+      ? globLook.answer.matches
+      : []
+    : (inside?.starts ?? [])
+  const pick = usePick(entries, glob ? `glob:${typed}` : `inside:${typed}`)
   const rows = noteRows(pick.rows, scope, lenses)
   const checked = rows.filter((row) => row.checked)
   const blocked = checked.some((row) => row.note?.name)
   const replaces = builtIn.includes(name.trim())
   const runs = lenses.filter((lens) => lens.runs).length
-  const after = glob
+  const after = many
     ? runs + checked.filter((row) => addsOne(lenses, scope, row.name.trim())).length
     : runs + (addsOne(lenses, scope, name.trim()) ? 1 : 0)
-  const ready = glob
-    ? pick.found.state === 'done' && checked.length > 0 && !blocked
-    : true
+  const ready = many
+    ? (glob ? globLook.state === 'done' : true) &&
+      checked.length > 0 &&
+      checked.length <= MAX_BATCH &&
+      !blocked
+    : !reading
   return (
     <form
       className="tr-lns-add"
@@ -682,13 +715,13 @@ function AddLens({
         if (!ready) return
         setBusy(true)
         onImport({
-          ...(glob
+          ...(many
             ? {
                 sources: checked.map((row) => ({
                   source: row.source,
                   name: row.name.trim(),
                 })),
-                from: source.trim(),
+                from: typed,
               }
             : {
                 source: source.trim(),
@@ -706,7 +739,7 @@ function AddLens({
       <Field
         id="tr-lns-add-source"
         label="Source"
-        help="A reviewer: a plugin's skill or agent, or a path to a skill, an agent or a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out."
+        help="A reviewer: a plugin's skill, agent or command, or a path to one or to a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. A command is never a lens itself, nor an agent that starts the agents it names: Tranchant lists them, and each one can become a lens. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out."
       >
         <input
           id="tr-lns-add-source"
@@ -717,7 +750,7 @@ function AddLens({
           onChange={(event) => setSource(event.currentTarget.value)}
         />
       </Field>
-      {!glob && (
+      {!many && (
         <Field
           id="tr-lns-add-name"
           label="Name"
@@ -747,16 +780,35 @@ function AddLens({
             onChange={setScope}
           />
           <span className="tr-field-help">
-            {(glob ? SCOPE_HELP_MANY : SCOPE_HELP)[scope]}
+            {(many ? SCOPE_HELP_MANY : SCOPE_HELP)[scope]}
           </span>
         </div>
       </div>
+      {reading && <ReadingSource source={typed} />}
+      {!glob && insideLook.state === 'error' && (
+        <InsideUnread source={typed} error={insideLook.error} />
+      )}
       {glob && (
         <GlobMatches
-          found={pick.found}
+          look={globLook}
           rows={rows}
+          slots={pick.slots}
           frozen={frozen}
           onToggle={pick.toggle}
+          onSetChecked={pick.setChecked}
+          onRename={pick.rename}
+          onCheckAll={pick.checkAll}
+          onCheckNone={pick.checkNone}
+        />
+      )}
+      {inside && (
+        <InsideMatches
+          inside={inside}
+          rows={rows}
+          slots={pick.slots}
+          frozen={frozen}
+          onToggle={pick.toggle}
+          onSetChecked={pick.setChecked}
           onRename={pick.rename}
           onCheckAll={pick.checkAll}
           onCheckNone={pick.checkNone}
@@ -779,9 +831,9 @@ function AddLens({
         <button
           type="submit"
           className="tr-btn tr-btn--primary"
-          disabled={frozen || busy || !source.trim() || !ready}
+          disabled={frozen || busy || !typed || !ready}
         >
-          {!glob
+          {!many
             ? 'Import and clean'
             : checked.length === 1
               ? 'Add the lens'
@@ -793,7 +845,7 @@ function AddLens({
           Cancel
         </button>
         <span className="tr-muted">
-          {glob
+          {many
             ? `One cleaning agent per lens, ${cap} at a time (Review agents at a time). Nothing runs in a review until you add each one.`
             : 'An agent reads the source and writes the lens; nothing runs until you add it.'}
         </span>

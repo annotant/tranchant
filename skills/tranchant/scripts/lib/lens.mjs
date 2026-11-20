@@ -45,7 +45,7 @@ const MAX_RECIPE_BYTES = 1024 * 1024
 const PLUGIN_NAME = /^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/
 
 /** Whether `label` names a skill or agent (`plugin:name`), not a path. */
-const isPluginName = (/** @type {string} */ label) => PLUGIN_NAME.test(label)
+export const isPluginName = (/** @type {string} */ label) => PLUGIN_NAME.test(label)
 const MODEL = /^[\w.:-]{1,80}$/
 const LENS_KEYS = new Set([
   'name',
@@ -394,7 +394,7 @@ function splitFrontmatter(text) {
 }
 
 /** Claude Code's folder: its settings and its installed plugins. */
-const claudeDir = () =>
+export const claudeDir = () =>
   process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
 
 /** Undefined for a file missing and one that is not JSON alike: the caller tells them apart. */
@@ -413,7 +413,7 @@ async function jsonOf(/** @type {string} */ file) {
  * @param {string} name
  * @param {string} project
  */
-async function installedPlugin(name, project) {
+export async function installedPlugin(name, project) {
   const file = path.join(claudeDir(), 'plugins', 'installed_plugins.json')
   const register = await jsonOf(file)
   if (register === undefined && existsSync(file))
