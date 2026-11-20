@@ -47,6 +47,18 @@ const PLUGIN_NAME = /^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/
 /** Whether `label` names a skill or agent (`plugin:name`), not a path. */
 export const isPluginName = (/** @type {string} */ label) => PLUGIN_NAME.test(label)
 const MODEL = /^[\w.:-]{1,80}$/
+/** A lens's model that asks for its source's model, else the session's. */
+export const AUTO_MODEL = 'auto'
+/** Claude Code's aliases, and the ids they stand for today: the page names them, Claude Code resolves the alias itself. */
+const MODEL_ALIASES = /** @type {Record<string, string>} */ ({
+  opus: 'claude-opus-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  haiku: 'claude-haiku-5-5',
+})
+/** An alias, `[1m]` its long-context variant. */
+const ALIAS = /^(opus|sonnet|haiku)(\[1m\])?$/
+/** A Claude model id, a cloud's included (`us.anthropic.claude-…`, `claude-…@date`). */
+const CLAUDE_ID = /^(?:[\w-]+[.:])*claude-[\w.:@-]{1,90}(?:\[1m\])?$/
 const LENS_KEYS = new Set([
   'name',
   'prompt',
@@ -393,6 +405,52 @@ function splitFrontmatter(text) {
   return { body: normalized.slice(after).replace(/^\n+/, ''), fields }
 }
 
+/**
+ * A source's frontmatter fields, and why they cannot be read when they
+ * cannot: an added lens's build reads its cleaned domain, never refusing them.
+ * @param {string} text
+ * @returns {{ fields: Record<string, string>, problem?: string }}
+ */
+function frontmatterOf(text) {
+  try {
+    return { fields: splitFrontmatter(text).fields }
+  } catch (error) {
+    return { fields: {}, problem: message(error).slice(0, 200) }
+  }
+}
+
+/**
+ * What Auto-detect runs a lens on: the model its source's frontmatter names
+ * when it is Claude's (`model` as Claude Code takes it, `id` the id it
+ * stands for today), else the session's, and why: it names none, says
+ * `inherit`, names a model that is not Claude's, or cannot be read.
+ * @typedef {{ why: 'source', model: string, id: string, asked: string }
+ *   | { why: 'none' }
+ *   | { why: 'inherit' | 'foreign', asked: string }
+ *   | { why: 'unreadable', problem: string }} AutoModel
+ */
+
+/**
+ * @param {{ fields: Record<string, string>, problem?: string }} frontmatter Its source's, as the build read it.
+ * @returns {AutoModel}
+ */
+export function autoModel({ fields, problem }) {
+  if (problem !== undefined) return { why: 'unreadable', problem }
+  const named = (fields.model ?? '')
+    .trim()
+    .replace(/^(["'])(.*)\1$/, '$2')
+    .trim()
+  if (!named) return { why: 'none' }
+  const asked = named.slice(0, 80)
+  const lower = named.toLowerCase()
+  if (lower === 'inherit') return { why: 'inherit', asked }
+  const alias = ALIAS.exec(lower)
+  const id = alias?.[1] ? MODEL_ALIASES[alias[1]] : undefined
+  if (id) return { why: 'source', model: lower, id: `${id}${alias?.[2] ?? ''}`, asked }
+  if (CLAUDE_ID.test(named)) return { why: 'source', model: named, id: named, asked }
+  return { why: 'foreign', asked }
+}
+
 /** Claude Code's folder: its settings and its installed plugins. */
 export const claudeDir = () =>
   process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -653,8 +711,8 @@ function bodyOf(/** @type {Resolved} */ source) {
 }
 
 /**
- * A lens of the recipe, built: the prompt its reviewer runs, its hash, and
- * what review.json records of it. A whole prompt (`prompt`, a lens of
+ * A lens of the recipe, built: the prompt its reviewer runs, its hash, its
+ * source's frontmatter fields, and what review.json records of it. A whole prompt (`prompt`, a lens of
  * Tranchant's) is its body; a source is the shared contract, then the
  * source fenced as the lens's domain; an add-on is the built-in lens, then
  * the source fenced as its addition; the skills it lists follow, fenced.
@@ -763,6 +821,8 @@ export async function buildLens(lens, where) {
     text,
     hash,
     file: main.file,
+    // Read at each build: a source that changes its model changes the lens's, with no cleaning.
+    frontmatter: frontmatterOf(main.text),
     record: {
       name: lens.name,
       source,

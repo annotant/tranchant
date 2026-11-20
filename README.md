@@ -261,7 +261,9 @@ review opens with; the model of the fix agents, the reviewers and the
 verifiers (the session's by default) and how many fix agents and review
 agents run at a time; the default recipe of `/tranchant review` and, in
 **Settings › Lenses**, every lens one by one (the recipe's and those added,
-turned on or off, their models, their settings, what each reviewer reads);
+turned on or off, their models (Auto-detect, the default of a lens added: the
+model its source's frontmatter names, else the session's), their settings,
+what each reviewer reads);
 the CLI that opens issues (`glab`, `gh`, or whichever the
 remote names) and the account it posts as. A change applies to the next
 agent, review or post, never to an agent already running. The settings are

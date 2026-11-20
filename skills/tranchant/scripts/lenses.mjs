@@ -8,7 +8,8 @@
 // page shows. No model: the same sources give the same prompts.
 // Every lens built: the review becomes `reviewing`, the lenses it runs
 // recorded in review.json, and one `LENS <json>` is printed per lens,
-// `{ name, prompt, paths, model?, topics? }`, `prompt` the built file. One
+// `{ name, prompt, paths, model?, topics? }`, `prompt` the built file, `model`
+// on Auto-detect the source's or `inherit` (the session's). One
 // lens that cannot be built refuses the review: it becomes `refused`, with
 // the lens, its source and why; `REVIEW_REFUSED <reason>` is printed, no
 // LENS line, and it exits 2. So does any other failure of the step, and
@@ -38,8 +39,10 @@ import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
 import { LENS_NAME, oneLine } from './lib/format.mjs'
 import {
+  AUTO_MODEL,
   LensRefusal,
   RecipeRefusal,
+  autoModel,
   buildLens,
   folderOf,
   originOf,
@@ -78,6 +81,9 @@ import {
  * @property {string} [fix] With `failed`: what makes it build.
  * @property {'global' | 'local'} [scope] A lens the user added.
  * @property {'running' | 'again' | 'failed' | 'held'} [cleaning] An added lens whose source changed: being cleaned again, cleaned again, its cleaning failed, or held: the change under review is what changed it.
+ * @property {string} [model] With `ready`: the model its reviewer runs on, an alias's id as it stands today; absent, the session's.
+ * @property {'forced' | 'auto' | 'lens' | 'reviewers'} [modelFrom] With `ready`: what chose it: TRANCHANT_MODEL, Auto-detect, the lens's own, or Settings › Agents.
+ * @property {'none' | 'inherit' | 'foreign' | 'unreadable' | 'held'} [autoWhy] On Auto-detect, why the session's: its source names no model, says `inherit`, names one that is not Claude's, has a frontmatter that cannot be read, or is changed by the change under review.
  */
 
 /**
@@ -431,6 +437,40 @@ if (process.argv.includes('--check')) {
 await writeProgress('resolving', rows)
 
 const previous = await previousLenses()
+const { values: settings, locked } = await loadSettings()
+
+/**
+ * The model of a lens's reviewer: on its LENS line, the lens's own (on
+ * Auto-detect, its source's, else `inherit`, the session's: the reviewers'
+ * model is skipped), which the hooks put after TRANCHANT_MODEL and before
+ * the reviewers'; on its row, the one it runs on (an alias's id as it stands
+ * today), and what chose it.
+ * @param {LensSpec} lens
+ * @param {{ file: string, frontmatter: { fields: Record<string, string>, problem?: string } }} built
+ */
+async function modelOf(lens, built) {
+  /** @type {import('./lib/lens.mjs').AutoModel | { why: 'held' } | undefined} */
+  let auto = lens.model === AUTO_MODEL ? autoModel(built.frontmatter) : undefined
+  // A branch never picks the model of the lens that reviews it.
+  if (auto?.why === 'source' && lens.added && (await changedHere(built.file)))
+    auto = { why: 'held' }
+  const line = auto ? (auto.why === 'source' ? auto.model : 'inherit') : lens.model
+  const forced = locked.reviewModel ? settings.reviewModel : null
+  const row = forced
+    ? { model: forced, modelFrom: 'forced' }
+    : auto
+      ? auto.why === 'source'
+        ? { model: auto.id, modelFrom: 'auto' }
+        : { modelFrom: 'auto', autoWhy: auto.why }
+      : lens.model
+        ? { model: lens.model, modelFrom: 'lens' }
+        : {
+            ...(settings.reviewModel && { model: settings.reviewModel }),
+            modelFrom: 'reviewers',
+          }
+  return { line, row }
+}
+
 const where = {
   origin: originOf(plan.recipe),
   folder: folderOf(plan.recipe),
@@ -445,11 +485,10 @@ for (const [i, lens] of shown.entries()) {
   if (!row || !runs(lens)) continue
   try {
     // An added lens's paths are the project's, never the recipe's folder.
-    const { text, hash, record } = await buildLens(
-      lens,
-      lens.added ? whereOf(review.project) : where,
-    )
+    const made = await buildLens(lens, lens.added ? whereOf(review.project) : where)
+    const { text, hash, record } = made
     const { file } = await storeLens(text, hash)
+    const model = await modelOf(lens, made)
     const before = previous?.get(lens.name)
     const against = await standing(lens)
     const cleanedNow = against && against.stored.cleaned.at >= review.createdAt
@@ -458,6 +497,7 @@ for (const [i, lens] of shown.entries()) {
       source: record.source,
       change: before === undefined ? 'new' : before === hash ? 'unchanged' : 'updated',
       ...(record.version && { version: record.version }),
+      ...model.row,
       // Cleaned again for this review; or its source changed and its last version runs, said why.
       ...(cleanedNow
         ? { cleaning: 'again' }
@@ -477,7 +517,7 @@ for (const [i, lens] of shown.entries()) {
       name: lens.name,
       prompt: file,
       paths: lens.paths,
-      ...(lens.model && { model: lens.model }),
+      ...(model.line && { model: model.line }),
       ...(lens.topics && { topics: lens.topics }),
     })
   } catch (error) {

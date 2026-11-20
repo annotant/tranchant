@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { insideOf, insideRefusal, nameOfSource } from './inside.mjs'
-import { LensRefusal, buildLens } from './lens.mjs'
+import { AUTO_MODEL, LensRefusal, buildLens } from './lens.mjs'
 import { STATE_ROOT, hashOf } from './project.mjs'
 import {
   LensFileRefusal,
@@ -501,7 +501,8 @@ async function recordFailure(
 /**
  * Add this lens: a ready cleaning written to its scope, with the user's
  * changes to what the agent found (its name, scope, paths, topics, model,
- * rules); the cleaning is `added` from then on.
+ * rules); the cleaning is `added` from then on. Its model is Auto-detect
+ * unless the changes name one.
  * @param {string} project
  * @param {string} id
  * @param {any} [edits]
@@ -542,7 +543,10 @@ export async function addCleaned(project, id, edits = {}) {
         ? { otherwise: true, paths: [] }
         : { paths: edits.paths ?? base.paths }),
       ...(topics?.length && { topics }),
-      ...(typeof edits.model === 'string' && edits.model && { model: edits.model }),
+      // Auto-detect unless the person chose: null or '' is the reviewers' model.
+      ...(edits.model === undefined
+        ? { model: AUTO_MODEL }
+        : typeof edits.model === 'string' && edits.model && { model: edits.model }),
       ...(typeof edits.rules === 'string' &&
         edits.rules !== base.rules && { rules: edits.rules, rulesEdited: true }),
     })

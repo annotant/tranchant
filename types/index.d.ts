@@ -21,7 +21,10 @@ export type Lens = {
   prompt: string
   /** The changed files it reviews, or the globs they match. */
   paths: string[]
-  /** The model the recipe asks for: TRANCHANT_MODEL still wins, the settings' come after. */
+  /**
+   * The model the lens asks for, `inherit` on Auto-detect when its source
+   * names no Claude model: TRANCHANT_MODEL still wins, the settings' come after.
+   */
   model?: string
   /** The topics its findings file under, when the recipe declares them. */
   topics?: string[]

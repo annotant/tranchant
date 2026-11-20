@@ -9,6 +9,19 @@ released to the `stable` branch.
 
 ### Added
 
+- **A lens's model on Auto-detect: its source's, else the session's.** A
+  lens's **Model** select starts with **Auto-detect**, the default of a lens
+  you add: the model its agent's, skill's or command's frontmatter names
+  (`model: opus` runs on Opus), else the model of the session that ran
+  `/tranchant review` (no model, `inherit`, or a model that is not
+  Claude's). The source is read again at each review, and a change to its
+  `model:` line alone cleans nothing again (a lens cleaned before this
+  version is cleaned once more the first time); a branch that edits an
+  added lens's source never picks that lens's model. Beside the select, a line says
+  what it resolves to and why; the Source field shows the frontmatter it
+  reads; each lens's row, and each reviewer's on Ready to start, names the
+  model it runs on (*auto · claude-opus-5-5*). `TRANCHANT_MODEL` still wins
+  (#121).
 - **Groups of lenses, one review process per group.** Settings › Lenses has
   a **Groups** tab beside **Lenses**: a group is a named set of lenses (the
   project's, the global ones, the built-in ones), made, edited, duplicated
