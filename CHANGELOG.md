@@ -41,6 +41,14 @@ released to the `stable` branch.
 - A review agent's Bash command with a comment (`#`) is refused: the
   shell drops the words after it, which the hooks would still have read.
 
+### Fixed
+
+- **A lens's new name, as it is typed.** In Settings › Lenses, the row of
+  an added lens being renamed now shows the name typed in its editor. Once
+  saved, the lens is listed under its new name (or its new scope) with its
+  editor still open, and a page opened at its link follows it instead of
+  saying it is gone.
+
 ## 0.6.0 - 2026-11-19
 
 ### Added
