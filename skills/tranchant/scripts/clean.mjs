@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // clean.mjs [--project <root>] --find
-//   | --prepare <source> --to <global | local> [--name <name>] [--context <skill>]
+//   | --prepare <source> --to <global | local> [--name <name>]
 //   | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped]
 //   | --drop <id>
 // What runs around a lens's cleaning agent (lib/cleaning.mjs), from the
@@ -12,8 +12,8 @@
 //   lens's, its source changed; --start: one the page made, which waits no
 //   more from then on. Each prints
 //   `CLEANING <json>`, what the agent is given: `{ id, dir, project, name,
-//   scope, again, source, file, folder, version?, context?, contextFile?,
-//   rules?, lens, report }`, `lens` and `report` the only files it writes.
+//   scope, again, source, file, folder, version?, rules?, lens, report }`,
+//   `lens` and `report` the only files it writes.
 // --check: the agent ended: what it wrote checked, `CLEANED <state> <scope>
 //   <name>` (`ready` to add from the page, `added` for a lens cleaned again)
 //   or `CLEAN_FAILED <reason>`. With --stopped, the agent was stopped or
@@ -128,21 +128,14 @@ await guarded(async () => {
     const to = flag('--to')
     if (!to) refuse('--to global or --to local: where the lens lives')
     const name = flag('--name')
-    const context = flag('--context')
-    made = await createCleaning({
-      project,
-      source,
-      scope: to,
-      ...(name && { name }),
-      ...(context && { context }),
-    })
+    made = await createCleaning({ project, source, scope: to, ...(name && { name }) })
   } else if (again) {
     made = await cleanAgain({ project, scope: flag('--scope') ?? '', name: again })
   } else if (id) {
     made = await startedCleaning(project, id)
   } else {
     console.error(
-      'usage: clean.mjs [--project <root>] --find | --prepare <source> --to <global | local> [--name <name>] [--context <skill>] | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped] | --drop <id>',
+      'usage: clean.mjs [--project <root>] --find | --prepare <source> --to <global | local> [--name <name>] | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped] | --drop <id>',
     )
     process.exit(2)
   }

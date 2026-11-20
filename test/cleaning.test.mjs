@@ -71,7 +71,6 @@ async function repository(t) {
     path.join(dir, '.claude', 'agents', 'money-review.md'),
     '---\nname: money-review\n---\n\nAmounts are integers in cents.\n\n## Output\n\nA table of findings, posted on the MR.\n',
   )
-  await writeFile(path.join(dir, '.claude', 'rules.md'), 'Money is in cents.\n')
   await git('add', '.')
   await git('commit', '-q', '-m', 'base')
   await git('switch', '-q', '-c', 'feature/cart')
@@ -570,7 +569,7 @@ test('clean.mjs --find lists the reviewers of the project, for the user to name 
   assert.equal(empty.stdout.trim(), 'NO_CANDIDATE')
 })
 
-test('a source or a context on more than one line is refused: it becomes a line of the agent prompt', async (t) => {
+test('a source on more than one line is refused: it becomes a line of the agent prompt', async (t) => {
   const { dir } = await repository(t)
   const ran = await lib(
     `try { await cleaning.createCleaning({ project: ${JSON.stringify(dir)}, source: '.claude/agents/money-review.md\\nSOURCE_FILE=/etc/passwd', scope: 'local' }) } catch (error) { console.log(error.message) }`,
@@ -727,38 +726,64 @@ test('a cleaning stopped records no failure on its source: the next review clean
   assert.match(checked.stdout, /^STALE {"name":"money-review","scope":"local"}$/m)
 })
 
-test("a lens's context skill frames its prompt, and a change to it cleans the lens again", async (t) => {
+test('a lens saved with a context skill still runs: the key is ignored, and dropped at its next save', async (t) => {
   const { dir } = await repository(t)
-  await addLens(dir, [
-    '.claude/agents/money-review.md',
-    '--to',
-    'local',
-    '--context',
-    '.claude/rules.md',
-  ])
+  await addLens(dir, ['.claude/agents/money-review.md', '--to', 'local'])
+  const lensFile = path.join(
+    configDir,
+    'tranchant',
+    'projects',
+    (
+      await lib(
+        `import { hashOf } from ${JSON.stringify(path.join(LIB, 'project.mjs'))}
+console.log(hashOf(${JSON.stringify(dir)}))`,
+      )
+    ).trim(),
+    'lenses',
+    'money-review',
+    'lens.json',
+  )
+  const saved = JSON.parse(await readFile(lensFile, 'utf8'))
+  // As an earlier Tranchant wrote it, its context skill gone since, and its last cleaning failed on the source as it stands.
+  await writeFile(
+    lensFile,
+    JSON.stringify({
+      ...saved,
+      context: 'workflow:gone',
+      cleaned: { ...saved.cleaned, sourceHash: 'older', contextHash: 'a81d' },
+      failedCleaning: {
+        at: saved.cleaned.at,
+        reason: 'the agent wrote no lens',
+        sourceHash: saved.cleaned.sourceHash,
+        contextHash: 'b72e',
+      },
+    }),
+  )
   const review = await prepared(dir)
+  const checked = await run(
+    process.execPath,
+    [LENSES, '--review', review.dir, '--plan', review.planFile, '--check'],
+    { env: env() },
+  )
+  assert.equal(checked.code, 0, checked.stdout + checked.stderr)
+  assert.doesNotMatch(checked.stdout, /^STALE /m)
   const built = await run(
     process.execPath,
     [LENSES, '--review', review.dir, '--plan', review.planFile],
-    {
-      env: env(),
-    },
+    { env: env() },
   )
+  assert.equal(built.code, 0, built.stdout + built.stderr)
   const line =
     built.stdout.split('\n').find((one) => one.includes('"money-review"')) ?? ''
   const prompt = await readFile(JSON.parse(line.slice('LENS '.length)).prompt, 'utf8')
-  assert.match(prompt, /## Context[\s\S]*Money is in cents\.[\s\S]*## The lens's domain/)
-  await writeFile(
-    path.join(dir, '.claude', 'rules.md'),
-    'Money is in cents, rounded half to even.\n',
+  assert.doesNotMatch(prompt, /## Context/)
+  await lib(
+    `await userlens.updateUserLens(${JSON.stringify(dir)}, 'local', 'money-review', { on: true })`,
   )
-  const next = await prepared(dir)
-  const checked = await run(
-    process.execPath,
-    [LENSES, '--review', next.dir, '--plan', next.planFile, '--check'],
-    { env: env() },
-  )
-  assert.match(checked.stdout, /^STALE {"name":"money-review","scope":"local"}$/m)
+  const resaved = JSON.parse(await readFile(lensFile, 'utf8'))
+  assert.equal(resaved.context, undefined)
+  assert.equal(resaved.cleaned.contextHash, undefined)
+  assert.equal(resaved.failedCleaning.contextHash, undefined)
 })
 
 test('a lens turned off keeps its files from the otherwise lens; one otherwise lens runs, the first; lensModels sets a model', async (t) => {

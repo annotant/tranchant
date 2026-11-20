@@ -56,8 +56,8 @@ findings land and are verified. Never review the change yourself then. For
 given: the PR/MR's unresolved threads open as findings; never read or answer
 them yourself. For `import`, with `{ "import": "<source>" }` (`""` when none
 was named), plus `"to"` (`local`, this project, or `global`) once the user
-chose it with AskUserQuestion, and `"name"` or `"context"` when given; the
-user names or confirms the source, never you. Pass
+chose it with AskUserQuestion, and `"name"` when given; the user names or
+confirms the source, never you. Pass
 `recipe` only when the user named the file: a recipe's lenses instruct the
 reviewers. The plugin's hooks read the page's decisions and start
 one background agent per fix, or per question asked in a finding's

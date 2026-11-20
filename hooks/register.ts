@@ -1116,7 +1116,7 @@ async function openCommand($: $, args: string) {
     return 'error' in parsed ? parsed.error : startImport($, parsed)
   }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] [--context <skill>] | comments [<pull request or merge request url>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] | comments [<pull request or merge request url>] | status | stop'
   return openReview($, word)
 }
 
@@ -2175,7 +2175,7 @@ async function startWaiting($: $, watched: Watch, kind: 'START' | 'BUILD') {
 // whose lens's source changed, which waits for it.
 
 const IMPORT_USAGE =
-  'Usage: /tranchant import [<skill, agent or path>] [--to global | local] [--name <lens>] [--context <skill>]'
+  'Usage: /tranchant import [<skill, agent or path>] [--to global | local] [--name <lens>]'
 
 /** The words of `/tranchant import`: its source and its flags, or what is wrong. */
 function importArgs(words: string[]) {
@@ -2183,7 +2183,7 @@ function importArgs(words: string[]) {
   const rest: string[] = []
   for (let i = 0; i < words.length; i++) {
     const word = words[i] ?? ''
-    if (word === '--to' || word === '--name' || word === '--context') {
+    if (word === '--to' || word === '--name') {
       const value = words[i + 1]
       if (!value || value.startsWith('--')) return { error: IMPORT_USAGE }
       flags[word.slice(2)] = value
@@ -2192,7 +2192,7 @@ function importArgs(words: string[]) {
     else rest.push(word)
   }
   if (rest.length > 1) return { error: IMPORT_USAGE }
-  return { source: rest[0], to: flags.to, name: flags.name, context: flags.context }
+  return { source: rest[0], to: flags.to, name: flags.name }
 }
 
 /** A word the tool was given, trimmed; undefined when blank or not a text. */
@@ -2211,8 +2211,6 @@ type Prepared = {
   file: string
   folder: string
   version?: string
-  context?: string
-  contextFile?: string
   rules?: string
   lens: string
   report: string
@@ -2306,9 +2304,6 @@ async function spawnCleaner($: $, made: Prepared) {
         `SOURCE=${made.source}`,
         `SOURCE_FILE=${made.file}`,
         `SOURCE_FOLDER=${made.folder}`,
-        ...(made.contextFile
-          ? [`CONTEXT=${made.context ?? ''}`, `CONTEXT_FILE=${made.contextFile}`]
-          : []),
         `PROJECT=${made.project}`,
         `NAME=${made.name}`,
         ...(made.rules ? [`RULES=${made.rules}`] : []),
@@ -2343,10 +2338,7 @@ async function spawnCleaner($: $, made: Prepared) {
  * in the background. The lens waits in Settings › Lenses until the user adds
  * it: nothing picks one for them.
  */
-async function startImport(
-  $: $,
-  given: { source?: string; to?: string; name?: string; context?: string },
-) {
+async function startImport($: $, given: { source?: string; to?: string; name?: string }) {
   const project = normalize(
     (await gitTop($, normalize(await $.session.cwd()))) ?? (await $.session.cwd()),
   )
@@ -2381,7 +2373,6 @@ async function startImport(
       '--to',
       to,
       ...(given.name ? ['--name', given.name] : []),
-      ...(given.context ? ['--context', given.context] : []),
     ]),
   )
   if ('refused' in prepared)
@@ -2391,9 +2382,7 @@ async function startImport(
       ...(/is (?:global|this project's) already: edit it, or choose another name$/.test(
         prepared.refused,
       )
-        ? [
-            `Give it another name: /tranchant import ${source} --to ${to} --name <lens>${given.context ? ` --context ${given.context}` : ''}.`,
-          ]
+        ? [`Give it another name: /tranchant import ${source} --to ${to} --name <lens>.`]
         : []),
     ].join('\n')
   const { made } = prepared
@@ -2658,11 +2647,6 @@ export const register: Register = (on) => {
             type: 'string',
             description: "With import: the lens's name; absent, one from its source.",
           },
-          context: {
-            type: 'string',
-            description:
-              "With import: a skill that frames the lens's run (the project's domain, its rules), by name or path.",
-          },
           comments: {
             type: 'boolean',
             description:
@@ -2699,6 +2683,8 @@ export const register: Register = (on) => {
     if (e.stop === true) return { result: await stopServing($) }
     if (e.status === true) return { result: await statusText($) }
     if (typeof e.import === 'string') {
+      // As /tranchant import refuses --context: a caller from before its removal is told.
+      if (e.context !== undefined) return { result: IMPORT_USAGE }
       const source = e.import.trim() || undefined
       const to = typeof e.to === 'string' && e.to.trim() ? e.to.trim() : undefined
       return {
@@ -2706,7 +2692,6 @@ export const register: Register = (on) => {
           ...(source && { source }),
           ...(to && { to }),
           ...(word(e.name) && { name: word(e.name) }),
-          ...(word(e.context) && { context: word(e.context) }),
         }),
       }
     }

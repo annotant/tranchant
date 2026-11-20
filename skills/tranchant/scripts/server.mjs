@@ -457,9 +457,8 @@ async function knownLenses() {
  * All refused is a refusal (409).
  * @param {http.ServerResponse} res
  * @param {any} input
- * @param {string | undefined} context
  */
-function importSeveral(res, input, context) {
+function importSeveral(res, input) {
   /** @type {{ source: string, name?: string }[]} */
   const sources = input.sources
     .filter((/** @type {any} */ one) => typeof one?.source === 'string')
@@ -486,7 +485,6 @@ function importSeveral(res, input, context) {
       project: lensRoot,
       scope: String(input?.scope ?? ''),
       sources: fresh,
-      ...(context && { context }),
       ...(typeof input?.from === 'string' &&
         input.from.trim() && { from: input.from.trim().slice(0, 1024) }),
     })
@@ -1372,11 +1370,7 @@ async function handle(req, res) {
 
   if (req.method === 'POST' && url.pathname === '/api/lens/import') {
     const input = await readJson(req)
-    const context =
-      typeof input?.context === 'string' && input.context.trim()
-        ? input.context
-        : undefined
-    if (Array.isArray(input?.sources)) return importSeveral(res, input, context)
+    if (Array.isArray(input?.sources)) return importSeveral(res, input)
     return lensChange(res, async () => {
       const made = await createCleaning({
         project: lensRoot,
@@ -1384,7 +1378,6 @@ async function handle(req, res) {
         scope: String(input?.scope ?? ''),
         queued: true,
         ...(typeof input?.name === 'string' && input.name.trim() && { name: input.name }),
-        ...(context && { context }),
       })
       print(`CLEAN ${made.record.id}`)
       return { cleaning: made.record.id }

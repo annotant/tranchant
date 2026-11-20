@@ -457,7 +457,7 @@ test('What the reviewer reads shows what the cleaning removed and added, and the
   vi.unstubAllGlobals()
 })
 
-test('Add a lens sends its source, name, scope and context skill to be cleaned', async () => {
+test('Add a lens sends its source, name and scope to be cleaned', async () => {
   // A single reviewer: nothing inside it to list.
   const fetch = stubMatches({ inside: null, name: 'code-reviewer-api' })
   try {
@@ -478,9 +478,7 @@ test('Add a lens sends its source, name, scope and context skill to be cleaned',
       within(form).getByText('Replaces the built-in docs where it lives.'),
     ).toBeDefined()
     fireEvent.click(within(form).getByRole('button', { name: 'Global' }))
-    fireEvent.change(within(form).getByLabelText('Context skill'), {
-      target: { value: 'workflow:api-rules' },
-    })
+    expect(within(form).queryByLabelText('Context skill')).toBeNull()
     await waitFor(() => expect(add).toHaveProperty('disabled', false))
     expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
       '/api/lens/inside?source=workflow%3Acode-reviewer-api',
@@ -491,7 +489,6 @@ test('Add a lens sends its source, name, scope and context skill to be cleaned',
       source: 'workflow:code-reviewer-api',
       scope: 'global',
       name: 'docs',
-      context: 'workflow:api-rules',
     })
     await waitFor(() =>
       expect(screen.queryByRole('form', { name: 'Add a lens' })).toBeNull(),

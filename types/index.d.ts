@@ -133,8 +133,8 @@ declare module 'claude-code' {
       to?: string
       /** With import: the lens's name; absent, one from its source. */
       name?: string
-      /** With import: a skill that frames the lens's run. */
-      context?: string
+      /** Removed: refused, as /tranchant import refuses --context. */
+      context?: unknown
     }
   }
   interface PluginState {
