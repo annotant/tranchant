@@ -354,19 +354,22 @@ export function recordedSource(label, scope, project) {
 }
 
 /**
- * A source's text as its hash reads it: its frontmatter's `model:` line left
- * out, since each review reads that line anew (Auto-detect).
+ * A source's text as its hash reads it: its line ends LF, its frontmatter's
+ * `model:` line left out, since each review reads that line anew
+ * (Auto-detect). The frontmatter ends where splitFrontmatter ends it.
  * @param {string} text
  */
 function hashedText(text) {
-  const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
-  if (!head?.[1]) return text
-  const kept = head[1]
+  const normalized = text.replace(/\r\n/g, '\n')
+  if (!normalized.startsWith('---\n')) return text
+  const end = normalized.indexOf('\n---', 3)
+  // No frontmatter line, or never closed: nothing to leave out.
+  if (end < 4) return text
+  const kept = normalized
+    .slice(4, end)
     .split('\n')
     .filter((line) => !line.startsWith('model:'))
-    .join('\n')
-  const at = head[0].indexOf('\n') + 1
-  return text.slice(0, at) + kept + text.slice(at + head[1].length)
+  return ['---', ...kept].join('\n') + normalized.slice(end)
 }
 
 /**
@@ -388,7 +391,8 @@ export async function hashesOf(lens, project) {
 /**
  * Whether `lens` must be cleaned again: its source changed since its last
  * cleaning, and no cleaning failed on it as it stands (the page's Clean it
- * again tries anew). Its `model:` line alone changing is no change.
+ * again tries anew). Its `model:` line alone changing is no change, once it
+ * was cleaned by a Tranchant that leaves that line out of the hash.
  * @param {UserLens} lens
  * @param {{ sourceHash: string, wholeHash?: string }} now
  */
@@ -620,13 +624,13 @@ export async function describeLenses({ project, base, values }) {
       try {
         const built = await buildLens(spec, spec.added ? whereOf(project) : recipeWhere)
         const standing = lens ? staleness(lens, await hashesOf(lens, project)) : undefined
-        const shown = frontmatterOf(built.fields)
+        const shown = shownFrontmatter(built.frontmatter.fields)
         return {
           ...row,
           ...(spec.added && originOfSource(row.source, built.file)),
           ...(built.record.version && { version: built.record.version }),
           // What Auto-detect finds, whatever the lens's model: the page says it before it is chosen.
-          detected: { file: path.basename(built.file), ...autoModel(built.fields.model) },
+          detected: { file: path.basename(built.file), ...autoModel(built.frontmatter) },
           ...(shown && { frontmatter: shown }),
           ...(standing && standing !== 'clean' && { stale: standing }),
         }
@@ -669,11 +673,12 @@ function originOfSource(label, file) {
 }
 
 /**
- * What Settings › Lenses shows of a source's frontmatter: its name, tools
- * and model, each cut short; undefined when it names none of them.
+ * What Settings › Lenses shows of a source's frontmatter beside its source,
+ * its name, tools and model (Auto-detect reads the model alone), each cut
+ * short; undefined when it names none of them.
  * @param {Record<string, string>} fields
  */
-function frontmatterOf(fields) {
+function shownFrontmatter(fields) {
   const shown = Object.fromEntries(
     ['name', 'tools', 'model'].flatMap((key) =>
       fields[key] ? [[key, fields[key].slice(0, 120)]] : [],

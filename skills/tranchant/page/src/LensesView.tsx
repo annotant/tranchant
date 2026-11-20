@@ -206,8 +206,8 @@ function modelFact(lens: LensEntry, models: Models) {
   if (models.forced) return { text: `TRANCHANT_MODEL · ${models.forced}`, warn: false }
   if (lens.model === AUTO_MODEL)
     return {
-      text: `auto · ${lens.detected?.id ?? lens.detected?.model ?? SESSION_MODEL}`,
-      warn: lens.detected?.why === 'foreign',
+      text: `auto · ${lens.detected?.why === 'source' ? lens.detected.id : SESSION_MODEL}`,
+      warn: lens.detected?.why === 'foreign' || lens.detected?.why === 'unreadable',
     }
   if (lens.model) return { text: lens.model, warn: false }
   return { text: `reviewers' · ${models.review ?? SESSION_MODEL}`, warn: false }
@@ -223,20 +223,28 @@ function resolvesTo(value: string, detected: Detected | undefined, models: Model
   if (value === AUTO_MODEL) {
     if (!detected)
       return { text: `→ its source's model, else ${SESSION_MODEL}`, warn: false }
-    const { file, asked } = detected
-    if (detected.why === 'source')
-      return {
-        text: `→ ${file} asks for model: ${asked} → ${detected.id ?? detected.model}`,
-        warn: false,
-      }
-    if (detected.why === 'inherit')
-      return { text: `→ ${file} says model: inherit → ${SESSION_MODEL}`, warn: false }
-    if (detected.why === 'foreign')
-      return {
-        text: `→ ${file} asks for model: ${asked}, not a Claude model → ${SESSION_MODEL}`,
-        warn: true,
-      }
-    return { text: `→ ${file} names no model → ${SESSION_MODEL}`, warn: false }
+    const { file } = detected
+    switch (detected.why) {
+      case 'source':
+        return {
+          text: `→ ${file} asks for model: ${detected.asked} → ${detected.id}`,
+          warn: false,
+        }
+      case 'inherit':
+        return { text: `→ ${file} says model: inherit → ${SESSION_MODEL}`, warn: false }
+      case 'foreign':
+        return {
+          text: `→ ${file} asks for model: ${detected.asked}, not a Claude model → ${SESSION_MODEL}`,
+          warn: true,
+        }
+      case 'unreadable':
+        return {
+          text: `→ ${file}'s frontmatter cannot be read (${detected.problem}) → ${SESSION_MODEL}`,
+          warn: true,
+        }
+      case 'none':
+        return { text: `→ ${file} names no model → ${SESSION_MODEL}`, warn: false }
+    }
   }
   if (!value)
     return { text: `→ Settings › Agents: ${models.review ?? SESSION_MODEL}`, warn: false }

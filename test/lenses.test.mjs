@@ -124,8 +124,9 @@ const env = () => ({
  * what it printed, the review's folder and its envelope.
  * @param {string} cwd
  * @param {string[]} [args]
+ * @param {Record<string, string>} [extra] More environment for lenses.mjs.
  */
-async function review(cwd, args = []) {
+async function review(cwd, args = [], extra = {}) {
   const prepared = await run(process.execPath, [PREPARE, ...args], { cwd, env: env() })
   assert.equal(prepared.code, 0, prepared.stdout + prepared.stderr)
   const [inbox = '', plan = ''] = prepared.stdout
@@ -136,7 +137,7 @@ async function review(cwd, args = []) {
   const dir = opened.stdout.trim().replace(/^REVIEW /, '')
   assert.ok(path.isAbsolute(dir), opened.stdout + opened.stderr)
   const ran = await run(process.execPath, [LENSES, '--review', dir, '--plan', plan], {
-    env: env(),
+    env: { ...env(), ...extra },
   })
   return {
     ...ran,
@@ -310,27 +311,49 @@ test('lenses.mjs builds every lens, records them, and prints one LENS line each'
   )
 })
 
+/** autoModel of a source whose frontmatter names `model`, or none. */
+const of = (/** @type {string | undefined} */ model) =>
+  autoModel({ fields: model === undefined ? {} : { model } })
+
 test("autoModel takes a Claude model from a source's frontmatter, an alias as Claude Code takes it; else the session's, and why", () => {
-  assert.deepEqual(autoModel('opus'), {
+  assert.deepEqual(of('opus'), {
+    why: 'source',
     model: 'opus',
     id: 'claude-opus-5-5',
     asked: 'opus',
-    why: 'source',
   })
-  assert.deepEqual(autoModel(' "Sonnet" '), {
+  assert.deepEqual(of(' "Sonnet" '), {
+    why: 'source',
     model: 'sonnet',
     id: 'claude-sonnet-5-5',
     asked: 'Sonnet',
-    why: 'source',
   })
-  assert.equal(autoModel('claude-haiku-5-5').model, 'claude-haiku-5-5')
-  assert.equal(autoModel('us.anthropic.claude-opus-4-1-20250805-v1:0').why, 'source')
-  assert.deepEqual(autoModel(undefined), { why: 'none' })
-  assert.deepEqual(autoModel(''), { why: 'none' })
-  assert.deepEqual(autoModel('inherit'), { asked: 'inherit', why: 'inherit' })
-  assert.deepEqual(autoModel('gpt-5'), { asked: 'gpt-5', why: 'foreign' })
+  assert.deepEqual(of('sonnet[1m]'), {
+    why: 'source',
+    model: 'sonnet[1m]',
+    id: 'claude-sonnet-5-5[1m]',
+    asked: 'sonnet[1m]',
+  })
+  for (const id of [
+    'claude-haiku-5-5',
+    'us.anthropic.claude-opus-4-1-20250805-v1:0',
+    'claude-opus-4-1@20250805',
+  ])
+    assert.deepEqual(of(id), { why: 'source', model: id, id, asked: id })
+  assert.deepEqual(of(undefined), { why: 'none' })
+  assert.deepEqual(of(''), { why: 'none' })
+  assert.deepEqual(of('inherit'), { why: 'inherit', asked: 'inherit' })
+  assert.deepEqual(of('gpt-5'), { why: 'foreign', asked: 'gpt-5' })
+  assert.deepEqual(of('notclaude-opus'), { why: 'foreign', asked: 'notclaude-opus' })
   // An alias is a key of its own, never one an object inherits.
-  assert.deepEqual(autoModel('constructor'), { asked: 'constructor', why: 'foreign' })
+  assert.deepEqual(of('constructor'), { why: 'foreign', asked: 'constructor' })
+  assert.deepEqual(
+    autoModel({ fields: {}, problem: 'its frontmatter is never closed' }),
+    {
+      why: 'unreadable',
+      problem: 'its frontmatter is never closed',
+    },
+  )
 })
 
 test("a lens on Auto-detect runs on its source's model, else the session's: its LENS line and its row say which", async (t) => {
@@ -375,6 +398,24 @@ test("a lens on Auto-detect runs on its source's model, else the session's: its 
       ['fixed', 'claude-haiku-5-5', 'lens', undefined],
     ],
   )
+})
+
+test("TRANCHANT_MODEL names every row's model; a lens of the recipe takes Auto-detect from lensModels", async (t) => {
+  const { dir } = await repository(t)
+  await settings({ lensModels: { bugs: 'auto' } })
+  t.after(() => settings(undefined))
+  const ran = await review(dir)
+  assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+  assert.equal(ran.lenses.find((lens) => lens.name === 'bugs')?.model, 'inherit')
+  const bugs = ran.progress.lenses.find((/** @type {any} */ row) => row.name === 'bugs')
+  assert.deepEqual([bugs.modelFrom, bugs.autoWhy], ['auto', 'none'])
+  const forced = await review(dir, [], { TRANCHANT_MODEL: 'claude-opus-5-5' })
+  assert.equal(forced.code, 0, forced.stdout + forced.stderr)
+  for (const row of forced.progress.lenses)
+    assert.deepEqual(
+      [row.model, row.modelFrom, row.autoWhy],
+      ['claude-opus-5-5', 'forced', undefined],
+    )
 })
 
 test('each source that cannot be resolved refuses the review, with its reason, and no LENS line', async (t) => {

@@ -4,6 +4,7 @@
 // repository), prepare.mjs runs it beside the recipe's, and lenses.mjs finds
 // a lens whose source changed and runs its new version, or its last one.
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
@@ -558,7 +559,7 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
 })
 
 test("a lens added from an agent is on Auto-detect: it runs on the agent's model, read again at each review with no new cleaning", async (t) => {
-  const { dir } = await repository(t)
+  const { dir, git } = await repository(t)
   const agent = path.join(dir, '.claude', 'agents', 'money-review.md')
   const write = (/** @type {string} */ model) =>
     writeFile(
@@ -599,11 +600,65 @@ test("a lens added from an agent is on Auto-detect: it runs on the agent's model
     return [line?.model, row.model, row.autoWhy]
   }
   assert.deepEqual(await models(), ['haiku', 'claude-haiku-5-5', undefined])
+  // Settings › Lenses says what Auto-detect finds, and the frontmatter it reads.
+  const listed = JSON.parse(
+    await lib(`import { DEFAULTS } from ${JSON.stringify(path.join(LIB, 'settings.mjs'))}
+const set = await userlens.describeLenses({ project: ${JSON.stringify(dir)}, base: 'main', values: DEFAULTS })
+console.log(JSON.stringify(set.lenses.find((one) => one.name === 'money-review')))`),
+  )
+  assert.equal(listed.model, 'auto')
+  assert.deepEqual(listed.detected, {
+    file: 'money-review.md',
+    why: 'source',
+    model: 'haiku',
+    id: 'claude-haiku-5-5',
+    asked: 'haiku',
+  })
+  assert.deepEqual(listed.frontmatter, { name: 'money-review', model: 'haiku' })
   await write('model: sonnet\n')
   assert.deepEqual(await models(), ['sonnet', 'claude-sonnet-5-5', undefined])
   // No model named: the session's, which the hooks read when the reviewer starts.
   await write('')
   assert.deepEqual(await models(), ['inherit', undefined, 'none'])
+  // A frontmatter it cannot read: said, never read as no model.
+  await write('model:opus\n')
+  assert.deepEqual(await models(), ['inherit', undefined, 'unreadable'])
+  // Edited on Windows: the same lens, its model read.
+  await writeFile(
+    agent,
+    '---\r\nname: money-review\r\nmodel: opus\r\n---\r\n\r\nAmounts are integers in cents.\r\n',
+  )
+  assert.deepEqual(await models(), ['opus', 'claude-opus-5-5', undefined])
+  // The branch under review sets the model of the lens that reviews it: the session's runs.
+  await write('model: haiku\n')
+  await git('commit', '-q', '-am', 'the branch picks its reviewer')
+  assert.deepEqual(await models(), ['inherit', undefined, 'held'])
+})
+
+test('a lens cleaned when its whole source was hashed is not cleaned again for that source', async (t) => {
+  const { dir } = await repository(t)
+  const agent = path.join(dir, '.claude', 'agents', 'money-review.md')
+  const text =
+    '---\nname: money-review\nmodel: opus\n---\n\nAmounts are integers in cents.\n'
+  await writeFile(agent, text)
+  await addLens(dir, ['.claude/agents/money-review.md', '--to', 'local'])
+  const lensDir = (
+    await lib(
+      `console.log(userlens.lensDir('local', ${JSON.stringify(dir)}, 'money-review'))`,
+    )
+  ).trim()
+  const file = path.join(lensDir, 'lens.json')
+  const lens = JSON.parse(await readFile(file, 'utf8'))
+  lens.cleaned.sourceHash = createHash('sha256').update(text).digest('hex')
+  await writeFile(file, JSON.stringify(lens))
+  const review = await prepared(dir)
+  const checked = await run(
+    process.execPath,
+    [LENSES, '--review', review.dir, '--plan', review.planFile, '--check'],
+    { env: env() },
+  )
+  assert.equal(checked.code, 0, checked.stderr)
+  assert.doesNotMatch(checked.stdout, /^STALE /m)
 })
 
 test("a lens added with the reviewers' model chosen keeps none of its own", async (t) => {

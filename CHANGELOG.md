@@ -15,7 +15,9 @@ released to the `stable` branch.
   (`model: opus` runs on Opus), else the model of the session that ran
   `/tranchant review` (no model, `inherit`, or a model that is not
   Claude's). The source is read again at each review, and a change to its
-  `model:` line alone cleans nothing again. Beside the select, a line says
+  `model:` line alone cleans nothing again (a lens cleaned before this
+  version is cleaned once more the first time); a branch that edits an
+  added lens's source never picks that lens's model. Beside the select, a line says
   what it resolves to and why; the Source field shows the frontmatter it
   reads; each lens's row, and each reviewer's on Ready to start, names the
   model it runs on (*auto · claude-opus-5-5*). `TRANCHANT_MODEL` still wins

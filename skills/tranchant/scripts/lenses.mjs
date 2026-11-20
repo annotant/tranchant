@@ -81,9 +81,9 @@ import {
  * @property {string} [fix] With `failed`: what makes it build.
  * @property {'global' | 'local'} [scope] A lens the user added.
  * @property {'running' | 'again' | 'failed' | 'held'} [cleaning] An added lens whose source changed: being cleaned again, cleaned again, its cleaning failed, or held: the change under review is what changed it.
- * @property {string} [model] With `ready`: the model its reviewer runs on; absent, the session's.
+ * @property {string} [model] With `ready`: the model its reviewer runs on, an alias's id as it stands today; absent, the session's.
  * @property {'forced' | 'auto' | 'lens' | 'reviewers'} [modelFrom] With `ready`: what chose it: TRANCHANT_MODEL, Auto-detect, the lens's own, or Settings › Agents.
- * @property {'none' | 'inherit' | 'foreign'} [autoWhy] On Auto-detect, why the session's: its source names no model, says `inherit`, or names one that is not Claude's.
+ * @property {'none' | 'inherit' | 'foreign' | 'unreadable' | 'held'} [autoWhy] On Auto-detect, why the session's: its source names no model, says `inherit`, names one that is not Claude's, has a frontmatter that cannot be read, or is changed by the change under review.
  */
 
 /**
@@ -443,22 +443,25 @@ const { values: settings, locked } = await loadSettings()
  * The model of a lens's reviewer: on its LENS line, the lens's own (on
  * Auto-detect, its source's, else `inherit`, the session's: the reviewers'
  * model is skipped), which the hooks put after TRANCHANT_MODEL and before
- * the reviewers'; on its row, the one it runs on, and what chose it.
+ * the reviewers'; on its row, the one it runs on (an alias's id as it stands
+ * today), and what chose it.
  * @param {LensSpec} lens
- * @param {Record<string, string>} fields Its source's frontmatter.
+ * @param {{ file: string, frontmatter: { fields: Record<string, string>, problem?: string } }} built
  */
-function modelOf(lens, fields) {
-  const auto = lens.model === AUTO_MODEL ? autoModel(fields.model) : undefined
-  const line = auto ? (auto.model ?? 'inherit') : lens.model
+async function modelOf(lens, built) {
+  /** @type {import('./lib/lens.mjs').AutoModel | { why: 'held' } | undefined} */
+  let auto = lens.model === AUTO_MODEL ? autoModel(built.frontmatter) : undefined
+  // A branch never picks the model of the lens that reviews it.
+  if (auto?.why === 'source' && lens.added && (await changedHere(built.file)))
+    auto = { why: 'held' }
+  const line = auto ? (auto.why === 'source' ? auto.model : 'inherit') : lens.model
   const forced = locked.reviewModel ? settings.reviewModel : null
   const row = forced
     ? { model: forced, modelFrom: 'forced' }
     : auto
-      ? {
-          ...(auto.id && { model: auto.id }),
-          modelFrom: 'auto',
-          ...(auto.why !== 'source' && { autoWhy: auto.why }),
-        }
+      ? auto.why === 'source'
+        ? { model: auto.id, modelFrom: 'auto' }
+        : { modelFrom: 'auto', autoWhy: auto.why }
       : lens.model
         ? { model: lens.model, modelFrom: 'lens' }
         : {
@@ -482,12 +485,10 @@ for (const [i, lens] of shown.entries()) {
   if (!row || !runs(lens)) continue
   try {
     // An added lens's paths are the project's, never the recipe's folder.
-    const { text, hash, record, fields } = await buildLens(
-      lens,
-      lens.added ? whereOf(review.project) : where,
-    )
+    const made = await buildLens(lens, lens.added ? whereOf(review.project) : where)
+    const { text, hash, record } = made
     const { file } = await storeLens(text, hash)
-    const model = modelOf(lens, fields)
+    const model = await modelOf(lens, made)
     const before = previous?.get(lens.name)
     const against = await standing(lens)
     const cleanedNow = against && against.stored.cleaned.at >= review.createdAt

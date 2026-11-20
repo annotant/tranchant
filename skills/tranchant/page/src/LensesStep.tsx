@@ -26,10 +26,22 @@ const FROM_WORDS: Record<NonNullable<LensRow['modelFrom']>, string> = {
   reviewers: "reviewers'",
 }
 
-/** The model a ready lens's reviewer runs on, as its row names it: `auto · claude-opus-5-5`. */
-function modelWords(row: LensRow) {
-  if (!row.modelFrom) return undefined
-  return `${FROM_WORDS[row.modelFrom]} · ${row.model ?? "the session's model"}`
+const AUTO_WHY_WORDS: Partial<Record<NonNullable<LensRow['autoWhy']>, string>> = {
+  foreign: 'its source names a model that is not Claude’s',
+  unreadable: 'its source’s frontmatter cannot be read',
+  held: 'this change edits its source',
+}
+
+/** The model a ready lens's reviewer runs on, as its row names it: ` · auto · claude-opus-5-5`, and why Auto-detect fell back. */
+function ModelWords({ row }: { row: LensRow }) {
+  if (!row.modelFrom) return null
+  const why = row.autoWhy && AUTO_WHY_WORDS[row.autoWhy]
+  return (
+    <span className={why ? 'tr-warn' : undefined}>
+      {` · ${FROM_WORDS[row.modelFrom]} · ${row.model ?? "the session's model"}`}
+      {why && ` (${why})`}
+    </span>
+  )
 }
 
 function rowWords(row: LensRow) {
@@ -62,7 +74,7 @@ function Row({ row, fixable }: { row: LensRow; fixable: boolean }) {
         {row.source}
         {row.version && ` ${row.version}`}
         {row.scope && ` · ${SCOPE_WORDS[row.scope]}`}
-        {modelWords(row) && ` · ${modelWords(row)}`}
+        <ModelWords row={row} />
       </code>
       <span
         className={`tr-lens-row-state${row.change === 'updated' || row.cleaning ? ' tr-lens-row-state--updated' : ''}`}
@@ -597,7 +609,7 @@ export function ReadyCenter({
                 {row.source}
                 {row.version && ` ${row.version}`}
                 {row.scope && ` · ${SCOPE_WORDS[row.scope]}`}
-                {lit && modelWords(row) && ` · ${modelWords(row)}`}
+                {lit && <ModelWords row={row} />}
               </code>
               <span
                 className={`tr-lens-row-state${moved || row.cleaning ? ' tr-lens-row-state--updated' : ''}`}

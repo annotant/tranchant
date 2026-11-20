@@ -49,14 +49,16 @@ export const isPluginName = (/** @type {string} */ label) => PLUGIN_NAME.test(la
 const MODEL = /^[\w.:-]{1,80}$/
 /** A lens's model that asks for its source's model, else the session's. */
 export const AUTO_MODEL = 'auto'
-/** Claude Code's aliases, and the ids they stand for today: the page names them. */
+/** Claude Code's aliases, and the ids they stand for today: the page names them, Claude Code resolves the alias itself. */
 const MODEL_ALIASES = /** @type {Record<string, string>} */ ({
   opus: 'claude-opus-5-5',
   sonnet: 'claude-sonnet-5-5',
   haiku: 'claude-haiku-5-5',
 })
-/** A Claude model id, a cloud's included (`us.anthropic.claude-…`). */
-const CLAUDE_ID = /(?:^|[.:])claude-[\w.:-]+$/
+/** An alias, `[1m]` its long-context variant. */
+const ALIAS = /^(opus|sonnet|haiku)(\[1m\])?$/
+/** A Claude model id, a cloud's included (`us.anthropic.claude-…`, `claude-…@date`). */
+const CLAUDE_ID = /^(?:[\w-]+[.:])*claude-[\w.:@-]{1,90}(?:\[1m\])?$/
 const LENS_KEYS = new Set([
   'name',
   'prompt',
@@ -404,41 +406,49 @@ function splitFrontmatter(text) {
 }
 
 /**
- * A source's frontmatter fields, or none when it cannot be read: the build
- * says why, never the model it names.
+ * A source's frontmatter fields, and why they cannot be read when they
+ * cannot: an added lens's build reads its cleaned domain, never refusing them.
  * @param {string} text
+ * @returns {{ fields: Record<string, string>, problem?: string }}
  */
-const fieldsOf = (text) => {
+function frontmatterOf(text) {
   try {
-    return splitFrontmatter(text).fields
-  } catch {
-    return {}
+    return { fields: splitFrontmatter(text).fields }
+  } catch (error) {
+    return { fields: {}, problem: message(error).slice(0, 200) }
   }
 }
 
 /**
- * What Auto-detect runs a lens on, from the `model:` its source's
- * frontmatter names: that model when it is Claude's (an alias as Claude Code
- * takes it, `id` the one it stands for), else the session's (`model`
- * absent), and why: it names none, says `inherit`, or names a model that is
- * not Claude's.
- * @param {string | undefined} asked
- * @returns {{ model?: string, id?: string, asked?: string, why: 'source' | 'none' | 'inherit' | 'foreign' }}
+ * What Auto-detect runs a lens on: the model its source's frontmatter names
+ * when it is Claude's (`model` as Claude Code takes it, `id` the id it
+ * stands for today), else the session's, and why: it names none, says
+ * `inherit`, names a model that is not Claude's, or cannot be read.
+ * @typedef {{ why: 'source', model: string, id: string, asked: string }
+ *   | { why: 'none' }
+ *   | { why: 'inherit' | 'foreign', asked: string }
+ *   | { why: 'unreadable', problem: string }} AutoModel
  */
-export function autoModel(asked) {
-  const named = (asked ?? '')
+
+/**
+ * @param {{ fields: Record<string, string>, problem?: string }} frontmatter Its source's, as the build read it.
+ * @returns {AutoModel}
+ */
+export function autoModel({ fields, problem }) {
+  if (problem !== undefined) return { why: 'unreadable', problem }
+  const named = (fields.model ?? '')
     .trim()
     .replace(/^(["'])(.*)\1$/, '$2')
     .trim()
   if (!named) return { why: 'none' }
-  const shown = named.slice(0, 80)
+  const asked = named.slice(0, 80)
   const lower = named.toLowerCase()
-  if (lower === 'inherit') return { asked: shown, why: 'inherit' }
-  const alias = Object.hasOwn(MODEL_ALIASES, lower) ? MODEL_ALIASES[lower] : undefined
-  if (alias) return { model: lower, id: alias, asked: shown, why: 'source' }
-  if (MODEL.test(named) && CLAUDE_ID.test(named))
-    return { model: named, id: named, asked: shown, why: 'source' }
-  return { asked: shown, why: 'foreign' }
+  if (lower === 'inherit') return { why: 'inherit', asked }
+  const alias = ALIAS.exec(lower)
+  const id = alias?.[1] ? MODEL_ALIASES[alias[1]] : undefined
+  if (id) return { why: 'source', model: lower, id: `${id}${alias?.[2] ?? ''}`, asked }
+  if (CLAUDE_ID.test(named)) return { why: 'source', model: named, id: named, asked }
+  return { why: 'foreign', asked }
 }
 
 /** Claude Code's folder: its settings and its installed plugins. */
@@ -812,7 +822,7 @@ export async function buildLens(lens, where) {
     hash,
     file: main.file,
     // Read at each build: a source that changes its model changes the lens's, with no cleaning.
-    fields: fieldsOf(main.text),
+    frontmatter: frontmatterOf(main.text),
     record: {
       name: lens.name,
       source,

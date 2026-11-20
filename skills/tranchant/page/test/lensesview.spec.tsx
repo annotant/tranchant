@@ -1627,3 +1627,24 @@ test("TRANCHANT_MODEL locks a lens's model, and its row names the one it forces"
     ),
   ).toBeDefined()
 })
+
+test("a source whose frontmatter cannot be read runs on the session's, and says why in amber", () => {
+  renderLenses([], {}, 'local:money', [
+    {
+      ...MONEY,
+      detected: {
+        file: 'money-review.md',
+        why: 'unreadable',
+        problem: 'its frontmatter cannot be read: model:opus',
+      },
+    },
+  ])
+  expect(
+    group('This project').getByText("auto · the session's model").className,
+  ).toContain('tr-warn')
+  expect(
+    screen.getByText(
+      "→ money-review.md's frontmatter cannot be read (its frontmatter cannot be read: model:opus) → the session's model",
+    ).className,
+  ).toContain('tr-warn')
+})

@@ -296,3 +296,24 @@ test("each reviewer's row names the model it runs on, and what chose it", () => 
   expect(rowOf('bugs').textContent).toContain("auto · the session's model")
   expect(rowOf('tests').textContent).toContain("reviewers' · claude-sonnet-5-5")
 })
+
+test("a lens whose source this change edits runs on the session's model, said in amber", () => {
+  renderReady({
+    ...waiting,
+    lenses: [
+      {
+        name: 'money',
+        source: '.claude/agents/money-review.md',
+        state: 'ready',
+        files: 3,
+        scope: 'local',
+        modelFrom: 'auto',
+        autoWhy: 'held',
+      },
+    ],
+  })
+  const words = within(rowOf('money')).getByText(
+    "· auto · the session's model (this change edits its source)",
+  )
+  expect(words.className).toContain('tr-warn')
+})
