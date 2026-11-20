@@ -251,6 +251,11 @@ function world(
         lens: `/state/cleanings/${id}/lens.md`,
         report: `/state/cleanings/${id}/report.json`,
       })
+      // Discarded while it waited, or clean.mjs failing: refused.
+      if (mode === '--start' && e.argv[5] === 'cln00gone-aaaa')
+        return ok('CLEAN_REFUSED no cleaning cln00gone-aaaa\n', 2)
+      if (mode === '--start' && e.argv[5] === 'cln00boom-aaaa')
+        return ok('', 1, 'TypeError: boom')
       if (mode === '--start' && e.argv[5] !== 'cln00001-aaaa')
         return ok(`CLEANING ${JSON.stringify(started(e.argv[5] ?? ''))}\n`)
       // Each lens cleaned again has a cleaning of its own: `abac`'s is cln-2.
@@ -1272,11 +1277,13 @@ test("a glob's cleanings start three at a time, the next once one ends; stop dro
     'cln00011-aaaa',
     'cln00012-aaaa',
     'cln00013-aaaa',
+    'cln00gone-aaaa',
+    'cln00boom-aaaa',
     'cln00014-aaaa',
     'cln00015-aaaa',
   ])
     await w.print(`CLEAN ${id}`)
-  // maxReviewAgents (3): the fourth and fifth wait, never started.
+  // maxReviewAgents (3): the others wait, never started.
   expect(w.spawned.map((one) => one.type)).toEqual([
     'tranchant:cl-cln00011',
     'tranchant:cl-cln00012',
@@ -1285,20 +1292,24 @@ test("a glob's cleanings start three at a time, the next once one ends; stop dro
   expect(
     w.cleanRuns.filter((one) => one.argv[2] === '--start').map((one) => one.argv[3]),
   ).toEqual(['cln00011-aaaa', 'cln00012-aaaa', 'cln00013-aaaa'])
-  // One ends: checked, then the next waiting one starts.
+  // One ends: checked, then the next waiting one starts; one discarded meanwhile is
+  // skipped, one clean.mjs cannot start fails, said, and neither holds the queue.
   await $.turn.complete(turnEnded('a2', 'cleaned'))
-  expect(w.cleanRuns.at(-2)?.argv).toEqual([
-    '--project',
-    ROOT,
-    '--check',
+  expect(w.cleanRuns.find((one) => one.argv[2] === '--check')?.argv.at(-1)).toBe(
     '/state/cleanings/cln00012-aaaa',
-  ])
+  )
+  expect(
+    w.cleanRuns.filter((one) => one.argv[2] === '--drop').map((one) => one.argv[3]),
+  ).toEqual(['cln00boom-aaaa'])
+  expect(w.toasts.some((one) => one.includes('could not start the cleaning agent'))).toBe(
+    true,
+  )
   expect(w.spawned.at(-1)?.type).toBe('tranchant:cl-cln00014')
   // Stopped: the last one waiting fails as stopped, and no agent starts on it.
   await $.command.run(command('stop'))
   expect(
     w.cleanRuns.filter((one) => one.argv[2] === '--drop').map((one) => one.argv[3]),
-  ).toEqual(['cln00015-aaaa'])
+  ).toEqual(['cln00boom-aaaa', 'cln00015-aaaa'])
   expect(w.spawned).toHaveLength(4)
 })
 

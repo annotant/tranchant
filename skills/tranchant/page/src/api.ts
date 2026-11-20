@@ -283,7 +283,14 @@ export interface LensMatch {
 export interface LensMatches {
   matches: LensMatch[]
   more?: number
-  folder?: { label: string; files: string[]; count: number; missing?: true }
+  folder?: {
+    label: string
+    files: string[]
+    count: number
+    missing?: true
+    /** The error code of a folder that is there but cannot be read. */
+    unreadable?: string
+  }
 }
 
 /** The files a glob matches, as the server finds them from the project's root. */

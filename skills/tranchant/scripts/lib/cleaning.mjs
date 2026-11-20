@@ -217,8 +217,8 @@ export async function createCleaning({
 
 /**
  * The cleanings of several sources at once (a glob's matches), all queued:
- * one refused (not found, its name taken) does not stop the others, and two
- * of the same name keep the first.
+ * one refused (not found, its name taken, unwritable) does not stop the
+ * others, and of two given the same name the first is kept.
  * @param {{ project: string, scope: string, context?: string, from?: string, sources: { source: string, name?: string }[] }} given
  */
 export async function createCleanings({ project, scope, context, from, sources }) {
@@ -248,8 +248,8 @@ export async function createCleanings({ project, scope, context, from, sources }
       names.add(cleaning.record.name)
       made.push(cleaning)
     } catch (error) {
-      if (!(error instanceof CleaningRefusal)) throw error
-      refused.push({ source: one.source, reason: error.message })
+      // Thrown, the cleanings made before it would wait for ever: no CLEAN line printed for them.
+      refused.push({ source: one.source, reason: message(error) })
     }
   }
   return { made, refused }
@@ -265,6 +265,8 @@ export async function startedCleaning(project, id) {
   const { dir, record } = await cleaningOf(project, id)
   if (record.state !== 'cleaning')
     throw new CleaningRefusal(`the cleaning ${id} is ${record.state} already`)
+  // Two sessions with its page open both queue it: the first one starts it.
+  if (!record.queued) throw new CleaningRefusal(`the cleaning ${id} is started already`)
   const { queued: _queued, ...rest } = record
   /** @type {Cleaning} */
   const next = { ...rest, startedAt: new Date().toISOString() }
@@ -281,10 +283,11 @@ function isLost(/** @type {Cleaning} */ record) {
 
 /**
  * A stored lens's cleaning again, its source changed or asked anew: the
- * added instructions the user edited go to the agent, and stay.
- * @param {{ project: string, scope: string, name: string }} given
+ * added instructions the user edited go to the agent, and stay. `queued`
+ * when the page asks for it (Clean it again now), as a new lens's.
+ * @param {{ project: string, scope: string, name: string, queued?: boolean }} given
  */
-export async function cleanAgain({ project, scope, name }) {
+export async function cleanAgain({ project, scope, name, queued }) {
   if (!isScope(scope)) throw new CleaningRefusal(`no lens scope ${scope}`)
   let dir
   let lens
@@ -303,6 +306,7 @@ export async function cleanAgain({ project, scope, name }) {
     again: true,
     source: lens.source,
     ...sources,
+    ...(queued && { queued: /** @type {const} */ (true) }),
   })
   if (lens.rulesEdited) await writeText(path.join(made.dir, 'rules.md'), lens.rules)
   return made

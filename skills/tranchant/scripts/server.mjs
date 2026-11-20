@@ -1308,7 +1308,7 @@ async function handle(req, res) {
     if (!lens) return send(res, 400, LENS_REQUIRED)
     const { scope, name } = lens
     return lensChange(res, async () => {
-      const made = await cleanAgain({ project: lensRoot, scope, name })
+      const made = await cleanAgain({ project: lensRoot, scope, name, queued: true })
       print(`CLEAN ${made.record.id}`)
       return { cleaning: made.record.id }
     })
@@ -1968,8 +1968,9 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 /**
  * What waited while no server ran: the hooks start an agent on each queued
  * fix again (they skip the ones they handed over already) and on each
- * question left unanswered, and the server posts each queued post and
- * opens each queued issue.
+ * question left unanswered, and on each lens's cleaning still waiting for
+ * one (the session that queued it ended); the server posts each queued post
+ * and opens each queued issue.
  */
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
@@ -1990,6 +1991,11 @@ async function resumeQueued() {
     // What a change left while no server ran, or a script failed to write.
     else await settleDiscussion(id)
   }
+  const cleanings = await listCleanings(lensRoot).catch((error) => {
+    console.error(`tranchant server: cleanings unreadable: ${oneLine(String(error))}`)
+    return []
+  })
+  for (const one of cleanings) if (one.waiting) print(`CLEAN ${one.id}`)
 }
 
 server.listen(port, '127.0.0.1', async () => {

@@ -799,9 +799,10 @@ runs, each with the lens name its file gives it (to rename), a name taken in
 that scope (to rename or uncheck), the lens of another scope it would
 replace, and one that starts other agents, flagged *not a reviewer* and
 unchecked; **Add the N lenses** makes one cleaning per checked match, the
-same scope for all. The page's cleanings wait for a free cleaning agent:
-`maxReviewAgents` clean at a time, the others say so; one that fails stops
-none:
+same scope for all. The page's cleanings (Add a lens, Clean it again now)
+wait for a free cleaning agent: `maxReviewAgents` clean at a time, the
+others say so; one that fails stops none, and the server announces again
+those still waiting when it starts, for a session that ended before them:
 
 1. With no source, `clean.mjs --find` lists the project's
    `.claude/skills/*review*` and `.claude/agents/*review*`; the user names

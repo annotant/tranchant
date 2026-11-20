@@ -1768,6 +1768,8 @@ async function stopReviewing($: $) {
   const queuedCleanings = await read($, cleanQueue)
   await update($, cleanQueue, () => noCleanQueue)
   for (const one of queuedCleanings) await runClean($, one.project, ['--drop', one.id])
+  // One being started meanwhile is running once this settles: stopped below with the others.
+  await cleanDispatching
   const cleaners = Object.values(await read($, cleaning)).filter((one) => one.running)
   await update($, cleaning, (every) => ({
     ...every,
@@ -2442,16 +2444,29 @@ async function startCleanQueued($: $) {
       return all.slice(1)
     })
     if (!next) return
-    const prepared = preparedOf(await runClean($, next.project, ['--start', next.id]))
-    // Discarded while it waited: nothing to start, the next one is.
-    if ('refused' in prepared) {
-      await debug($, `cleaning ${next.id}: ${prepared.refused}`)
-      continue
-    }
-    const spawned = await spawnCleaner($, prepared.made)
-    if ('error' in spawned)
-      $.ui.toast(`Tranchant could not start the cleaning agent: ${spawned.error}`)
+    await startQueuedCleaning($, next).catch(async (error: unknown) => {
+      $.ui.toast(`Tranchant could not start the cleaning agent: ${message(error)}`)
+      // Off the queue already: failed, else its card waits for an agent that never comes.
+      if (next) await runClean($, next.project, ['--drop', next.id])
+    })
   }
+}
+
+/** One queued cleaning's agent; refused, it was discarded, or started by another session. */
+async function startQueuedCleaning($: $, next: QueuedCleaning) {
+  const prepared = preparedOf(await runClean($, next.project, ['--start', next.id]))
+  if ('refused' in prepared) {
+    const gone = /^(?:no cleaning|the cleaning \S+ is )/.test(prepared.refused)
+    if (gone) return debug($, `cleaning ${next.id}: ${prepared.refused}`)
+    $.ui.toast(
+      `Tranchant could not start the cleaning agent: ${short(prepared.refused, 200)}`,
+    )
+    await runClean($, next.project, ['--drop', next.id])
+    return
+  }
+  const spawned = await spawnCleaner($, prepared.made)
+  if ('error' in spawned)
+    $.ui.toast(`Tranchant could not start the cleaning agent: ${spawned.error}`)
 }
 
 /** A cleaning agent ended: what it wrote checked, and said; a review waiting on it goes on. */

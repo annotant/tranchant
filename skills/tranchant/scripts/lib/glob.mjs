@@ -2,10 +2,10 @@
 // the project's root, `~/` or an absolute path, each with the lens name it
 // would get and whether it reads as a reviewer. `*` and `?` stay within one
 // folder (no `**`), and match no name starting with a dot unless the pattern
-// does, as a shell's glob.
+// does, as a shell's glob; `[` is a character like any other, as in a path.
 import os from 'node:os'
 import path from 'node:path'
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { open, readdir, stat } from 'node:fs/promises'
 import { expandHome } from './settings.mjs'
 
 /** @typedef {{ source: string, name: string, notReviewer?: string }} Match */
@@ -21,29 +21,35 @@ const MAX_READ = 64 * 1024
 /** A glob this Tranchant refuses, and why. */
 export class GlobRefusal extends Error {}
 
-/** Whether a source is a glob: a `*`, a `?` or a `[`. */
-const isGlob = (/** @type {string} */ text) => /[*?[]/.test(text)
+/** Whether a source is a glob: a `*` or a `?`. */
+const isGlob = (/** @type {string} */ text) => /[*?]/.test(text)
 
-/** One segment of a glob as a regular expression. */
-function segmentRegex(/** @type {string} */ segment) {
-  let out = ''
-  for (let i = 0; i < segment.length; i++) {
-    const char = segment[i] ?? ''
-    if (char === '*') out += '[^/]*'
-    else if (char === '?') out += '[^/]'
-    else if (char === '[') {
-      const end = segment.indexOf(']', i + 2)
-      if (end === -1) out += '\\['
-      else {
-        const inside = segment.slice(i + 1, end)
-        const negated = inside.startsWith('!') || inside.startsWith('^')
-        const body = (negated ? inside.slice(1) : inside).replace(/[\\\]]/g, '\\$&')
-        out += `[${negated ? '^' : ''}${body}]`
-        i = end
-      }
-    } else out += char.replace(/[.+^${}()|\\]/g, '\\$&')
+/**
+ * Whether `name` matches one segment of a glob. Not a regular expression:
+ * `*a*a*a*b` against a long name would backtrack for minutes, the server
+ * frozen; this goes back to the last `*` only, in linear time.
+ * @param {string} pattern
+ * @param {string} name
+ */
+function wildMatch(pattern, name) {
+  let p = 0
+  let n = 0
+  let star = -1
+  let resume = 0
+  while (n < name.length) {
+    if (p < pattern.length && (pattern[p] === '?' || pattern[p] === name[n])) {
+      p++
+      n++
+    } else if (p < pattern.length && pattern[p] === '*') {
+      star = p++
+      resume = n
+    } else if (star !== -1) {
+      p = star + 1
+      n = ++resume
+    } else return false
   }
-  return new RegExp(`^${out}$`)
+  while (pattern[p] === '*') p++
+  return p === pattern.length
 }
 
 /**
@@ -106,7 +112,7 @@ async function readableOf(/** @type {string} */ entry) {
  * and the names there.
  * @param {string} project
  * @param {string} pattern
- * @returns {Promise<{ matches: Match[], more?: number, folder?: { label: string, files: string[], count: number, missing?: true } }>}
+ * @returns {Promise<{ matches: Match[], more?: number, folder?: { label: string, files: string[], count: number, missing?: true, unreadable?: string } }>}
  */
 export async function matchSources(project, pattern) {
   const trimmed = pattern.trim()
@@ -142,14 +148,13 @@ export async function matchSources(project, pattern) {
         next.push(path.join(dir, segment))
         continue
       }
-      const regex = segmentRegex(segment)
       const names = await readdir(dir).catch(() => [])
       for (const name of names) {
         visits++
         if (visits > MAX_VISITS)
           throw new GlobRefusal(`${trimmed} looks through too many files: narrow it`)
         if (name.startsWith('.') && !segment.startsWith('.')) continue
-        if (!regex.test(name)) continue
+        if (!wildMatch(segment, name)) continue
         const entry = path.join(dir, name)
         if (!last && !(await stat(entry).catch(() => undefined))?.isDirectory()) continue
         next.push(entry)
@@ -180,15 +185,26 @@ export async function matchSources(project, pattern) {
   }
 }
 
-/** A file's first bytes, enough to tell a reviewer; undefined when it cannot be read. */
+/** A file's first bytes, enough to tell a reviewer, never the whole file; undefined when it cannot be read. */
 async function readHead(/** @type {string} */ file) {
-  const text = await readFile(file, 'utf8').catch(() => undefined)
-  return text?.slice(0, MAX_READ)
+  try {
+    const handle = await open(file, 'r')
+    try {
+      const buffer = Buffer.alloc(MAX_READ)
+      const { bytesRead } = await handle.read(buffer, 0, MAX_READ, 0)
+      return buffer.subarray(0, bytesRead).toString('utf8')
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return undefined
+  }
 }
 
 /**
  * The folder a glob that matched nothing looked in, as it was typed, and
- * its file names: the last segment's folder, where a typo usually lies.
+ * its file names: the folder of the last segment, where a typo usually
+ * lies; the one before the first glob when a folder's name holds one.
  * @param {string} full
  * @param {'project' | 'home' | 'absolute'} from
  * @param {string} project
@@ -202,9 +218,23 @@ async function folderOf(full, from, project) {
       ? dirSegments.join(path.sep) || path.sep
       : dirSegments.slice(0, firstGlob).join(path.sep) || path.sep
   const label = `${labelOf(dir, from, project) || '.'}/`.replace(/\/+$/, '/')
-  const entries = await readdir(dir).catch(() => undefined)
-  if (!entries)
-    return { label, files: [], count: 0, missing: /** @type {const} */ (true) }
+  /** @type {string[]} */
+  let entries
+  try {
+    entries = await readdir(dir)
+  } catch (error) {
+    const code =
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      typeof error.code === 'string'
+        ? error.code
+        : undefined
+    // A folder Node may not read (macOS privacy, rights) is there: said so, not missing.
+    return code === 'ENOENT' || code === 'ENOTDIR'
+      ? { label, files: [], count: 0, missing: /** @type {const} */ (true) }
+      : { label, files: [], count: 0, unreadable: code ?? 'unreadable' }
+  }
   const files = entries
     .filter((name) => !name.startsWith('.'))
     .toSorted((a, b) => a.localeCompare(b))

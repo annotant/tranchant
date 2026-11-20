@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { fetchLensMatches, type LensMatch, type LensMatches } from './api'
 import type { LensEntry } from './settings'
 
-/** Whether a source is a glob: a `*`, a `?` or a `[`, as the server reads it. */
-export const isGlob = (source: string) => /[*?[]/.test(source)
+/** Whether a source is a glob: a `*` or a `?`, as the server reads it; a `[` is part of a path. */
+export const isGlob = (source: string) => /[*?]/.test(source)
 
 const LENS_NAME = /^[\w-]{1,40}$/
 /** Typing settles before the server is asked: one look per pause, not per key. */
@@ -287,6 +287,13 @@ export function GlobMatches({
 
 /** The folder a glob that matched nothing looked in: its files, to mend the glob. */
 function FolderHelp({ folder }: { folder: NonNullable<LensMatches['folder']> }) {
+  if (folder.unreadable)
+    return (
+      <span className="tr-field-help">
+        <code>{folder.label}</code> cannot be read ({folder.unreadable}): Tranchant may
+        not open it.
+      </span>
+    )
   if (folder.missing)
     return (
       <span className="tr-field-help">

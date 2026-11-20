@@ -926,3 +926,96 @@ console.log(JSON.stringify(made[0].record))`),
     /the cleaning agent is still at work/,
   )
 })
+
+/** The time `minutes` ago, as a cleaning records it. */
+const ago = (/** @type {number} */ minutes) =>
+  new Date(Date.now() - minutes * 60 * 1000).toISOString()
+
+test('a waiting cleaning is lost after 3 hours, a started one 30 minutes after it started; a started one is never started again', async (t) => {
+  const { dir } = await repository(t)
+  const made = JSON.parse(
+    await lib(`const { made } = await cleaning.createCleanings({
+  project: ${JSON.stringify(dir)},
+  scope: 'local',
+  sources: [{ source: '.claude/agents/money-review.md' }],
+})
+console.log(JSON.stringify({ id: made[0].record.id, dir: made[0].dir }))`),
+  )
+  const file = path.join(made.dir, 'cleaning.json')
+  const rewrite = async (/** @type {Record<string, unknown>} */ change) =>
+    writeFile(
+      file,
+      JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), ...change }),
+    )
+  const shown = async () =>
+    JSON.parse(
+      await lib(
+        `console.log(JSON.stringify((await cleaning.listCleanings(${JSON.stringify(dir)}))[0]))`,
+      ),
+    )
+
+  await rewrite({ createdAt: ago(31) })
+  assert.deepEqual([(await shown()).state, (await shown()).waiting], ['cleaning', true])
+  await rewrite({ createdAt: ago(181) })
+  const lost = await shown()
+  assert.equal(lost.state, 'failed')
+  assert.match(lost.reason, /the session that would start it ended/)
+
+  await rewrite({ createdAt: ago(20) })
+  cleaningOf(await clean(dir, ['--start', made.id]))
+  await rewrite({ createdAt: ago(181) })
+  // Its 30 minutes run from its start: created long ago, it is still at work.
+  const started = await shown()
+  assert.equal(started.state, 'cleaning')
+  assert.equal(started.waiting, undefined)
+  assert.match(
+    await lib(
+      `await cleaning.discardCleaning(${JSON.stringify(dir)}, ${JSON.stringify(made.id)}).then(() => console.log('discarded'), (error) => console.log(error.message))`,
+    ),
+    /still at work/,
+  )
+  assert.match(
+    (await clean(dir, ['--start', made.id])).stdout,
+    /^CLEAN_REFUSED the cleaning \S+ is started already/m,
+  )
+  await rewrite({ startedAt: ago(31) })
+  assert.equal((await shown()).state, 'failed')
+})
+
+test('a glob lists 40 matches at most, skips dot files unless it names them, takes [ as a character, and stays fast on a pattern that would backtrack', async (t) => {
+  const { dir } = await repository(t)
+  const many = path.join(dir, 'many')
+  await mkdir(many)
+  for (let i = 0; i < 41; i++)
+    await writeFile(path.join(many, `r${String(i).padStart(2, '0')}.md`), 'Review.\n')
+  await writeFile(path.join(many, '.hidden.md'), 'Hidden.\n')
+  await writeFile(path.join(many, '[draft]-review.md'), 'Draft.\n')
+  await writeFile(path.join(many, `${'a'.repeat(60)}.md`), 'Long.\n')
+  const match = async (/** @type {string} */ pattern) =>
+    JSON.parse(
+      await lib(
+        `console.log(JSON.stringify(await glob.matchSources(${JSON.stringify(dir)}, ${JSON.stringify(pattern)})))`,
+      ),
+    )
+  const listed = await match('many/r*.md')
+  assert.equal(listed.matches.length, 40)
+  assert.equal(listed.more, 1)
+  const dotted = await match('many/.*.md')
+  assert.deepEqual(
+    dotted.matches.map((/** @type {any} */ one) => one.source),
+    ['many/.hidden.md'],
+  )
+  assert.ok(
+    !(await match('many/*.md')).matches.some((/** @type {any} */ one) =>
+      one.source.includes('.hidden'),
+    ),
+  )
+  assert.deepEqual(
+    (await match('many/[draft]-*.md')).matches.map((/** @type {any} */ one) => one.name),
+    ['draft--review'],
+  )
+  const began = Date.now()
+  const backtrack = await match(`many/${'*a'.repeat(12)}*b.md`)
+  assert.deepEqual(backtrack.matches, [])
+  assert.ok(Date.now() - began < 5000, `${Date.now() - began} ms`)
+})

@@ -549,7 +549,6 @@ function ScopeSegment({
   )
 }
 
-/** Add a lens: its source, its name, where it lives, its context skill; then the cleaning agent. */
 /** A name's lenses: whether a lens of it, added to `scope`, runs as one more. */
 function addsOne(lenses: LensEntry[], scope: Added, name: string) {
   // The first lens that is on runs under a name: the project's, then a global one.
