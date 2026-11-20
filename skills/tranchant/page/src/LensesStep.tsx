@@ -488,6 +488,7 @@ export function ReadyCenter({
                     {plural(
                       groups?.list.find((one) => one.name === name)?.lenses.length ?? 0,
                       'lens',
+                      'lenses',
                     )}
                   </option>
                 ))}
@@ -510,7 +511,10 @@ export function ReadyCenter({
           {running.length} run on this change
           {idle.length > 0 &&
             `, ${idle.length} ${idle.length === 1 ? 'reads' : 'read'} none of its files`}
-          {off.length > 0 && ` · ${off.length} off: ${names(off)}`}
+          {off.length > 0 &&
+            (group && off.every((row) => !flipped(row))
+              ? ` · ${off.length} not in ${group}`
+              : ` · ${off.length} off: ${names(off)}`)}
           {cleanedAgain.length > 0 &&
             ` · ${names(cleanedAgain)} cleaned again, ${cleanedAgain.length > 1 ? 'their' : 'its'} source changed`}
         </dd>

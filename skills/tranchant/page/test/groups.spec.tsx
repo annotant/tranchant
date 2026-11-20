@@ -262,6 +262,9 @@ test('the ready screen names the group, its lenses off in the settings, and a gr
   }
   render(<Held />)
   expect(screen.getByText(/was removed: group backend runs without it/)).toBeTruthy()
+  expect(screen.getByRole('option', { name: 'backend · 3 lenses' })).toBeTruthy()
+  expect(screen.getByRole('option', { name: 'frontend · 1 lens' })).toBeTruthy()
+  expect(screen.getByText(/· 1 not in backend$/)).toBeTruthy()
   expect(
     screen.getByText(
       'ready · reads 1 of 4 files · off in your settings, on in this group',
