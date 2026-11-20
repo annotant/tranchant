@@ -408,30 +408,47 @@ test('What the reviewer reads shows what the cleaning removed and added, and the
 })
 
 test('Add a lens sends its source, name, scope and context skill to be cleaned', async () => {
-  const { onLens } = renderLenses()
-  fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
-  const form = screen.getByRole('form', { name: 'Add a lens' })
-  fireEvent.change(within(form).getByLabelText('Source'), {
-    target: { value: 'workflow:code-reviewer-api' },
-  })
-  fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'bugs' } })
-  expect(
-    within(form).getByText('Replaces the built-in bugs where it lives.'),
-  ).toBeDefined()
-  fireEvent.click(within(form).getByRole('button', { name: 'Global' }))
-  fireEvent.change(within(form).getByLabelText('Context skill'), {
-    target: { value: 'workflow:api-rules' },
-  })
-  fireEvent.click(within(form).getByRole('button', { name: 'Import and clean' }))
-  expect(onLens).toHaveBeenCalledWith('import', {
-    source: 'workflow:code-reviewer-api',
-    scope: 'global',
-    name: 'bugs',
-    context: 'workflow:api-rules',
-  })
-  await waitFor(() =>
-    expect(screen.queryByRole('form', { name: 'Add a lens' })).toBeNull(),
-  )
+  // A single reviewer: nothing inside it to list.
+  const fetch = stubMatches({ inside: null })
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = screen.getByRole('form', { name: 'Add a lens' })
+    fireEvent.change(within(form).getByLabelText('Source'), {
+      target: { value: 'workflow:code-reviewer-api' },
+    })
+    // Read first: Import waits for it.
+    expect(within(form).getByRole('status').textContent).toContain(
+      'Reading code-reviewer-api for the agents it starts…',
+    )
+    const add = within(form).getByRole('button', { name: 'Import and clean' })
+    expect(add).toHaveProperty('disabled', true)
+    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'bugs' } })
+    expect(
+      within(form).getByText('Replaces the built-in bugs where it lives.'),
+    ).toBeDefined()
+    fireEvent.click(within(form).getByRole('button', { name: 'Global' }))
+    fireEvent.change(within(form).getByLabelText('Context skill'), {
+      target: { value: 'workflow:api-rules' },
+    })
+    await waitFor(() => expect(add).toHaveProperty('disabled', false))
+    expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+      '/api/lens/inside?source=workflow%3Acode-reviewer-api',
+    )
+    expect(within(form).queryByRole('status')).toBeNull()
+    fireEvent.click(add)
+    expect(onLens).toHaveBeenCalledWith('import', {
+      source: 'workflow:code-reviewer-api',
+      scope: 'global',
+      name: 'bugs',
+      context: 'workflow:api-rules',
+    })
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: 'Add a lens' })).toBeNull(),
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })
 
 test('a cleaned lens shows what it found before Add this lens; a failed one, what to add instead', () => {
@@ -565,7 +582,7 @@ test('while a lens is added past the warning, the form alone says the count', ()
   expect(screen.getByText(/^With this one, 14 lenses are on/)).toBeDefined()
 })
 
-/** The server's answer to `/api/lens/matches`, for every look. */
+/** The server's answer to every look: `/api/lens/matches` or `/api/lens/inside`. */
 function stubMatches(answer: unknown) {
   const fetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify(answer))))
   vi.stubGlobal('fetch', fetch)
@@ -825,6 +842,223 @@ test('a match whose file is a lens already, or being added, says so and cannot b
       from: '.claude/agents/*-review.md',
       scope: 'local',
     })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+const PLUGIN_AGENTS = [
+  'code-reviewer',
+  'silent-failure-hunter',
+  'pr-test-analyzer',
+  'comment-analyzer',
+  'type-design-analyzer',
+].map((name) => ({
+  source: `pr-review-toolkit:${name}`,
+  name,
+  kind: 'agent',
+  ...(name === 'code-reviewer' && {
+    already: [{ scope: 'global', name: 'code-reviewer' }],
+  }),
+}))
+
+test("a plugin's command lists the agents it starts in place of a name; one that is a lens already is locked; the checked ones are added in a batch", async () => {
+  const fetch = stubMatches({
+    inside: {
+      kind: 'command',
+      label: 'pr-review-toolkit:review-pr',
+      starts: PLUGIN_AGENTS,
+    },
+  })
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: 'pr-review-toolkit:review-pr' },
+    })
+    const list = within(await screen.findByRole('list', { name: 'Its agents' }))
+    expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+      '/api/lens/inside?source=pr-review-toolkit%3Areview-pr',
+    )
+    expect(form.queryByLabelText('Name')).toBeNull()
+    expect(form.getByText('review-pr is a command: it starts 5 agents')).toBeDefined()
+    expect(form.getByText('4 checked')).toBeDefined()
+    expect(list.getAllByText('plugin agent')).toHaveLength(5)
+    const locked = list.getByLabelText('pr-review-toolkit:code-reviewer')
+    expect(locked).toHaveProperty('checked', false)
+    expect(locked).toHaveProperty('disabled', true)
+    expect(list.getByText('added already')).toBeDefined()
+    fireEvent.click(list.getByLabelText('pr-review-toolkit:type-design-analyzer'))
+    fireEvent.click(form.getByRole('button', { name: 'Add the 3 lenses' }))
+    expect(onLens).toHaveBeenCalledWith('import', {
+      sources: [
+        {
+          source: 'pr-review-toolkit:silent-failure-hunter',
+          name: 'silent-failure-hunter',
+        },
+        { source: 'pr-review-toolkit:pr-test-analyzer', name: 'pr-test-analyzer' },
+        { source: 'pr-review-toolkit:comment-analyzer', name: 'comment-analyzer' },
+      ],
+      from: 'pr-review-toolkit:review-pr',
+      scope: 'local',
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a command whose agents are written in it says none can become a lens, and adds nothing', async () => {
+  stubMatches({
+    inside: { kind: 'command', label: '.claude/commands/full-review.md', starts: [] },
+  })
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/commands/full-review.md' },
+    })
+    const said = await form.findByText(/No agent of its own in/)
+    expect(said.textContent).toBe('No agent of its own in full-review.')
+    expect(form.queryByLabelText('Name')).toBeNull()
+    expect(form.getByRole('button', { name: 'Add the lenses' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("a glob's command shows the agents it starts under it, each once; its checkbox checks or unchecks them all", async () => {
+  stubMatches({
+    matches: [
+      { source: '.claude/agents/api-review.md', name: 'api-review', kind: 'agent' },
+      { source: '.claude/agents/code-review.md', name: 'code-review', kind: 'agent' },
+      {
+        source: '.claude/commands/review-pr.md',
+        name: 'review-pr',
+        kind: 'command',
+        starts: [
+          { source: '.claude/agents/code-review.md', name: 'code-review', kind: 'agent' },
+          { source: '.claude/agents/test-review.md', name: 'test-review', kind: 'agent' },
+          {
+            source: 'pr-review-toolkit:comment-analyzer',
+            name: 'comment-analyzer',
+            kind: 'agent',
+          },
+        ],
+      },
+    ],
+  })
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/*/*review*.md' },
+    })
+    const kids = within(
+      await screen.findByRole('list', { name: 'The agents review-pr starts' }),
+    )
+    expect(form.getByText('3 files match')).toBeDefined()
+    expect(form.getByText('4 checked')).toBeDefined()
+    // Matched and started: listed once, under the command.
+    expect(form.getAllByLabelText('.claude/agents/code-review.md')).toHaveLength(1)
+    expect(kids.getByLabelText('.claude/agents/code-review.md')).toBeDefined()
+    expect(form.getByText('not a lens itself')).toBeDefined()
+    expect(
+      form.getByText(
+        'It starts 3 agents: each one below can become a lens. code-review matches the glob too: listed once, here.',
+      ),
+    ).toBeDefined()
+    const command = form.getByLabelText('.claude/commands/review-pr.md')
+    expect(command).toHaveProperty('checked', true)
+    expect(form.getByText('3 of its 3 agents checked')).toBeDefined()
+    fireEvent.click(command)
+    expect(form.getByText('0 of its 3 agents checked')).toBeDefined()
+    fireEvent.click(kids.getByLabelText('.claude/agents/test-review.md'))
+    expect(command).toHaveProperty('checked', false)
+    expect(command).toHaveProperty('indeterminate', true)
+    fireEvent.click(form.getByRole('button', { name: 'Add the 2 lenses' }))
+    expect(onLens).toHaveBeenCalledWith('import', {
+      sources: [
+        { source: '.claude/agents/api-review.md', name: 'api-review' },
+        { source: '.claude/agents/test-review.md', name: 'test-review' },
+      ],
+      from: '.claude/*/*review*.md',
+      scope: 'local',
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('past 40 checked, the batch waits and says how many to uncheck', async () => {
+  stubMatches({
+    matches: [
+      {
+        source: '.claude/commands/all.md',
+        name: 'all',
+        kind: 'command',
+        starts: Array.from({ length: 12 }, (_, i) => ({
+          source: `.claude/agents/c-${i}.md`,
+          name: `c-${i}`,
+          kind: 'agent',
+        })),
+      },
+      ...Array.from({ length: 29 }, (_, i) => ({
+        source: `.claude/agents/m-${i}.md`,
+        name: `m-${i}`,
+        kind: 'agent',
+      })),
+    ],
+  })
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/*/*.md' },
+    })
+    await screen.findByRole('list', { name: 'The agents all starts' })
+    expect(form.getByText(/At most 40 lenses at a time: uncheck 1\./)).toBeDefined()
+    expect(form.getByRole('button', { name: 'Add the 41 lenses' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    fireEvent.click(form.getByLabelText('.claude/agents/m-0.md'))
+    expect(form.queryByText(/At most 40 lenses/)).toBeNull()
+    expect(form.getByRole('button', { name: 'Add the 40 lenses' })).toHaveProperty(
+      'disabled',
+      false,
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a source that could not be read for its agents says so, and is imported as one reviewer', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ error: 'down' }), { status: 500 })),
+    ),
+  )
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: 'team:review-pr' },
+    })
+    const said = await form.findByText(/could not be read for the agents it starts/)
+    expect(said.textContent).toContain('Import cleans it as one reviewer')
+    expect(form.getByRole('button', { name: 'Import and clean' })).toHaveProperty(
+      'disabled',
+      false,
+    )
   } finally {
     vi.unstubAllGlobals()
   }

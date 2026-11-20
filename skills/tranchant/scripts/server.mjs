@@ -16,8 +16,10 @@
 // one write at a time, with every lens that could run on the project, the
 // recipe's and those the user added (lib/userlens.mjs), and the lenses being
 // cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
-// them again, lists a glob's matches (lib/glob.mjs) and imports several at
-// once, and prints CLEAN for each cleaning the hooks start an agent on;
+// them again, lists a glob's matches (lib/glob.mjs) and the reviewers a
+// command, or an agent that starts others, holds (lib/inside.mjs), imports
+// several at once, and prints CLEAN for each cleaning the hooks start an
+// agent on;
 // it pushes `settings` when the file, a lens or a cleaning changes. It serves
 // the Lenses step's progress (lenses.json) with the review, and prints START
 // or BUILD when the page starts a review waiting to start, or builds its
@@ -62,6 +64,7 @@ import {
   listCleanings,
 } from './lib/cleaning.mjs'
 import { GlobRefusal, MAX_MATCHES, matchSources, withAlready } from './lib/glob.mjs'
+import { insideOf } from './lib/inside.mjs'
 import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
 import {
   LensFileRefusal,
@@ -1284,6 +1287,20 @@ async function handle(req, res) {
       ...matched,
       matches: withAlready(lensRoot, matched.matches, await knownLenses()),
     })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lens/inside') {
+    const source = url.searchParams.get('source') ?? ''
+    if (!source.trim() || source.length > 1024)
+      return send(res, 400, { error: 'source is required' })
+    const inside = await insideOf(lensRoot, source)
+    if (!inside?.starts.length) return send(res, 200, { inside: inside ?? null })
+    const [marked] = withAlready(
+      lensRoot,
+      [{ source: inside.label, name: '', starts: inside.starts }],
+      await knownLenses(),
+    )
+    return send(res, 200, { inside: { ...inside, starts: marked?.starts ?? [] } })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/lens/import') {

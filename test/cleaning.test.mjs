@@ -124,6 +124,7 @@ async function lib(/** @type {string} */ code) {
       `import * as cleaning from ${JSON.stringify(path.join(LIB, 'cleaning.mjs'))}
 import * as userlens from ${JSON.stringify(path.join(LIB, 'userlens.mjs'))}
 import * as glob from ${JSON.stringify(path.join(LIB, 'glob.mjs'))}
+import * as inside from ${JSON.stringify(path.join(LIB, 'inside.mjs'))}
 ${code}`,
     ],
     { env: env() },
@@ -1040,4 +1041,257 @@ test("withAlready names the lenses made from a match's file: by its path from th
   ])
   assert.deepEqual(out[1].already, [{ scope: 'local', name: 'copy' }])
   assert.equal(out[2].already, undefined)
+})
+
+/**
+ * Plugin `team`, installed for the user: a command that starts five agents
+ * of its own, among other agents, a skill and a command it does not start.
+ * Claude Code's register restored after the test.
+ * @param {import('node:test').TestContext} t
+ */
+async function teamPlugin(t) {
+  const root = await tempDir(t, 'tranchant-team-')
+  const register = path.join(claudeDir, 'plugins', 'installed_plugins.json')
+  const kept = await readFile(register, 'utf8')
+  t.after(() => writeFile(register, kept))
+  await writeFile(
+    register,
+    JSON.stringify({
+      version: 2,
+      plugins: {
+        'team@market': [{ scope: 'user', installPath: root, version: '1.0.0' }],
+      },
+    }),
+  )
+  await mkdir(path.join(root, 'agents'), { recursive: true })
+  await mkdir(path.join(root, 'commands'), { recursive: true })
+  await mkdir(path.join(root, 'skills', 'release'), { recursive: true })
+  const agents = [
+    'code-reviewer',
+    'silent-failure-hunter',
+    'pr-test-analyzer',
+    'comment-analyzer',
+    'type-design-analyzer',
+  ]
+  for (const name of [...agents, 'bugs', 'unused-helper'])
+    await writeFile(
+      path.join(root, 'agents', `${name}.md`),
+      `---\nname: ${name}\n---\n\nReview for ${name}.\n`,
+    )
+  await writeFile(path.join(root, 'skills', 'release', 'SKILL.md'), 'Ship it.\n')
+  await writeFile(path.join(root, 'commands', 'ship.md'), 'Run /team:release.\n')
+  await writeFile(
+    path.join(root, 'commands', 'review-pr.md'),
+    [
+      '---',
+      'allowed-tools: ["Bash", "Read", "Task"]',
+      '---',
+      '',
+      'Look for bugs in the change, then run the review agents:',
+      '- **Always**: code-reviewer',
+      '- **Tests changed**: pr-test-analyzer',
+      '- **Comments**: comment-analyzer',
+      '- **Errors**: silent-failure-hunter, and silent-failure-hunter again',
+      '- **Types**: type-design-analyzer',
+      'Then /team:ship, and other:linter if it is there.',
+      '',
+    ].join('\n'),
+  )
+  return { root, agents }
+}
+
+test("a plugin's command holds the agents it starts, in the order it names them: refused as a lens, its five agents make five lenses", async (t) => {
+  const { dir } = await repository(t)
+  const { agents } = await teamPlugin(t)
+  assert.equal(agents.length, 5)
+  const found = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await inside.insideOf(${JSON.stringify(dir)}, 'team:review-pr')))`,
+    ),
+  )
+  assert.equal(found.kind, 'command')
+  // `bugs` is a word of the prose; the commands it runs and a plugin not installed are no lens.
+  assert.deepEqual(
+    found.starts.map((/** @type {any} */ one) => [one.source, one.name, one.kind]),
+    [
+      ['team:code-reviewer', 'code-reviewer', 'agent'],
+      ['team:pr-test-analyzer', 'pr-test-analyzer', 'agent'],
+      ['team:comment-analyzer', 'comment-analyzer', 'agent'],
+      ['team:silent-failure-hunter', 'silent-failure-hunter', 'agent'],
+      ['team:type-design-analyzer', 'type-design-analyzer', 'agent'],
+    ],
+  )
+  // One of its agents is a single reviewer: nothing inside.
+  assert.equal(
+    (
+      await lib(
+        `console.log(JSON.stringify(await inside.insideOf(${JSON.stringify(dir)}, 'team:code-reviewer') ?? null))`,
+      )
+    ).trim(),
+    'null',
+  )
+
+  // Before any agent: the command is refused, its agents named.
+  const refused = await clean(dir, ['--prepare', 'team:review-pr', '--to', 'local'])
+  assert.equal(refused.code, 2)
+  assert.match(
+    refused.stdout,
+    /^CLEAN_REFUSED team:review-pr is a command, never a lens itself: add the 5 reviewers it starts instead \(code-reviewer, pr-test-analyzer, /m,
+  )
+
+  const batch = JSON.parse(
+    await lib(`const { made, refused } = await cleaning.createCleanings({
+  project: ${JSON.stringify(dir)},
+  scope: 'local',
+  from: 'team:review-pr',
+  sources: ${JSON.stringify(found.starts.map((/** @type {any} */ one) => ({ source: one.source, name: one.name })))},
+})
+console.log(JSON.stringify({ made: made.map((one) => one.record), refused }))`),
+  )
+  assert.deepEqual(batch.refused, [])
+  assert.deepEqual(
+    batch.made.map((/** @type {any} */ one) => [one.name, one.source, one.from]),
+    found.starts.map((/** @type {any} */ one) => [
+      one.name,
+      one.source,
+      'team:review-pr',
+    ]),
+  )
+})
+
+test("a glob's command lists the agents it starts, the project's and a plugin's; one with none, empty; an agent that starts others, its own", async (t) => {
+  const { dir } = await repository(t)
+  await teamPlugin(t)
+  const claude = path.join(dir, '.claude')
+  await mkdir(path.join(claude, 'commands'), { recursive: true })
+  await writeFile(path.join(claude, 'agents', 'api-review.md'), 'Breaking changes.\n')
+  await writeFile(path.join(claude, 'agents', 'money.md'), 'Cents.\n')
+  await writeFile(
+    path.join(claude, 'commands', 'review-pr.md'),
+    'Run money-review, `money`, lead-review, then team:comment-analyzer. Plain money is prose; other:api-review is no agent here.\n',
+  )
+  await writeFile(
+    path.join(claude, 'commands', 'full-review.md'),
+    'Start three general-purpose agents, each with the instructions below.\n',
+  )
+  await writeFile(
+    path.join(claude, 'agents', 'lead-review.md'),
+    '---\nname: lead-review\ntools: Read, Agent\n---\n\nStart api-review.\n',
+  )
+  const match = async (/** @type {string} */ pattern) =>
+    JSON.parse(
+      await lib(
+        `console.log(JSON.stringify(await glob.matchSources(${JSON.stringify(dir)}, ${JSON.stringify(pattern)})))`,
+      ),
+    )
+  const commands = await match('.claude/commands/*.md')
+  assert.deepEqual(
+    commands.matches.map((/** @type {any} */ one) => [
+      one.source,
+      one.kind,
+      one.starts?.map((/** @type {any} */ kid) => kid.source),
+    ]),
+    [
+      ['.claude/commands/full-review.md', 'command', []],
+      [
+        '.claude/commands/review-pr.md',
+        'command',
+        [
+          '.claude/agents/money-review.md',
+          '.claude/agents/money.md',
+          'team:comment-analyzer',
+        ],
+      ],
+    ],
+  )
+  const agents = await match('.claude/agents/*review.md')
+  assert.deepEqual(
+    agents.matches.map((/** @type {any} */ one) => [
+      one.name,
+      one.kind,
+      one.starts?.map((/** @type {any} */ kid) => kid.name),
+    ]),
+    [
+      ['api-review', 'agent', undefined],
+      ['lead-review', 'agent', ['api-review']],
+      ['money-review', 'agent', undefined],
+    ],
+  )
+  // The lenses made from a file a command starts are said under it.
+  const marked = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(glob.withAlready(${JSON.stringify(dir)}, ${JSON.stringify(commands.matches)}, [{ source: '.claude/agents/money.md', scope: 'local', name: 'cents' }])))`,
+    ),
+  )
+  assert.deepEqual(marked[1].starts[1].already, [{ scope: 'local', name: 'cents' }])
+
+  // A command with no agent of its own is no lens either.
+  const none = await clean(dir, [
+    '--prepare',
+    '.claude/commands/full-review.md',
+    '--to',
+    'local',
+  ])
+  assert.match(
+    none.stdout,
+    /^CLEAN_REFUSED \.claude\/commands\/full-review\.md is a command, never a lens itself, and it names no agent Tranchant finds: they are written in it, or are a plugin's not installed or turned off$/m,
+  )
+  // An agent that starts others, naming none that resolves, is cleaned: its agent decides.
+  await writeFile(
+    path.join(claude, 'agents', 'pr-review.md'),
+    '---\nname: pr-review\ntools: Read, Task\n---\n\nStart the reviewers.\n',
+  )
+  const orchestrator = await clean(dir, [
+    '--prepare',
+    '.claude/agents/pr-review.md',
+    '--to',
+    'local',
+  ])
+  assert.match(orchestrator.stdout, /^CLEANING /m, orchestrator.stdout)
+})
+
+test('a file is a command or an agent from the folder right above it, never one higher; past 12 reviewers, the rest are counted', async (t) => {
+  const parent = await tempDir(t, 'tranchant-nest-')
+  const dir = path.join(parent, 'commands', 'project')
+  await mkdir(path.join(dir, 'docs'), { recursive: true })
+  await mkdir(path.join(dir, '.claude', 'agents'), { recursive: true })
+  await mkdir(path.join(dir, '.claude', 'commands'), { recursive: true })
+  await writeFile(
+    path.join(dir, 'docs', 'checklist.md'),
+    'Every route checks its policy.\n',
+  )
+  const insideOf = async (/** @type {string} */ source) =>
+    JSON.parse(
+      await lib(
+        `console.log(JSON.stringify(await inside.insideOf(${JSON.stringify(dir)}, ${JSON.stringify(source)}) ?? null))`,
+      ),
+    )
+  assert.equal(await insideOf('docs/checklist.md'), null)
+  const checklist = await clean(dir, ['--prepare', 'docs/checklist.md', '--to', 'local'])
+  assert.match(checklist.stdout, /^CLEANING /m, checklist.stdout + checklist.stderr)
+
+  const names = Array.from({ length: 13 }, (_, i) => `check-${i + 1}`)
+  for (const name of names)
+    await writeFile(
+      path.join(dir, '.claude', 'agents', `${name}.md`),
+      `Review ${name}.\n`,
+    )
+  await writeFile(
+    path.join(dir, '.claude', 'commands', 'all.md'),
+    `Run ${names.join(', ')}.\n`,
+  )
+  const many = await insideOf('.claude/commands/all.md')
+  assert.equal(many.kind, 'command')
+  assert.equal(many.starts.length, 12)
+  assert.equal(many.more, 1)
+  const refused = await clean(dir, [
+    '--prepare',
+    '.claude/commands/all.md',
+    '--to',
+    'local',
+  ])
+  assert.match(
+    refused.stdout,
+    /add the 13 reviewers it starts instead \(check-1, .*check-12, and 1 more\)/,
+  )
 })

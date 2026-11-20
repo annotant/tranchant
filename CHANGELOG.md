@@ -9,6 +9,23 @@ released to the `stable` branch.
 
 ### Added
 
+- **The lenses inside a command.** In Settings › Lenses, **Add a lens**
+  takes a command as its source, a plugin's (`pr-review-toolkit:review-pr`)
+  or a file in a `commands` folder, and any agent or skill that starts other
+  agents: Tranchant reads it, with no agent (*Reading review-pr for the
+  agents it starts…*), and lists in place of the name the agents and skills
+  it names that resolve, its plugin's, the project's, the user's, or any
+  installed plugin's written `plugin:name`; one that starts agents itself
+  is left out. Each one is checked and renamable, one that is a lens
+  already locked; **Add the N lenses** cleans
+  them as a glob's matches. Among a glob's matches, a command is a group
+  with the agents it starts under it, its checkbox checking or unchecking
+  them all; an agent the glob matched too is listed once, under it. A
+  command is never a lens itself: one that names no agent Tranchant finds
+  (written in it, or a plugin's not installed or turned off) says so and
+  adds nothing, and `/tranchant import` refuses a command, or a
+  source that starts the agents it names, before any cleaning, naming them.
+
 - **Add several lenses at once, from a glob.** In Settings › Lenses, **Add
   a lens** takes a glob as its source (`.claude/agents/*-review.md`,
   `~/.claude/agents/review-*.md`): before anything runs, the page lists its

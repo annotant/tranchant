@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import { fetchLensMatches, type LensMatch, type LensMatches } from './api'
+import {
+  fetchLensInside,
+  fetchLensMatches,
+  type LensInside,
+  type LensMatch,
+  type LensMatches,
+} from './api'
 import type { LensEntry } from './settings'
 
 /** Whether a source is a glob: a `*` or a `?`, as the server reads it; a `[` is part of a path. */
@@ -8,12 +14,50 @@ export const isGlob = (source: string) => /[*?]/.test(source)
 const LENS_NAME = /^[\w-]{1,40}$/
 /** Typing settles before the server is asked: one look per pause, not per key. */
 const SETTLE_MS = 300
+/** The most sources one batch sends, as the server takes them. */
+export const MAX_BATCH = 40
 
-type Found =
+/** The server's answer for what was typed, once typing settles; `loading` while it is asked. */
+export type Look<T> =
   | { state: 'idle' }
   | { state: 'loading' }
   | { state: 'error'; error: string }
-  | ({ state: 'done'; glob: string } & LensMatches)
+  | { state: 'done'; key: string; answer: T }
+
+function useLook<T>(key: string, ask: (key: string) => Promise<T>): Look<T> {
+  const [answer, setAnswer] = useState<{ key: string; look: Look<T> }>()
+  useEffect(() => {
+    if (!key) return undefined
+    let disposed = false
+    const timer = setTimeout(() => {
+      void (async () => {
+        let look: Look<T>
+        try {
+          look = { state: 'done', key, answer: await ask(key) }
+        } catch (error) {
+          look = {
+            state: 'error',
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+        if (!disposed) setAnswer({ key, look })
+      })()
+    }, SETTLE_MS)
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+    }
+  }, [key, ask])
+  // An answer for another key is stale: this one is still being looked for.
+  if (!key) return { state: 'idle' }
+  return answer?.key === key ? answer.look : { state: 'loading' }
+}
+
+/** The files a glob matches, asked once typing settles. */
+export const useGlob = (glob: string) => useLook<LensMatches>(glob, fetchLensMatches)
+
+/** The reviewers inside a source typed whole (a command, an agent that starts others), asked once typing settles. */
+export const useInside = (source: string) => useLook<LensInside>(source, fetchLensInside)
 
 /** A match as the form shows it: checked or not, under the name it will get. */
 export interface Row extends LensMatch {
@@ -31,76 +75,109 @@ interface Note {
   name?: boolean
 }
 
+/** Where a row shows: on its own, or among the reviewers a command (or an agent that starts others) starts, under it. */
+type Slot =
+  { source: string } | { group: LensMatch; kids: string[]; alsoMatched: string[] }
+
 /** Whether a match's file is a lens already, or being added. */
 const isPresent = (match: LensMatch) => Boolean(match.already?.length)
 
+/** One file however a source names it: a skill's folder and its SKILL.md alike. */
+const fileOf = (source: string) => source.replace(/[/\\]SKILL\.md$/i, '')
+
 /**
- * The files `glob` matches, asked once typing settles; and which are
- * checked, under which names. A match that reads as no reviewer starts
- * unchecked; one that is a lens already, or being added, is never checked.
+ * The rows to check, each once, and where each shows: the reviewers a
+ * command starts under it, a match it starts listed there and not on its
+ * own, one two commands start under the first.
  */
-export function useGlobPick(glob: string) {
-  const [answer, setAnswer] = useState<{ glob: string; found: Found }>()
-  const [off, setOff] = useState<ReadonlySet<string>>(new Set())
-  const [names, setNames] = useState<Record<string, string>>({})
-  useEffect(() => {
-    if (!glob) return undefined
-    let disposed = false
-    const timer = setTimeout(() => {
-      void (async () => {
-        let found: Found
-        let unchecked: string[] = []
-        try {
-          const matches = await fetchLensMatches(glob)
-          found = { state: 'done', glob, ...matches }
-          // No reviewer: left out unless the person checks it.
-          unchecked = matches.matches
-            .filter((one) => one.notReviewer)
-            .map((one) => one.source)
-        } catch (error) {
-          found = {
-            state: 'error',
-            error: error instanceof Error ? error.message : String(error),
-          }
-        }
-        if (disposed) return
-        setAnswer({ glob, found })
-        setOff(new Set(unchecked))
-        setNames({})
-      })()
-    }, SETTLE_MS)
-    return () => {
-      disposed = true
-      clearTimeout(timer)
+function layoutOf(entries: LensMatch[]) {
+  const started = new Set(
+    entries.flatMap((one) => one.starts?.map((kid) => fileOf(kid.source)) ?? []),
+  )
+  const matched = new Set(
+    entries.filter((one) => !one.starts).map((one) => fileOf(one.source)),
+  )
+  const seen = new Set<string>()
+  const flat: LensMatch[] = []
+  const slots: Slot[] = []
+  for (const one of entries) {
+    if (one.starts) {
+      const kids = one.starts.filter((kid) => !seen.has(fileOf(kid.source)))
+      for (const kid of kids) {
+        seen.add(fileOf(kid.source))
+        flat.push(kid)
+      }
+      slots.push({
+        group: one,
+        kids: kids.map((kid) => kid.source),
+        alsoMatched: kids
+          .filter((kid) => matched.has(fileOf(kid.source)))
+          .map((kid) => kid.name),
+      })
+    } else if (!started.has(fileOf(one.source)) && !seen.has(fileOf(one.source))) {
+      seen.add(fileOf(one.source))
+      flat.push(one)
+      slots.push({ source: one.source })
     }
-  }, [glob])
-  // An answer for another glob is stale: this one is still being looked for.
-  const found: Found = !glob
-    ? { state: 'idle' }
-    : answer?.glob === glob
-      ? answer.found
-      : { state: 'loading' }
-  const matches = found.state === 'done' ? found.matches : []
+  }
+  return { flat, slots }
+}
+
+/**
+ * Which of `entries` are checked, under which names, from `key` (what was
+ * typed) on: a row that reads as no reviewer starts unchecked; one that is
+ * a lens already, or being added, is never checked.
+ */
+export function usePick(entries: LensMatch[], key: string) {
+  const [state, setState] = useState<{
+    key: string
+    off: ReadonlySet<string>
+    names: Record<string, string>
+  }>()
+  const { flat, slots } = layoutOf(entries)
+  // Another answer: its own defaults, until the person changes one.
+  const current =
+    state?.key === key
+      ? state
+      : {
+          key,
+          off: new Set(flat.filter((one) => one.notReviewer).map((one) => one.source)),
+          names: {},
+        }
+  const set = (change: Partial<typeof current>) => setState({ ...current, ...change })
+  const rows = flat.map((one) => ({
+    ...one,
+    name: current.names[one.source] ?? one.name,
+    present: isPresent(one),
+    checked: !isPresent(one) && !current.off.has(one.source),
+  }))
+  const setChecked = (sources: string[], on: boolean) => {
+    const next = new Set(current.off)
+    for (const source of sources) {
+      if (on) next.delete(source)
+      else next.add(source)
+    }
+    set({ off: next })
+  }
   return {
-    found,
-    rows: matches.map((one) => ({
-      ...one,
-      name: names[one.source] ?? one.name,
-      present: isPresent(one),
-      checked: !isPresent(one) && !off.has(one.source),
-    })),
-    toggle: (source: string) =>
-      setOff((now) => {
-        const next = new Set(now)
-        if (!next.delete(source)) next.add(source)
-        return next
-      }),
+    rows,
+    slots,
+    toggle: (source: string) => setChecked([source], current.off.has(source)),
+    setChecked,
     rename: (source: string, name: string) =>
-      setNames((now) => ({ ...now, [source]: name })),
-    checkAll: () => setOff(new Set()),
-    checkNone: () => setOff(new Set(matches.map((one) => one.source))),
+      set({ names: { ...current.names, [source]: name } }),
+    checkAll: () => set({ off: new Set() }),
+    checkNone: () => set({ off: new Set(flat.map((one) => one.source)) }),
   }
 }
+
+/** A source's short name, as a person calls it: `review-pr` for `pr-review-toolkit:review-pr` or `.claude/commands/review-pr.md`. */
+const shortName = (source: string) =>
+  source
+    .replace(/[/\\]SKILL\.md$/i, '')
+    .split(/[:/\\]/)
+    .findLast(Boolean)
+    ?.replace(/\.md$/i, '') ?? source
 
 const SCOPE_WORD = { local: "This project's", global: 'The global' } as const
 const SCOPE_OF = { local: "this project's", global: 'the global' } as const
@@ -194,124 +271,405 @@ const CHIP = {
   muted: 'tr-chip',
 }
 
-/** A glob's matches, each to check and rename; or the files of the folder a glob that matched nothing looked in. */
-export function GlobMatches({
-  found,
-  rows,
+/** A row's kind, as the list says it: a plugin's agent apart from a file's. */
+const kindLabel = (match: LensMatch) =>
+  match.kind
+    ? `${/^[\w-][\w.-]*:/.test(match.source) ? 'plugin ' : ''}${match.kind}`
+    : undefined
+
+interface ListProps {
+  rows: Row[]
+  slots: Slot[]
+  frozen: boolean
+  onToggle: (source: string) => void
+  onSetChecked: (sources: string[], on: boolean) => void
+  onRename: (source: string, name: string) => void
+}
+
+/** One row to check and rename. */
+function MatchRow({
+  row,
+  id,
   frozen,
   onToggle,
   onRename,
-  onCheckAll,
-  onCheckNone,
 }: {
-  found: Found
-  rows: Row[]
+  row: Row
+  id: string
   frozen: boolean
   onToggle: (source: string) => void
   onRename: (source: string, name: string) => void
+}) {
+  const wrongName = row.checked && row.note?.name === true
+  const kind = kindLabel(row)
+  return (
+    <li
+      className={`tr-match${row.present ? ' tr-match--locked' : row.checked ? '' : ' tr-match--off'}`}
+    >
+      <input
+        type="checkbox"
+        className="tr-check"
+        id={id}
+        checked={row.checked}
+        disabled={frozen || row.present}
+        onChange={() => onToggle(row.source)}
+      />
+      <span className="tr-match-path">
+        {kind && <span className="tr-kind">{kind}</span>}
+        <label htmlFor={id}>
+          <code>{row.source}</code>
+        </label>
+      </span>
+      <span className="tr-match-name">
+        <span aria-hidden="true">→</span>
+        <input
+          className="tr-input"
+          value={row.name}
+          aria-label={`Lens name for ${row.source}`}
+          aria-invalid={wrongName || undefined}
+          aria-describedby={row.note ? `${id}-note` : undefined}
+          disabled={frozen || !row.checked}
+          onChange={(event) => onRename(row.source, event.currentTarget.value)}
+        />
+      </span>
+      {row.note && (
+        <p className="tr-match-note" id={`${id}-note`}>
+          <span className={CHIP[row.note.tone]}>{row.note.tag}</span>
+          <span className={wrongName ? 'tr-error' : 'tr-muted'}>{row.note.text}</span>
+        </p>
+      )}
+    </li>
+  )
+}
+
+/** A command's row, or an agent's that starts others: never a lens itself, its checkbox checks the reviewers it starts, listed under it. */
+function GroupRow({
+  slot,
+  index,
+  byKey,
+  frozen,
+  onToggle,
+  onSetChecked,
+  onRename,
+}: Omit<ListProps, 'rows' | 'slots'> & {
+  slot: Extract<Slot, { group: LensMatch }>
+  index: number
+  byKey: Map<string, Row>
+}) {
+  const { group } = slot
+  const kids = slot.kids.flatMap((source) => byKey.get(source) ?? [])
+  const free = kids.filter((kid) => !kid.present)
+  const on = free.filter((kid) => kid.checked).length
+  const present = kids.length - free.length
+  const id = `tr-lns-group-${index}`
+  const all = free.length > 0 && on === free.length
+  const count = group.starts?.length ?? 0
+  const note = !count
+    ? 'It names no agent Tranchant finds: they are written in it, or are a plugin’s not installed or turned off. None can become a lens.'
+    : `It starts ${count === 1 ? '1 agent' : `${count} agents`}: each one below can become a lens.${
+        slot.alsoMatched.length
+          ? ` ${slot.alsoMatched.join(', ')} ${slot.alsoMatched.length === 1 ? 'matches' : 'match'} the glob too: listed once, here.`
+          : ''
+      }${kids.length < count ? ` ${count - kids.length} listed under another match above.` : ''}${group.more ? ` ${group.more} more it names, left out.` : ''}`
+  return (
+    <li className="tr-match tr-match--group">
+      <input
+        type="checkbox"
+        className="tr-check"
+        id={id}
+        checked={all}
+        ref={(box) => {
+          if (box) box.indeterminate = on > 0 && !all
+        }}
+        disabled={frozen || !free.length}
+        aria-describedby={`${id}-note`}
+        onChange={() =>
+          onSetChecked(
+            free.map((kid) => kid.source),
+            !all,
+          )
+        }
+      />
+      <span className="tr-match-path">
+        {kindLabel(group) && <span className="tr-kind">{kindLabel(group)}</span>}
+        <label htmlFor={id}>
+          <code>{group.source}</code>
+        </label>
+      </span>
+      {kids.length > 0 && (
+        <span className="tr-match-aside tr-muted">
+          {on} of {kids.length === 1 ? 'its agent' : `its ${kids.length} agents`} checked
+          {present ? ` · ${present} already a lens` : ''}
+        </span>
+      )}
+      <p className="tr-match-note" id={`${id}-note`}>
+        <span className="tr-chip">not a lens itself</span>
+        <span className="tr-muted">{note}</span>
+      </p>
+      {kids.length > 0 && (
+        <ul
+          className="tr-match-kids"
+          aria-label={`The agents ${shortName(group.source)} starts`}
+        >
+          {kids.map((kid, at) => (
+            <MatchRow
+              key={kid.source}
+              row={kid}
+              id={`${id}-${at}`}
+              frozen={frozen}
+              onToggle={onToggle}
+              onRename={onRename}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  )
+}
+
+/** The rows, each where its slot puts it: on its own, or under the match that starts it. */
+function MatchList({
+  label,
+  rows,
+  slots,
+  frozen,
+  onToggle,
+  onSetChecked,
+  onRename,
+}: ListProps & { label: string }) {
+  const byKey = new Map(rows.map((row) => [row.source, row]))
+  return (
+    <ul className="tr-lns-list tr-matches-box" aria-labelledby={label}>
+      {slots.map((slot, index) => {
+        if ('group' in slot)
+          return (
+            <GroupRow
+              key={`group:${slot.group.source}`}
+              slot={slot}
+              index={index}
+              byKey={byKey}
+              frozen={frozen}
+              onToggle={onToggle}
+              onSetChecked={onSetChecked}
+              onRename={onRename}
+            />
+          )
+        const row = byKey.get(slot.source)
+        return (
+          row && (
+            <MatchRow
+              key={row.source}
+              row={row}
+              id={`tr-lns-match-${index}`}
+              frozen={frozen}
+              onToggle={onToggle}
+              onRename={onRename}
+            />
+          )
+        )
+      })}
+    </ul>
+  )
+}
+
+/** How many are checked, and the buttons that check them all or none. */
+function MatchesHead({
+  title,
+  checked,
+  frozen,
+  onCheckAll,
+  onCheckNone,
+}: {
+  title: string
+  checked: number
+  frozen: boolean
   onCheckAll: () => void
   onCheckNone: () => void
 }) {
-  const checked = rows.filter((row) => row.checked).length
+  return (
+    <div className="tr-matches-head">
+      <strong>{title}</strong>
+      <span className="tr-muted">{checked} checked</span>
+      <button
+        type="button"
+        className="tr-btn tr-btn--link"
+        disabled={frozen}
+        onClick={onCheckAll}
+      >
+        Check all
+      </button>
+      <button
+        type="button"
+        className="tr-btn tr-btn--link"
+        disabled={frozen}
+        onClick={onCheckNone}
+      >
+        Check none
+      </button>
+    </div>
+  )
+}
+
+/** Past MAX_BATCH checked, the batch waits: said under the list. */
+const tooMany = (checked: number) =>
+  checked > MAX_BATCH
+    ? `At most ${MAX_BATCH} lenses at a time: uncheck ${checked - MAX_BATCH}. `
+    : ''
+
+type PickProps = Omit<ListProps, 'rows' | 'slots'> & {
+  rows: Row[]
+  slots: Slot[]
+  onCheckAll: () => void
+  onCheckNone: () => void
+}
+
+/** A glob's matches, each to check and rename, a command's under it; or the files of the folder a glob that matched nothing looked in. */
+export function GlobMatches({
+  look,
+  ...pick
+}: PickProps & {
+  look: Look<LensMatches>
+}) {
+  const checked = pick.rows.filter((row) => row.checked).length
   let body: React.ReactNode
-  if (found.state === 'idle' || found.state === 'loading')
+  if (look.state === 'idle' || look.state === 'loading')
     body = <p className="tr-muted">Looking for the files it matches…</p>
-  else if (found.state === 'error')
-    body = <p className="tr-recipe-problem">{found.error}</p>
-  else if (!found.matches.length)
+  else if (look.state === 'error')
+    body = <p className="tr-recipe-problem">{look.error}</p>
+  else if (!look.answer.matches.length)
     body = (
       <>
         <p className="tr-lns-empty tr-matches-box" role="status">
-          No file matches <code>{found.glob}</code>
-          {/^[~/]/.test(found.glob) ? '' : ' from the project’s root'}. Nothing will run.
+          No file matches <code>{look.key}</code>
+          {/^[~/]/.test(look.key) ? '' : ' from the project’s root'}. Nothing will run.
         </p>
-        {found.folder && <FolderHelp folder={found.folder} />}
+        {look.answer.folder && <FolderHelp folder={look.answer.folder} />}
+      </>
+    )
+  else {
+    const { matches, more } = look.answer
+    const groups = matches.some((one) => one.starts)
+    body = (
+      <>
+        <MatchesHead
+          title={
+            matches.length === 1 ? '1 file matches' : `${matches.length} files match`
+          }
+          checked={checked}
+          {...pick}
+        />
+        <MatchList label="tr-lns-add-matches" {...pick} />
+        <span className="tr-field-help">
+          {tooMany(checked)}
+          {more
+            ? `${more} more ${more === 1 ? 'file matches' : 'files match'}, left out: narrow the glob to add them. `
+            : ''}
+          Each lens is named after its file; rename one before it is cleaned. Unchecked, a
+          file is left out
+          {groups ? '; a command’s checkbox checks or unchecks all its agents.' : '.'}
+        </span>
+      </>
+    )
+  }
+  return (
+    <div className="tr-field">
+      <span className="tr-field-label" id="tr-lns-add-matches">
+        Matches
+      </span>
+      <div className="tr-field-body tr-matches">{body}</div>
+    </div>
+  )
+}
+
+/** A source typed whole that could not be read for the agents it starts: added as one reviewer, said so. */
+export function InsideUnread({ source, error }: { source: string; error: string }) {
+  return (
+    <div className="tr-field">
+      <span className="tr-field-label">Its agents</span>
+      <div className="tr-field-body tr-matches">
+        <p className="tr-recipe-problem" role="status">
+          <code>{shortName(source)}</code> could not be read for the agents it starts:{' '}
+          {error}. Import cleans it as one reviewer; type the source again to read it
+          anew.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** While a source typed whole is read for the agents it starts: Add waits. */
+export function ReadingSource({ source }: { source: string }) {
+  return (
+    <div className="tr-field">
+      <span className="tr-field-label">Its agents</span>
+      <div className="tr-field-body tr-matches">
+        <p className="tr-reading" role="status">
+          <span className="tr-spinner" aria-hidden="true" />
+          <span>
+            Reading <code>{shortName(source)}</code> for the agents it starts…
+          </span>
+          <span className="tr-muted">a read of the file, no agent</span>
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The reviewers inside a source: a command, or an agent that starts
+ * others. Each to check and rename; none, said, and nothing runs.
+ */
+export function InsideMatches({
+  inside,
+  ...pick
+}: PickProps & {
+  inside: NonNullable<LensInside['inside']>
+}) {
+  const name = shortName(inside.label)
+  const checked = pick.rows.filter((row) => row.checked).length
+  const count = inside.starts.length
+  let body: React.ReactNode
+  if (!count)
+    body = (
+      <>
+        <p className="tr-lns-empty tr-matches-box" role="status">
+          <strong>
+            No agent of its own in <code>{name}</code>.
+          </strong>{' '}
+          It names no agent or skill Tranchant finds, by name beside it, in the project or
+          yours, or as <code>plugin:name</code>: they are written in{' '}
+          <code>{inside.label}</code> itself, or are a plugin’s not installed or turned
+          off. None can become a lens, and a whole process cannot either. Nothing will
+          run.
+        </p>
+        <span className="tr-field-help">
+          A plugin’s: install it or turn it on (<code>/plugin</code>), then type the
+          source again. Written in it: copy one review’s instructions into a file of its
+          own, then add that file.
+        </span>
       </>
     )
   else
     body = (
       <>
-        <div className="tr-matches-head">
-          <strong>
-            {found.matches.length === 1
-              ? '1 file matches'
-              : `${found.matches.length} files match`}
-          </strong>
-          <span className="tr-muted">{checked} checked</span>
-          <button
-            type="button"
-            className="tr-btn tr-btn--link"
-            disabled={frozen}
-            onClick={onCheckAll}
-          >
-            Check all
-          </button>
-          <button
-            type="button"
-            className="tr-btn tr-btn--link"
-            disabled={frozen}
-            onClick={onCheckNone}
-          >
-            Check none
-          </button>
-        </div>
-        <ul className="tr-lns-list tr-matches-box" aria-labelledby="tr-lns-add-matches">
-          {rows.map((row, index) => {
-            const id = `tr-lns-match-${index}`
-            const wrongName = row.checked && row.note?.name === true
-            return (
-              <li
-                key={row.source}
-                className={`tr-match${row.checked ? '' : ' tr-match--off'}`}
-              >
-                <input
-                  type="checkbox"
-                  className="tr-check"
-                  id={id}
-                  checked={row.checked}
-                  disabled={frozen || row.present}
-                  onChange={() => onToggle(row.source)}
-                />
-                <label htmlFor={id} className="tr-match-path">
-                  <code>{row.source}</code>
-                </label>
-                <span className="tr-match-name">
-                  <span aria-hidden="true">→</span>
-                  <input
-                    className="tr-input"
-                    value={row.name}
-                    aria-label={`Lens name for ${row.source}`}
-                    aria-invalid={wrongName || undefined}
-                    aria-describedby={row.note ? `${id}-note` : undefined}
-                    disabled={frozen || !row.checked}
-                    onChange={(event) => onRename(row.source, event.currentTarget.value)}
-                  />
-                </span>
-                {row.note && (
-                  <p className="tr-match-note" id={`${id}-note`}>
-                    <span className={CHIP[row.note.tone]}>{row.note.tag}</span>
-                    <span className={wrongName ? 'tr-error' : 'tr-muted'}>
-                      {row.note.text}
-                    </span>
-                  </p>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+        <MatchesHead
+          title={`${name} ${inside.kind === 'command' ? 'is a command: it starts' : 'starts'} ${count === 1 ? '1 agent' : `${count} agents`}`}
+          checked={checked}
+          {...pick}
+        />
+        <MatchList label="tr-lns-add-inside" {...pick} />
         <span className="tr-field-help">
-          {found.more
-            ? `${found.more} more ${found.more === 1 ? 'file matches' : 'files match'}, left out: narrow the glob to add them. `
-            : ''}
-          Each lens is named after its file; rename one before it is cleaned. Unchecked, a
-          file is left out.
+          {tooMany(checked)}
+          {inside.more ? `${inside.more} more it names, left out. ` : ''}
+          Each can become a lens; {name} itself cannot, it is a whole process. Each lens
+          is named after its agent; rename one before it is cleaned.
         </span>
       </>
     )
   return (
     <div className="tr-field">
-      <span className="tr-field-label" id="tr-lns-add-matches">
-        Matches
+      <span className="tr-field-label" id="tr-lns-add-inside">
+        Its agents
       </span>
       <div className="tr-field-body tr-matches">{body}</div>
     </div>
