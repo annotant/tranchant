@@ -16,7 +16,8 @@
 // one write at a time, with every lens that could run on the project, the
 // recipe's and those the user added (lib/userlens.mjs), and the lenses being
 // cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
-// them again, and prints CLEAN for each cleaning the hooks start an agent on;
+// them again, lists a glob's matches (lib/glob.mjs) and imports several at
+// once, and prints CLEAN for each cleaning the hooks start an agent on;
 // it pushes `settings` when the file, a lens or a cleaning changes. It serves
 // the Lenses step's progress (lenses.json) with the review, and prints START
 // or BUILD when the page starts a review waiting to start, or builds its
@@ -56,9 +57,11 @@ import {
   cleanAgain,
   cleaningsDir,
   createCleaning,
+  createCleanings,
   discardCleaning,
   listCleanings,
 } from './lib/cleaning.mjs'
+import { GlobRefusal, MAX_MATCHES, matchSources } from './lib/glob.mjs'
 import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
 import {
   LensFileRefusal,
@@ -418,6 +421,49 @@ async function lensChange(res, change) {
   // Done already: a settings payload that fails now is the page's to ask again.
   const settings = await settingsPayload().catch(() => undefined)
   return send(res, 200, { ...done, ...(settings && { settings }) })
+}
+
+/**
+ * A glob's checked matches (`sources`, each `{ source, name? }`), one
+ * cleaning each, queued: a CLEAN line for each one made; those refused said
+ * with theirs. All refused is a refusal (409).
+ * @param {http.ServerResponse} res
+ * @param {any} input
+ * @param {string | undefined} context
+ */
+function importSeveral(res, input, context) {
+  /** @type {{ source: string, name?: string }[]} */
+  const sources = input.sources
+    .filter((/** @type {any} */ one) => typeof one?.source === 'string')
+    .map((/** @type {any} */ one) => ({
+      source: one.source,
+      ...(typeof one.name === 'string' && one.name.trim() && { name: one.name }),
+    }))
+  if (
+    !sources.length ||
+    sources.length > MAX_MATCHES ||
+    sources.length !== input.sources.length
+  )
+    return send(res, 400, {
+      error: `sources: 1 to ${MAX_MATCHES} of { source, name? }`,
+    })
+  return lensChange(res, async () => {
+    const { made, refused } = await createCleanings({
+      project: lensRoot,
+      scope: String(input?.scope ?? ''),
+      sources,
+      ...(context && { context }),
+      ...(typeof input?.from === 'string' &&
+        input.from.trim() && { from: input.from.trim().slice(0, 1024) }),
+    })
+    if (!made.length)
+      throw new CleaningRefusal(
+        refused.map((one) => `${one.source}: ${one.reason}`).join('; ') ||
+          'no lens to add',
+      )
+    for (const one of made) print(`CLEAN ${one.record.id}`)
+    return { cleanings: made.map((one) => one.record.id), refused }
+  })
 }
 
 /** A lens's scope and name from the page, checked as names; undefined when they are not. @param {any} input */
@@ -1193,16 +1239,33 @@ async function handle(req, res) {
     }
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/lens/matches') {
+    const source = url.searchParams.get('source') ?? ''
+    if (!source.trim() || source.length > 1024)
+      return send(res, 400, { error: 'source, a glob, is required' })
+    try {
+      return send(res, 200, await matchSources(lensRoot, source))
+    } catch (error) {
+      if (!(error instanceof GlobRefusal)) throw error
+      return send(res, 409, { error: error.message })
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/lens/import') {
     const input = await readJson(req)
+    const context =
+      typeof input?.context === 'string' && input.context.trim()
+        ? input.context
+        : undefined
+    if (Array.isArray(input?.sources)) return importSeveral(res, input, context)
     return lensChange(res, async () => {
       const made = await createCleaning({
         project: lensRoot,
         source: typeof input?.source === 'string' ? input.source : '',
         scope: String(input?.scope ?? ''),
+        queued: true,
         ...(typeof input?.name === 'string' && input.name.trim() && { name: input.name }),
-        ...(typeof input?.context === 'string' &&
-          input.context.trim() && { context: input.context }),
+        ...(context && { context }),
       })
       print(`CLEAN ${made.record.id}`)
       return { cleaning: made.record.id }

@@ -38,6 +38,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type {
   Cleaning,
+  QueuedCleaning,
   Lens,
   ReviewAgent,
   ReviewJob,
@@ -101,6 +102,8 @@ const noDiscussing: Record<string, string[]> = {}
 const discussing = atom({ plugin: 'tranchant', key: 'discussing' } as const, noDiscussing)
 const noCleaning: Record<string, Cleaning> = {}
 const cleaning = atom({ plugin: 'tranchant', key: 'cleaning' } as const, noCleaning)
+const noCleanQueue: QueuedCleaning[] = []
+const cleanQueue = atom({ plugin: 'tranchant', key: 'cleanQueue' } as const, noCleanQueue)
 
 /** The plugin's agent file, whose instructions every finding's agent gets. */
 const WORKER = 'tranchant:worker'
@@ -1761,6 +1764,10 @@ async function stopReviewing($: $) {
   await update($, reviewRuns, (all) =>
     Object.fromEntries(Object.entries(all).filter(([dir]) => !waiting.includes(dir))),
   )
+  // The cleanings waiting for an agent get none: each fails as stopped.
+  const queuedCleanings = await read($, cleanQueue)
+  await update($, cleanQueue, () => noCleanQueue)
+  for (const one of queuedCleanings) await runClean($, one.project, ['--drop', one.id])
   const cleaners = Object.values(await read($, cleaning)).filter((one) => one.running)
   await update($, cleaning, (every) => ({
     ...every,
@@ -2390,23 +2397,61 @@ async function startImport(
   ].join('\n')
 }
 
-/** The page asked for a cleaning (Add a lens, Clean it again): its agent, in the background. */
+/**
+ * The page asked for a cleaning (Add a lens, a glob's matches, Clean it
+ * again): queued, its agent started in the background once one is free.
+ */
 async function cleanFromPage($: $, watched: Watch, id: string) {
   const project = watched.review?.project
   if (!project) {
     $.ui.toast(`Tranchant could not start the cleaning ${id}: its review is not loaded.`)
     return
   }
-  const prepared = preparedOf(await runClean($, project, ['--start', id]))
-  if ('refused' in prepared) {
-    $.ui.toast(
-      `Tranchant could not start the cleaning agent: ${short(prepared.refused, 200)}`,
+  await update($, cleanQueue, (all) =>
+    all.some((one) => one.id === id) ? all : [...all, { project, id }],
+  )
+  await pumpCleanings($)
+}
+
+/** One round of cleaning starts at a time: two CLEAN lines at once start no more than the cap. */
+let cleanDispatching: Promise<void> = Promise.resolve()
+
+function pumpCleanings($: $) {
+  cleanDispatching = cleanDispatching
+    .then(() => startCleanQueued($))
+    .catch((error: unknown) =>
+      debug($, `starting cleaning agents failed: ${message(error)}`),
     )
-    return
+  return cleanDispatching
+}
+
+/**
+ * The queued cleanings' agents, while fewer than the settings'
+ * `maxReviewAgents` clean: a glob's matches clean that many at a time.
+ */
+async function startCleanQueued($: $) {
+  const cap = (await settingsOf($)).maxReviewAgents
+  for (;;) {
+    const running = Object.values(await read($, cleaning)).filter(
+      (one) => one.running,
+    ).length
+    if (running >= cap) return
+    let next: QueuedCleaning | undefined
+    await update($, cleanQueue, (all) => {
+      next = all[0]
+      return all.slice(1)
+    })
+    if (!next) return
+    const prepared = preparedOf(await runClean($, next.project, ['--start', next.id]))
+    // Discarded while it waited: nothing to start, the next one is.
+    if ('refused' in prepared) {
+      await debug($, `cleaning ${next.id}: ${prepared.refused}`)
+      continue
+    }
+    const spawned = await spawnCleaner($, prepared.made)
+    if ('error' in spawned)
+      $.ui.toast(`Tranchant could not start the cleaning agent: ${spawned.error}`)
   }
-  const spawned = await spawnCleaner($, prepared.made)
-  if ('error' in spawned)
-    $.ui.toast(`Tranchant could not start the cleaning agent: ${spawned.error}`)
 }
 
 /** A cleaning agent ended: what it wrote checked, and said; a review waiting on it goes on. */
@@ -2444,6 +2489,7 @@ async function cleanDone($: $, agent: string, answer: string) {
       $.ui.toast(`Tranchant could not clean the lens ${found.lens}: ${short(why, 200)}`)
   }
   if (waiting) await cleaningEnded($, waiting, found.dir)
+  await pumpCleanings($)
 }
 
 /** After a reload, the cleaning agents at work get their hooks back. */
@@ -2615,6 +2661,7 @@ export const register: Register = (on) => {
     await registerCleanersAgain($)
     // The review agents queued before a reload start once places free.
     void pumpReviews($)
+    void pumpCleanings($)
     await rearm($)
     return next(e)
   })

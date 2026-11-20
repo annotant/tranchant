@@ -564,3 +564,189 @@ test('while a lens is added past the warning, the form alone says the count', ()
   expect(screen.getAllByText(/lenses are on for this project/)).toHaveLength(1)
   expect(screen.getByText(/^With this one, 14 lenses are on/)).toBeDefined()
 })
+
+/** The server's answer to `/api/lens/matches`, for every look. */
+function stubMatches(answer: unknown) {
+  const fetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify(answer))))
+  vi.stubGlobal('fetch', fetch)
+  return fetch
+}
+
+const MATCHES = {
+  matches: [
+    { source: '.claude/agents/abac-review.md', name: 'abac' },
+    { source: '.claude/agents/bugs-review.md', name: 'bugs' },
+    { source: '.claude/agents/i18n-review.md', name: 'i18n-review' },
+    {
+      source: '.claude/agents/pr-review.md',
+      name: 'pr-review',
+      notReviewer: 'It starts other agents and holds no review of its own.',
+    },
+    { source: '.claude/agents/perf-review.md', name: 'perf-review' },
+  ],
+}
+
+test('a glob lists its matches: a taken name blocks until renamed, one that is no reviewer starts unchecked, unchecked ones are left out', async () => {
+  const fetch = stubMatches(MATCHES)
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/agents/*-review.md' },
+    })
+    // A glob has no Name: each match is named after its file.
+    expect(form.queryByLabelText('Name')).toBeNull()
+    const list = within(await screen.findByRole('list', { name: 'Matches' }))
+    expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+      '/api/lens/matches?source=.claude%2Fagents%2F*-review.md',
+    )
+    expect(form.getByText('5 files match')).toBeDefined()
+    expect(form.getByText('4 checked')).toBeDefined()
+    expect(list.getByLabelText('.claude/agents/pr-review.md')).toHaveProperty(
+      'checked',
+      false,
+    )
+    expect(list.getByText('not a reviewer')).toBeDefined()
+    expect(list.getByText('replaces')).toBeDefined()
+    expect(
+      list.getByText(/Replaces the global bugs \(from \/me\/agents\/bugs\.md\)/),
+    ).toBeDefined()
+    // abac is this project's already: nothing is added until it is renamed.
+    expect(list.getByText('taken')).toBeDefined()
+    const add = form.getByRole('button', { name: 'Add the 4 lenses' })
+    expect(add).toHaveProperty('disabled', true)
+    fireEvent.change(list.getByLabelText('Lens name for .claude/agents/abac-review.md'), {
+      target: { value: 'abac-api' },
+    })
+    expect(list.queryByText('taken')).toBeNull()
+    fireEvent.click(list.getByLabelText('.claude/agents/perf-review.md'))
+    fireEvent.click(form.getByRole('button', { name: 'Add the 3 lenses' }))
+    expect(onLens).toHaveBeenCalledWith('import', {
+      sources: [
+        { source: '.claude/agents/abac-review.md', name: 'abac-api' },
+        { source: '.claude/agents/bugs-review.md', name: 'bugs' },
+        { source: '.claude/agents/i18n-review.md', name: 'i18n-review' },
+      ],
+      from: '.claude/agents/*-review.md',
+      scope: 'local',
+    })
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: 'Add a lens' })).toBeNull(),
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('Check none disables the button; Check all checks every match, the one that is no reviewer too', async () => {
+  stubMatches({ matches: MATCHES.matches.slice(2) })
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/agents/*-review.md' },
+    })
+    await screen.findByRole('list', { name: 'Matches' })
+    fireEvent.click(form.getByRole('button', { name: 'Check none' }))
+    expect(form.getByRole('button', { name: 'Add the lenses' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    fireEvent.click(form.getByRole('button', { name: 'Check all' }))
+    expect(form.getByRole('button', { name: 'Add the 3 lenses' })).toHaveProperty(
+      'disabled',
+      false,
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a glob that matches nothing says so, lists the folder it looked in, and runs nothing', async () => {
+  stubMatches({
+    matches: [],
+    folder: {
+      label: '.claude/agents/',
+      files: ['api-review.md', 'perf-review.md'],
+      count: 2,
+    },
+  })
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/agents/*-reviewer.md' },
+    })
+    expect((await form.findByText(/No file matches/)).textContent).toBe(
+      'No file matches .claude/agents/*-reviewer.md from the project’s root. Nothing will run.',
+    )
+    expect(form.getByText('perf-review.md')).toBeDefined()
+    expect(form.getByRole('button', { name: 'Add the lenses' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+/** A card of a glob's batch, cleaning unless `more` says otherwise. */
+const card = (id: string, name: string, more: Partial<CleaningEntry>): CleaningEntry => ({
+  id,
+  createdAt: `2026-11-18T00:00:0${id.at(-1)}Z`,
+  name,
+  scope: 'local',
+  again: false,
+  source: `.claude/agents/${name}.md`,
+  from: '.claude/agents/*-review.md',
+  state: 'cleaning',
+  ...more,
+})
+
+test('a batch being added counts its cards; one waiting for an agent says so and can be discarded', () => {
+  const { onLens } = renderLenses([
+    { ...READY, from: '.claude/agents/*-review.md' },
+    card('c-2', 'i18n-review', {}),
+    card('c-3', 'security-review', { waiting: true }),
+    card('c-4', 'perf-review', { state: 'failed', reason: 'no lens.md' }),
+  ])
+  expect(
+    screen.getByText(
+      '4 from .claude/agents/*-review.md · 1 to check, 1 cleaning, 1 waiting, 1 failed',
+    ),
+  ).toBeDefined()
+  const adding = within(screen.getByRole('list', { name: 'Lenses being added' }))
+  expect(adding.getByText('waits for a cleaning agent: 3 at a time')).toBeDefined()
+  expect(adding.getAllByRole('img', { name: 'being cleaned' })).toHaveLength(1)
+  const waiting = adding.getByText('security-review').closest('li')!
+  fireEvent.click(within(waiting).getByRole('button', { name: 'Discard' }))
+  expect(onLens).toHaveBeenLastCalledWith('discard', { id: 'c-3' })
+})
+
+test('the matches the server refused are said once the others are under way', async () => {
+  stubMatches({ matches: MATCHES.matches.slice(2, 3) })
+  try {
+    const { onLens } = renderLenses()
+    onLens.mockImplementation(() =>
+      Promise.resolve({
+        refused: [{ source: '.claude/agents/i18n-review.md', reason: 'no such file' }],
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/agents/i18n-*.md' },
+    })
+    await screen.findByRole('list', { name: 'Matches' })
+    fireEvent.click(form.getByRole('button', { name: 'Add the lens' }))
+    expect(await screen.findByText('One match was not added:')).toBeDefined()
+    expect(screen.getByText(/: no such file/)).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'dismiss' }))
+    expect(screen.queryByText('One match was not added:')).toBeNull()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})

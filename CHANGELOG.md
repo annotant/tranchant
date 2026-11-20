@@ -9,6 +9,18 @@ released to the `stable` branch.
 
 ### Added
 
+- **Add several lenses at once, from a glob.** In Settings › Lenses, **Add
+  a lens** takes a glob as its source (`.claude/agents/*-review.md`,
+  `~/.claude/agents/review-*.md`): before anything runs, the page lists its
+  matches, each named after its file and renamable, with **Check all** /
+  **Check none**; a name taken where it would live blocks until renamed, a
+  lens it would replace is said, and a file that starts other agents is
+  flagged *not a reviewer* and starts unchecked. **Add the N lenses** cleans
+  each checked match with its own agent, `maxReviewAgents` at a time, the
+  others waiting under *Lenses being added*; one that fails stops none. A
+  glob that matches nothing says so, with the files of the folder it looked
+  in.
+
 - **Start the review yourself, once the lenses are built.** A new setting,
   **Start the review by itself** (on by default), and `/tranchant review
   --no-start` for one run (`--start` forces it on; neither is saved): the

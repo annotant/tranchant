@@ -123,6 +123,7 @@ async function lib(/** @type {string} */ code) {
       '-e',
       `import * as cleaning from ${JSON.stringify(path.join(LIB, 'cleaning.mjs'))}
 import * as userlens from ${JSON.stringify(path.join(LIB, 'userlens.mjs'))}
+import * as glob from ${JSON.stringify(path.join(LIB, 'glob.mjs'))}
 ${code}`,
     ],
     { env: env() },
@@ -748,4 +749,180 @@ test('a scope holds more than 12 lenses, local or global: a 13th is added, a 14t
   const planned = plan.lenses.map((/** @type {any} */ lens) => lens.name)
   for (const name of [...local, ...global])
     assert.ok(planned.includes(name), planned.join())
+})
+
+test("a glob's matches: each file's lens name, a skill's folder, one that starts agents flagged; none, the folder's files", async (t) => {
+  const { dir } = await repository(t)
+  const agents = path.join(dir, '.claude', 'agents')
+  await writeFile(path.join(agents, 'api-review.md'), 'Breaking changes.\n')
+  await writeFile(
+    path.join(agents, 'pr-review.md'),
+    '---\nname: pr-review\ntools: Read, Task\n---\n\nStart the reviewers.\n',
+  )
+  await writeFile(path.join(agents, 'notes-review.txt'), 'Not Markdown.\n')
+  await mkdir(path.join(dir, '.claude', 'skills', 'i18n-review'), { recursive: true })
+  await writeFile(
+    path.join(dir, '.claude', 'skills', 'i18n-review', 'SKILL.md'),
+    'Copy lives in the locales.\n',
+  )
+  await mkdir(path.join(dir, '.claude', 'skills', 'empty'), { recursive: true })
+  const match = async (/** @type {string} */ pattern) =>
+    JSON.parse(
+      await lib(
+        `console.log(JSON.stringify(await glob.matchSources(${JSON.stringify(dir)}, ${JSON.stringify(pattern)})))`,
+      ),
+    )
+
+  const found = await match('.claude/agents/*-review.*')
+  assert.deepEqual(
+    found.matches.map((/** @type {any} */ one) => [
+      one.source,
+      one.name,
+      !!one.notReviewer,
+    ]),
+    [
+      ['.claude/agents/api-review.md', 'api-review', false],
+      ['.claude/agents/money-review.md', 'money-review', false],
+      ['.claude/agents/pr-review.md', 'pr-review', true],
+    ],
+  )
+  const skills = await match('.claude/skills/*')
+  assert.deepEqual(
+    skills.matches.map((/** @type {any} */ one) => [one.source, one.name]),
+    [['.claude/skills/i18n-review', 'i18n-review']],
+  )
+  const absolute = await match(path.join(agents, 'a?i-*.md'))
+  assert.deepEqual(
+    absolute.matches.map((/** @type {any} */ one) => one.source),
+    [path.join(agents, 'api-review.md')],
+  )
+
+  const none = await match('.claude/agents/*-reviewer.md')
+  assert.deepEqual(none.matches, [])
+  assert.deepEqual(none.folder, {
+    label: '.claude/agents/',
+    files: ['api-review.md', 'money-review.md', 'notes-review.txt', 'pr-review.md'],
+    count: 4,
+  })
+  const nowhere = await match('.claude/nowhere/*.md')
+  assert.equal(nowhere.folder.missing, true)
+
+  for (const refused of ['**/*.md', 'workflow:*'])
+    assert.match(
+      await lib(
+        `await glob.matchSources(${JSON.stringify(dir)}, ${JSON.stringify(refused)}).then(() => console.log('matched'), (error) => console.log(error.constructor.name))`,
+      ),
+      /GlobRefusal/,
+    )
+})
+
+test("a glob's three checked matches make three lenses, each cleaned by its own agent; one refused stops none", async (t) => {
+  const { dir } = await repository(t)
+  const agents = path.join(dir, '.claude', 'agents')
+  for (const name of ['api-review', 'i18n-review', 'perf-review'])
+    await writeFile(path.join(agents, `${name}.md`), `Review ${name}.\n`)
+  await addLens(dir, [
+    '.claude/agents/money-review.md',
+    '--to',
+    'local',
+    '--name',
+    'taken',
+  ])
+  const batch = JSON.parse(
+    await lib(`const { made, refused } = await cleaning.createCleanings({
+  project: ${JSON.stringify(dir)},
+  scope: 'local',
+  from: '.claude/agents/*-review.md',
+  sources: [
+    { source: '.claude/agents/api-review.md', name: 'api-review' },
+    { source: '.claude/agents/i18n-review.md', name: 'i18n-review' },
+    { source: '.claude/agents/perf-review.md', name: 'perf-review' },
+    { source: '.claude/agents/perf-review.md', name: 'perf-review' },
+    { source: '.claude/agents/money-review.md', name: 'taken' },
+  ],
+})
+console.log(JSON.stringify({ made: made.map((one) => one.record), refused }))`),
+  )
+  assert.deepEqual(
+    batch.made.map((/** @type {any} */ one) => [one.name, one.queued, one.from]),
+    [
+      ['api-review', true, '.claude/agents/*-review.md'],
+      ['i18n-review', true, '.claude/agents/*-review.md'],
+      ['perf-review', true, '.claude/agents/*-review.md'],
+    ],
+  )
+  assert.deepEqual(
+    batch.refused.map((/** @type {any} */ one) => one.reason),
+    [
+      'perf-review is the name of another match: rename one',
+      "a lens named taken is this project's already: edit it, or choose another name",
+    ],
+  )
+  const listed = async () =>
+    JSON.parse(
+      await lib(
+        `console.log(JSON.stringify(await cleaning.listCleanings(${JSON.stringify(dir)})))`,
+      ),
+    )
+  assert.ok((await listed()).every((/** @type {any} */ one) => one.waiting === true))
+
+  // Each waiting one is started on its own: its agent's input, and it waits no more.
+  for (const record of batch.made) {
+    const made = cleaningOf(await clean(dir, ['--start', record.id]))
+    assert.equal(made.name, record.name)
+    await agentWrites(made)
+    const checked = await clean(dir, ['--check', made.dir])
+    assert.match(checked.stdout, /^CLEANED ready local /m, checked.stdout)
+    await lib(
+      `await cleaning.addCleaned(${JSON.stringify(dir)}, ${JSON.stringify(record.id)})`,
+    )
+  }
+  for (const name of ['api-review', 'i18n-review', 'perf-review'])
+    assert.equal(
+      (
+        await lib(
+          `console.log((await userlens.readUserLens(userlens.lensDir('local', ${JSON.stringify(dir)}, ${JSON.stringify(name)}))).source)`,
+        )
+      ).trim(),
+      `.claude/agents/${name}.md`,
+    )
+  // Started once: never again.
+  assert.match(
+    (await clean(dir, ['--start', batch.made[0].id])).stdout,
+    /^CLEAN_REFUSED /m,
+  )
+})
+
+test('a waiting cleaning is discarded while it waits, or dropped by /tranchant stop; a started one is not discarded', async (t) => {
+  const { dir } = await repository(t)
+  const make = async () =>
+    JSON.parse(
+      await lib(`const { made } = await cleaning.createCleanings({
+  project: ${JSON.stringify(dir)},
+  scope: 'local',
+  sources: [{ source: '.claude/agents/money-review.md' }],
+})
+console.log(JSON.stringify(made[0].record))`),
+    )
+  const waiting = await make()
+  await lib(
+    `await cleaning.discardCleaning(${JSON.stringify(dir)}, ${JSON.stringify(waiting.id)})`,
+  )
+  assert.match(
+    (await clean(dir, ['--start', waiting.id])).stdout,
+    /^CLEAN_REFUSED no cleaning/m,
+  )
+
+  const dropped = await make()
+  const ran = await clean(dir, ['--drop', dropped.id])
+  assert.match(ran.stdout, /^CLEAN_FAILED the cleaning agent was stopped/m, ran.stdout)
+
+  const started = await make()
+  cleaningOf(await clean(dir, ['--start', started.id]))
+  assert.match(
+    await lib(
+      `await cleaning.discardCleaning(${JSON.stringify(dir)}, ${JSON.stringify(started.id)}).then(() => console.log('discarded'), (error) => console.log(error.message))`,
+    ),
+    /the cleaning agent is still at work/,
+  )
 })

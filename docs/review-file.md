@@ -793,7 +793,15 @@ as for a recipe's lens.
 `/tranchant import [<source>] [--to local | global] [--name <lens>] [--context <skill>]`
 adds a team's reviewer (a plugin's skill or agent, a file or a folder) as a
 lens, cleaned first; the page's **Settings › Lenses** does the same with
-**Add a lens**:
+**Add a lens**, whose source may be a glob (`.claude/agents/*-review.md`,
+`~/.claude/agents/review-*.md`): the page lists its matches before anything
+runs, each with the lens name its file gives it (to rename), a name taken in
+that scope (to rename or uncheck), the lens of another scope it would
+replace, and one that starts other agents, flagged *not a reviewer* and
+unchecked; **Add the N lenses** makes one cleaning per checked match, the
+same scope for all. The page's cleanings wait for a free cleaning agent:
+`maxReviewAgents` clean at a time, the others say so; one that fails stops
+none:
 
 1. With no source, `clean.mjs --find` lists the project's
    `.claude/skills/*review*` and `.claude/agents/*review*`; the user names

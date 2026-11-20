@@ -97,6 +97,12 @@ export type Cleaning = {
   running: boolean
 }
 
+/** A cleaning the page asked for, waiting for a free cleaning agent. */
+export type QueuedCleaning = {
+  project: string
+  id: string
+}
+
 /** A review the hooks serve: its folder and the project it lies in. */
 export type Served = {
   review: string
@@ -153,6 +159,8 @@ declare module 'claude-code' {
       discussing: Record<string, string[]>
       /** By cleaning folder: the cleanings started, running or ended. */
       cleaning: Record<string, Cleaning>
+      /** The page's cleanings waiting for a free agent, in order: `maxReviewAgents` clean at a time. */
+      cleanQueue: QueuedCleaning[]
     }
   }
 }

@@ -95,7 +95,8 @@ const HELP: Record<SettingKey, string> = {
     'One per lens of the recipe; the summary agent and a discussion\u2019s too.',
   verifyModel: 'One per finding, re-reading the code. A cheaper model does well here.',
   maxFixAgents: 'The other fixes wait in the queue.',
-  maxReviewAgents: 'Reviewers, verifiers and discussions together.',
+  maxReviewAgents:
+    'Reviewers, verifiers and discussions together; as many lens cleanings, apart.',
   recipe:
     "A file in the recipe's shape, used when a run names none. --recipe on a run still wins.",
   startReview:

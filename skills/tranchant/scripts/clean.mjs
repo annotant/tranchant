@@ -2,13 +2,15 @@
 // clean.mjs [--project <root>] --find
 //   | --prepare <source> --to <global | local> [--name <name>] [--context <skill>]
 //   | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped]
+//   | --drop <id>
 // What runs around a lens's cleaning agent (lib/cleaning.mjs), from the
 // session's folder or for --project.
 // --find: the project's reviewers, `.claude/skills/*review*` and
 //   `.claude/agents/*review*`: one `CANDIDATE <path>` each, from the
 //   project's root, or `NO_CANDIDATE`. The user names or confirms one.
 // --prepare: a new lens's cleaning (/tranchant import); --again: a stored
-//   lens's, its source changed; --start: one the page made. Each prints
+//   lens's, its source changed; --start: one the page made, which waits no
+//   more from then on. Each prints
 //   `CLEANING <json>`, what the agent is given: `{ id, dir, project, name,
 //   scope, again, source, file, folder, version?, context?, contextFile?,
 //   rules?, lens, report }`, `lens` and `report` the only files it writes.
@@ -17,6 +19,8 @@
 //   or `CLEAN_FAILED <reason>`. With --stopped, the agent was stopped or
 //   never started: the cleaning fails, and a lens cleaned again keeps no
 //   failure on its source.
+// --drop: one the page made that waited for an agent and gets none
+//   (/tranchant stop): it fails as stopped, `CLEAN_FAILED <reason>`.
 // Any refusal prints `CLEAN_REFUSED <reason>` and exits 2.
 import { execFileSync } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
@@ -29,6 +33,7 @@ import {
   cleanAgain,
   cleaningOf,
   createCleaning,
+  startedCleaning,
 } from './lib/cleaning.mjs'
 
 /**
@@ -93,12 +98,20 @@ if (process.argv.includes('--find')) {
   process.exit(0)
 }
 
+const dropped = flag('--drop')
 const checked = flag('--check')
-if (checked) {
-  const record = await checkCleaning(path.resolve(checked), {
-    stopped: process.argv.includes('--stopped'),
-  }).catch((error) =>
-    refuse(`${checked}: ${error instanceof Error ? error.message : String(error)}`),
+if (checked || dropped) {
+  const record = await (async () => {
+    const dir = dropped
+      ? (await cleaningOf(project, dropped)).dir
+      : path.resolve(checked ?? '')
+    return checkCleaning(dir, {
+      stopped: Boolean(dropped) || process.argv.includes('--stopped'),
+    })
+  })().catch((error) =>
+    refuse(
+      `${checked ?? dropped}: ${error instanceof Error ? error.message : String(error)}`,
+    ),
   )
   if (record.state === 'failed')
     console.log(`CLEAN_FAILED ${oneLine(record.reason ?? 'the cleaning failed')}`)
@@ -126,12 +139,10 @@ await guarded(async () => {
   } else if (again) {
     made = await cleanAgain({ project, scope: flag('--scope') ?? '', name: again })
   } else if (id) {
-    made = await cleaningOf(project, id)
-    if (made.record.state !== 'cleaning')
-      refuse(`the cleaning ${id} is ${made.record.state} already`)
+    made = await startedCleaning(project, id)
   } else {
     console.error(
-      'usage: clean.mjs [--project <root>] --find | --prepare <source> --to <global | local> [--name <name>] [--context <skill>] | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped]',
+      'usage: clean.mjs [--project <root>] --find | --prepare <source> --to <global | local> [--name <name>] [--context <skill>] | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped] | --drop <id>',
     )
     process.exit(2)
   }
