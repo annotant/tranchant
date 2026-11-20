@@ -2156,6 +2156,111 @@ test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, chang
   assert.equal((await lensPost('discard', { id: '../x' })).status, 400)
 })
 
+test("/api/lens/matches lists a glob's matches; /api/lens/import with sources cleans each checked one, a CLEAN line each", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, { env: { XDG_CONFIG_HOME: config } })
+  const agents = path.join(server.project, '.claude', 'agents')
+  await mkdir(agents, { recursive: true })
+  for (const name of ['api-review', 'i18n-review', 'perf-review'])
+    await writeFile(path.join(agents, `${name}.md`), `Review ${name}.\n`)
+  const matches = (/** @type {string} */ source) =>
+    fetch(`${server.base}/api/lens/matches?${new URLSearchParams({ source }).toString()}`)
+
+  const found = await json(await matches('.claude/agents/*-review.md'))
+  assert.deepEqual(
+    found.matches.map((/** @type {any} */ one) => [one.source, one.name]),
+    [
+      ['.claude/agents/api-review.md', 'api-review'],
+      ['.claude/agents/i18n-review.md', 'i18n-review'],
+      ['.claude/agents/perf-review.md', 'perf-review'],
+    ],
+  )
+  const none = await json(await matches('.claude/agents/*-reviewer.md'))
+  assert.deepEqual(none.matches, [])
+  assert.equal(none.folder.label, '.claude/agents/')
+  assert.equal(none.folder.count, 3)
+  assert.equal((await matches('**/*.md')).status, 409)
+  assert.equal((await matches('')).status, 400)
+
+  const from = server.output().length
+  const started = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      from: '.claude/agents/*-review.md',
+      // The unchecked match (i18n) is not sent; one source is not there.
+      sources: [
+        { source: '.claude/agents/api-review.md', name: 'api-review' },
+        { source: '.claude/agents/perf-review.md', name: 'perf' },
+        { source: '.claude/agents/gone-review.md', name: 'gone' },
+      ],
+    }),
+  })
+  assert.equal(started.status, 200)
+  const done = await json(started)
+  assert.equal(done.cleanings.length, 2)
+  assert.deepEqual(
+    done.refused.map((/** @type {any} */ one) => one.source),
+    ['.claude/agents/gone-review.md'],
+  )
+  const lines = []
+  for (const id of done.cleanings) lines.push(await server.nextLine(`CLEAN ${id}`, from))
+  assert.equal(lines.length, 2)
+  // The same glob again: the files being added say so.
+  const again = await json(await matches('.claude/agents/*-review.md'))
+  assert.deepEqual(
+    again.matches.map((/** @type {any} */ one) => one.already),
+    [
+      [{ scope: 'local', name: 'api-review', adding: true }],
+      undefined,
+      [{ scope: 'local', name: 'perf', adding: true }],
+    ],
+  )
+  assert.deepEqual(
+    done.settings.cleanings
+      .map((/** @type {any} */ one) => [one.name, one.state, one.waiting, one.from])
+      .toSorted(),
+    [
+      ['api-review', 'cleaning', true, '.claude/agents/*-review.md'],
+      ['perf', 'cleaning', true, '.claude/agents/*-review.md'],
+    ],
+  )
+
+  // A file being added already is refused, whatever name it is sent under.
+  const twice = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      sources: [{ source: '.claude/agents/api-review.md', name: 'api-again' }],
+    }),
+  })
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /api-review\.md: added already, as api-review/)
+
+  const allRefused = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      sources: [{ source: '.claude/agents/gone-review.md' }],
+    }),
+  })
+  assert.equal(allRefused.status, 409)
+  assert.match((await json(allRefused)).error, /gone-review\.md: .*no such file/)
+  assert.equal(
+    (
+      await fetch(`${server.base}/api/lens/import`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'local', sources: [] }),
+      })
+    ).status,
+    400,
+  )
+})
+
 test('a review waiting to start: Build and Start print their line with the choices, Start saves them when asked', async (t) => {
   const config = await tempDir(t, 'tranchant-config-')
   const server = await startServer(t, {

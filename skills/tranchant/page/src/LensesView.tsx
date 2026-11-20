@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
-import { fetchLensPrompt, type LensRoute, type SettingsChange } from './api'
+import {
+  fetchLensPrompt,
+  type LensDone,
+  type LensRoute,
+  type SettingsChange,
+} from './api'
 import { TOPICS } from './domain'
+import { GlobMatches, isGlob, noteRows, useGlobPick } from './LensGlob'
 import {
   type CleaningEntry,
   KNOWN_MODELS,
@@ -21,7 +27,7 @@ interface Props {
   /** Saves the settings file: a recipe lens's switch and model live there. */
   onSave: (change: SettingsChange) => void
   /** A change to the lenses the user added; rejects when the server refuses it. */
-  onLens: (route: LensRoute, body: Record<string, unknown>) => Promise<unknown>
+  onLens: (route: LensRoute, body: Record<string, unknown>) => Promise<LensDone>
   /** The lens whose editor opens first, `<scope>:<name>`: a link from a refused review. */
   focus?: string | undefined
 }
@@ -39,6 +45,13 @@ const RECIPE_WORDS: Record<RecipeFrom, string> = {
 const SCOPE_HELP: Record<Added, string> = {
   local: 'This project: on this machine only, never in the repository.',
   global: 'Global: it runs on every project on this machine, never in a repository.',
+}
+
+const SCOPE_HELP_MANY: Record<Added, string> = {
+  local:
+    'This project: on this machine only, never in the repository. The same for every match.',
+  global:
+    'Global: they run on every project on this machine, never in a repository. The same for every match.',
 }
 
 /** Whether two lists hold the same texts, in the same order. */
@@ -115,6 +128,8 @@ export function LensesView({
   focus,
 }: Props) {
   const [adding, setAdding] = useState(false)
+  // The matches of a glob the server did not clean, with why: the others are under way.
+  const [refused, setRefused] = useState<NonNullable<LensDone['refused']>>([])
   const [open, setOpen] = useState(focus)
   // The lens the link names, followed when it is renamed or moved: else it reads as one removed.
   const [pointed, setPointed] = useState(focus)
@@ -239,19 +254,48 @@ export function LensesView({
           <AddLens
             frozen={frozen}
             lenses={lensSet.lenses}
+            cap={values.maxReviewAgents}
             builtIn={lensSet.lenses
               .filter((lens) => lens.scope === 'recipe')
               .map((lens) => lens.name)}
             onCancel={() => setAdding(false)}
-            onImport={(body) => onLens('import', body).then(() => setAdding(false))}
+            onImport={async (body) => {
+              const done = await onLens('import', body)
+              setAdding(false)
+              setRefused(done.refused ?? [])
+            }}
           />
         )}
+        {refused.length > 0 && (
+          <div className="tr-notice" role="status">
+            <p>
+              {refused.length === 1
+                ? 'One match was not added:'
+                : `${refused.length} matches were not added:`}
+            </p>
+            <ul>
+              {refused.map((one) => (
+                <li key={one.source}>
+                  <code>{one.source}</code>: {one.reason}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="tr-btn tr-btn--link"
+              onClick={() => setRefused([])}
+            >
+              dismiss
+            </button>
+          </div>
+        )}
         {cleanings.length > 0 && (
-          <ul className="tr-lns-list" aria-label="Lenses being added">
-            {cleanings.map((one) => (
-              <CleaningCard key={one.id} one={one} frozen={frozen} onLens={onLens} />
-            ))}
-          </ul>
+          <BeingAdded
+            cleanings={cleanings}
+            frozen={frozen}
+            cap={values.maxReviewAgents}
+            onLens={onLens}
+          />
         )}
         {groups.map((group) => {
           const lenses = lensSet.lenses.filter((lens) => lens.scope === group.scope)
@@ -492,10 +536,112 @@ function ScopeSegment({
   )
 }
 
-/** Add a lens: its source, its name, where it lives, its context skill; then the cleaning agent. */
+/** A name's lenses: whether a lens of it, added to `scope`, runs as one more. */
+function addsOne(lenses: LensEntry[], scope: Added, name: string) {
+  // The first lens that is on runs under a name: the project's, then a global one.
+  const named = lenses.filter((lens) => lens.name === name)
+  const shadowed =
+    scope === 'global' && named.some((lens) => lens.scope === 'local' && lens.on)
+  return !shadowed && !named.some((lens) => lens.runs)
+}
+
+/**
+ * The lenses being added. Several at once: a bar of how many are cleaned,
+ * the ones still waiting or cleaning folded behind Show the details; those
+ * to check and those that failed stay listed, each waits for the person.
+ */
+function BeingAdded({
+  cleanings,
+  frozen,
+  cap,
+  onLens,
+}: {
+  cleanings: CleaningEntry[]
+  frozen: boolean
+  cap: number
+  onLens: Props['onLens']
+}) {
+  const [details, setDetails] = useState(false)
+  const many = cleanings.length > 1
+  const busy = cleanings.filter((one) => one.state === 'cleaning')
+  const done = cleanings.length - busy.length
+  const shown =
+    many && !details ? cleanings.filter((one) => one.state !== 'cleaning') : cleanings
+  return (
+    <div className="tr-lns-group">
+      <div className="tr-lns-group-head">
+        <strong id="tr-lns-adding">Lenses being added</strong>
+        <span className="tr-muted" role="status">
+          {batchLine(cleanings)}
+        </span>
+      </div>
+      {many && busy.length > 0 && (
+        <div className="tr-lns-batch">
+          <span
+            className="tr-progress-bar"
+            role="progressbar"
+            aria-label="Lenses cleaned"
+            aria-valuemin={0}
+            aria-valuemax={cleanings.length}
+            aria-valuenow={done}
+          >
+            <span style={{ width: `${Math.round((done / cleanings.length) * 100)}%` }} />
+          </span>
+          <span>
+            {done} of {cleanings.length} cleaned
+          </span>
+          <button
+            type="button"
+            className="tr-btn tr-btn--link"
+            aria-expanded={details}
+            onClick={() => setDetails(!details)}
+          >
+            {details ? 'Hide the details' : 'Show the details'}
+          </button>
+        </div>
+      )}
+      {shown.length > 0 && (
+        <ul className="tr-lns-list" aria-labelledby="tr-lns-adding">
+          {shown.map((one) => (
+            <CleaningCard
+              key={one.id}
+              one={one}
+              frozen={frozen}
+              cap={cap}
+              onLens={onLens}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** The batch being added, in a line: its glob, then how many stand where. */
+function batchLine(cleanings: CleaningEntry[]) {
+  const counts = { ready: 0, cleaning: 0, waiting: 0, failed: 0 }
+  for (const one of cleanings)
+    counts[one.state === 'cleaning' && one.waiting ? 'waiting' : one.state] += 1
+  const parts = [
+    counts.ready && `${counts.ready} to check`,
+    counts.cleaning && `${counts.cleaning} cleaning`,
+    counts.waiting && `${counts.waiting} waiting`,
+    counts.failed && `${counts.failed} failed`,
+  ].filter(Boolean)
+  const from = cleanings[0]?.from
+  const one = cleanings.length > 1 && from && cleanings.every((c) => c.from === from)
+  return `${one ? `${cleanings.length} from ${from} · ` : ''}${parts.join(', ')}`
+}
+
+/**
+ * Add a lens: its source, its name, where it lives, its context skill; then
+ * the cleaning agent. A source with a `*` or a `?` is a glob: its matches
+ * replace the name, one cleaning agent each.
+ */
 function AddLens({
   frozen,
   lenses,
+  cap,
   builtIn,
   onCancel,
   onImport,
@@ -503,6 +649,8 @@ function AddLens({
   frozen: boolean
   /** The lenses as they stand, this one not among them. */
   lenses: LensEntry[]
+  /** The cleaning agents at a time: the settings' review agents. */
+  cap: number
   builtIn: string[]
   onCancel: () => void
   onImport: (body: Record<string, unknown>) => Promise<unknown>
@@ -512,25 +660,41 @@ function AddLens({
   const [scope, setScope] = useState<Added>('local')
   const [context, setContext] = useState('')
   const [busy, setBusy] = useState(false)
+  const glob = isGlob(source.trim())
+  const pick = useGlobPick(glob ? source.trim() : '')
+  const rows = noteRows(pick.rows, scope, lenses)
+  const checked = rows.filter((row) => row.checked)
+  const blocked = checked.some((row) => row.note?.name)
   const replaces = builtIn.includes(name.trim())
-  // The first lens that is on runs under a name: the project's, then a global one.
-  const named = lenses.filter((lens) => lens.name === name.trim())
-  const shadowed =
-    scope === 'global' && named.some((lens) => lens.scope === 'local' && lens.on)
-  const takesOver = named.some((lens) => lens.runs)
   const runs = lenses.filter((lens) => lens.runs).length
-  const after = shadowed || takesOver ? runs : runs + 1
+  const after = glob
+    ? runs + checked.filter((row) => addsOne(lenses, scope, row.name.trim())).length
+    : runs + (addsOne(lenses, scope, name.trim()) ? 1 : 0)
+  const ready = glob
+    ? pick.found.state === 'done' && checked.length > 0 && !blocked
+    : true
   return (
     <form
       className="tr-lns-add"
       aria-labelledby="tr-lns-add-title"
       onSubmit={(event) => {
         event.preventDefault()
+        if (!ready) return
         setBusy(true)
         onImport({
-          source: source.trim(),
+          ...(glob
+            ? {
+                sources: checked.map((row) => ({
+                  source: row.source,
+                  name: row.name.trim(),
+                })),
+                from: source.trim(),
+              }
+            : {
+                source: source.trim(),
+                ...(name.trim() && { name: name.trim() }),
+              }),
           scope,
-          ...(name.trim() && { name: name.trim() }),
           ...(context.trim() && { context: context.trim() }),
         })
           .catch(() => undefined)
@@ -542,33 +706,35 @@ function AddLens({
       <Field
         id="tr-lns-add-source"
         label="Source"
-        help="A reviewer: a plugin's skill or agent, or a path to a skill, an agent or a checklist. An agent cleans it first: it keeps its review and leaves its orchestration and its output out."
+        help="A reviewer: a plugin's skill or agent, or a path to a skill, an agent or a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out."
       >
         <input
           id="tr-lns-add-source"
           className="tr-input tr-text"
           value={source}
-          placeholder="plugin:name, or a path"
+          placeholder="plugin:name, a path, or a glob"
           required
           onChange={(event) => setSource(event.currentTarget.value)}
         />
       </Field>
-      <Field
-        id="tr-lns-add-name"
-        label="Name"
-        help={
-          replaces
-            ? `Replaces the built-in ${name.trim()} where it lives.`
-            : 'Optional: absent, one from its source.'
-        }
-      >
-        <input
+      {!glob && (
+        <Field
           id="tr-lns-add-name"
-          className="tr-input tr-text"
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
-        />
-      </Field>
+          label="Name"
+          help={
+            replaces
+              ? `Replaces the built-in ${name.trim()} where it lives.`
+              : 'Optional: absent, one from its source.'
+          }
+        >
+          <input
+            id="tr-lns-add-name"
+            className="tr-input tr-text"
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
+          />
+        </Field>
+      )}
       <div className="tr-field">
         <span className="tr-field-label" id="tr-lns-add-scope">
           Where it lives
@@ -580,9 +746,22 @@ function AddLens({
             disabled={frozen}
             onChange={setScope}
           />
-          <span className="tr-field-help">{SCOPE_HELP[scope]}</span>
+          <span className="tr-field-help">
+            {(glob ? SCOPE_HELP_MANY : SCOPE_HELP)[scope]}
+          </span>
         </div>
       </div>
+      {glob && (
+        <GlobMatches
+          found={pick.found}
+          rows={rows}
+          frozen={frozen}
+          onToggle={pick.toggle}
+          onRename={pick.rename}
+          onCheckAll={pick.checkAll}
+          onCheckNone={pick.checkNone}
+        />
+      )}
       <Field
         id="tr-lns-add-context"
         label="Context skill"
@@ -600,15 +779,23 @@ function AddLens({
         <button
           type="submit"
           className="tr-btn tr-btn--primary"
-          disabled={frozen || busy || !source.trim()}
+          disabled={frozen || busy || !source.trim() || !ready}
         >
-          Import and clean
+          {!glob
+            ? 'Import and clean'
+            : checked.length === 1
+              ? 'Add the lens'
+              : checked.length
+                ? `Add the ${checked.length} lenses`
+                : 'Add the lenses'}
         </button>
         <button type="button" className="tr-btn" onClick={onCancel}>
           Cancel
         </button>
         <span className="tr-muted">
-          An agent reads the source and writes the lens; nothing runs until you add it.
+          {glob
+            ? `One cleaning agent per lens, ${cap} at a time (Review agents at a time). Nothing runs in a review until you add each one.`
+            : 'An agent reads the source and writes the lens; nothing runs until you add it.'}
         </span>
       </div>
     </form>
@@ -655,12 +842,16 @@ type Cleaning = NonNullable<CleaningEntry['report']>
 function CleaningCard({
   one,
   frozen,
+  cap,
   onLens,
 }: {
   one: CleaningEntry
   frozen: boolean
+  /** The cleaning agents at a time, which a waiting one says. */
+  cap: number
   onLens: Props['onLens']
 }) {
+  const waiting = one.state === 'cleaning' && one.waiting === true
   const report = one.report
   const id = `tr-clean-${one.id}`
   const discard = (
@@ -676,7 +867,7 @@ function CleaningCard({
   return (
     <li className="tr-lns-item tr-lns-item--open" aria-labelledby={id}>
       <div className="tr-lns-row">
-        {one.state === 'cleaning' ? (
+        {one.state === 'cleaning' && !waiting ? (
           <span className="tr-spinner" role="img" aria-label="being cleaned" />
         ) : (
           <span aria-hidden="true" />
@@ -694,15 +885,22 @@ function CleaningCard({
           </span>
         </span>
         <span
-          className={`tr-lns-state tr-lns-state--${one.state === 'failed' ? 'danger' : 'accent'}`}
+          className={`tr-lns-state tr-lns-state--${one.state === 'failed' ? 'danger' : waiting ? 'muted' : 'accent'}`}
         >
-          {one.state === 'cleaning'
-            ? 'the cleaning agent reads it…'
-            : one.state === 'ready'
-              ? 'cleaned: check it, then add it'
-              : 'cleaning failed'}
+          {waiting
+            ? `waits for a cleaning agent: ${cap} at a time`
+            : one.state === 'cleaning'
+              ? 'the cleaning agent reads it…'
+              : one.state === 'ready'
+                ? 'cleaned: check it, then add it'
+                : 'cleaning failed'}
         </span>
       </div>
+      {waiting && (
+        <div className="tr-lns-edit">
+          <div className="tr-lns-foot">{discard}</div>
+        </div>
+      )}
       {one.state === 'failed' && (
         <div className="tr-lns-edit">
           <p className="tr-recipe-problem">{one.reason}</p>

@@ -55,7 +55,8 @@ pattern, read how annotant does it.
   recipe in force and builds its lenses from their sources;
   `lib/userlens.mjs` owns the lenses the user adds (global and local, in
   `~/.config/tranchant/`) and the set they make with the recipe's;
-  `lib/cleaning.mjs` owns their cleanings; `lib/plan.mjs` plans the
+  `lib/cleaning.mjs` owns their cleanings, `lib/glob.mjs` the files a
+  glob typed as a source matches; `lib/plan.mjs` plans the
   lenses a review runs on the change (`prepare.mjs`, and `lenses.mjs` again
   for a review waiting to start).
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by

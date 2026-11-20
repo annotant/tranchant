@@ -113,6 +113,10 @@ export interface CleaningEntry {
   version?: string
   context?: string
   state: 'cleaning' | 'ready' | 'failed'
+  /** With `cleaning`: no agent reads it yet, it waits for a free one. */
+  waiting?: boolean
+  /** The glob it was matched by, when it came with others. */
+  from?: string
   reason?: string
   /** A whole process's reviewers, to add one by one. */
   instead?: string[]

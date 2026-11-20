@@ -49,12 +49,17 @@ import {
  * @property {string} [contextFile]
  * @property {string} [contextHash]
  * @property {'cleaning' | 'ready' | 'failed' | 'added'} state
+ * @property {true} [queued] Made by the page: it waits for a free cleaning agent until the hooks start it.
+ * @property {string} [startedAt] When the hooks started its agent.
+ * @property {string} [from] The glob it was matched by, when it came with others.
  * @property {string} [reason] With `failed`.
  * @property {string[]} [instead] With `failed`: the reviewers a whole process starts, to add one by one.
  */
 
-/** A cleaning still `cleaning` after this long lost its agent: shown failed. */
+/** A cleaning still `cleaning` this long after its agent started lost it: shown failed. */
 const LOST_MS = 30 * 60 * 1000
+/** A cleaning waiting this long for a free agent lost the session that would start it. */
+const WAIT_LOST_MS = 3 * 60 * 60 * 1000
 const MAX_DOMAIN = 64 * 1024
 const MAX_RULES = 8 * 1024
 const MAX_INSTEAD = 12
@@ -157,11 +162,20 @@ async function found(lens, project) {
 /**
  * A new lens's cleaning, for the project at `project`: the source found
  * first, so a name that does not resolve starts no agent, and the name free
- * in its scope.
- * @param {{ project: string, source: string, name?: string, scope: string, context?: string }} given
+ * in its scope. `queued` when the page asks for it: the hooks start its
+ * agent once one is free.
+ * @param {{ project: string, source: string, name?: string, scope: string, context?: string, queued?: boolean, from?: string }} given
  * @returns {Promise<{ dir: string, record: Cleaning }>}
  */
-export async function createCleaning({ project, source, name, scope, context }) {
+export async function createCleaning({
+  project,
+  source,
+  name,
+  scope,
+  context,
+  queued,
+  from,
+}) {
   if (!isScope(scope))
     throw new CleaningRefusal(
       `a lens is global or local, never in the repository: not ${scope}`,
@@ -196,15 +210,84 @@ export async function createCleaning({ project, source, name, scope, context }) 
     again: false,
     source: recorded,
     ...sources,
+    ...(queued && { queued: /** @type {const} */ (true) }),
+    ...(from && { from }),
   })
 }
 
 /**
- * A stored lens's cleaning again, its source changed or asked anew: the
- * added instructions the user edited go to the agent, and stay.
- * @param {{ project: string, scope: string, name: string }} given
+ * The cleanings of several sources at once (a glob's matches), all queued:
+ * one refused (not found, its name taken, unwritable) does not stop the
+ * others, and of two given the same name the first is kept.
+ * @param {{ project: string, scope: string, context?: string, from?: string, sources: { source: string, name?: string }[] }} given
  */
-export async function cleanAgain({ project, scope, name }) {
+export async function createCleanings({ project, scope, context, from, sources }) {
+  if (!isScope(scope))
+    throw new CleaningRefusal(
+      `a lens is global or local, never in the repository: not ${scope}`,
+    )
+  /** @type {{ dir: string, record: Cleaning }[]} */
+  const made = []
+  /** @type {{ source: string, reason: string }[]} */
+  const refused = []
+  const names = new Set()
+  for (const one of sources) {
+    const name = one.name?.trim() || undefined
+    try {
+      if (name && names.has(name))
+        throw new CleaningRefusal(`${name} is the name of another match: rename one`)
+      const cleaning = await createCleaning({
+        project,
+        source: one.source,
+        scope,
+        queued: true,
+        ...(name && { name }),
+        ...(context && { context }),
+        ...(from && { from }),
+      })
+      names.add(cleaning.record.name)
+      made.push(cleaning)
+    } catch (error) {
+      // Thrown, the cleanings made before it would wait for ever: no CLEAN line printed for them.
+      refused.push({ source: one.source, reason: message(error) })
+    }
+  }
+  return { made, refused }
+}
+
+/**
+ * The hooks start cleaning `id`'s agent: it waits no more, and its time to
+ * get lost runs from now. Refused once it is not `cleaning`.
+ * @param {string} project
+ * @param {string} id
+ */
+export async function startedCleaning(project, id) {
+  const { dir, record } = await cleaningOf(project, id)
+  if (record.state !== 'cleaning')
+    throw new CleaningRefusal(`the cleaning ${id} is ${record.state} already`)
+  // Two sessions with its page open both queue it: the first one starts it.
+  if (!record.queued) throw new CleaningRefusal(`the cleaning ${id} is started already`)
+  const { queued: _queued, ...rest } = record
+  /** @type {Cleaning} */
+  const next = { ...rest, startedAt: new Date().toISOString() }
+  await writeJson(path.join(dir, 'cleaning.json'), next)
+  return { dir, record: next }
+}
+
+/** Whether a cleaning still `cleaning` lost its agent, or the session that would start it. */
+function isLost(/** @type {Cleaning} */ record) {
+  if (record.state !== 'cleaning') return false
+  const since = Date.now() - Date.parse(record.startedAt ?? record.createdAt)
+  return since > (record.queued ? WAIT_LOST_MS : LOST_MS)
+}
+
+/**
+ * A stored lens's cleaning again, its source changed or asked anew: the
+ * added instructions the user edited go to the agent, and stay. `queued`
+ * when the page asks for it (Clean it again now), as a new lens's.
+ * @param {{ project: string, scope: string, name: string, queued?: boolean }} given
+ */
+export async function cleanAgain({ project, scope, name, queued }) {
   if (!isScope(scope)) throw new CleaningRefusal(`no lens scope ${scope}`)
   let dir
   let lens
@@ -223,6 +306,7 @@ export async function cleanAgain({ project, scope, name }) {
     again: true,
     source: lens.source,
     ...sources,
+    ...(queued && { queued: /** @type {const} */ (true) }),
   })
   if (lens.rulesEdited) await writeText(path.join(made.dir, 'rules.md'), lens.rules)
   return made
@@ -540,7 +624,8 @@ export async function discardCleaning(
   /** @type {string} */ id,
 ) {
   const { dir, record } = await cleaningOf(project, id)
-  if (record.state === 'cleaning' && Date.now() - Date.parse(record.createdAt) < LOST_MS)
+  // Waiting, no agent reads it yet: the hooks find it gone and start the next one.
+  if (record.state === 'cleaning' && !record.queued && !isLost(record))
     throw new CleaningRefusal('the cleaning agent is still at work')
   await rm(dir, { recursive: true, force: true })
 }
@@ -559,8 +644,7 @@ export async function listCleanings(project) {
     const record = await readCleaning(dir).catch(() => undefined)
     if (!record || record.state === 'added') continue
     if (record.again && record.state !== 'cleaning') continue
-    const lost =
-      record.state === 'cleaning' && Date.now() - Date.parse(record.createdAt) > LOST_MS
+    const lost = isLost(record)
     let shown = {}
     if (record.state === 'ready') {
       const output = await readOutput(dir).catch((error) => ({ broken: message(error) }))
@@ -580,8 +664,14 @@ export async function listCleanings(project) {
       source: record.source,
       ...(record.version && { version: record.version }),
       ...(record.context && { context: record.context }),
+      ...(record.from && { from: record.from }),
       state: lost ? 'failed' : record.state,
-      ...(lost && { reason: 'the cleaning agent did not finish' }),
+      ...(!lost && record.state === 'cleaning' && record.queued && { waiting: true }),
+      ...(lost && {
+        reason: record.queued
+          ? 'no cleaning agent started: the session that would start it ended'
+          : 'the cleaning agent did not finish',
+      }),
       ...(record.reason && { reason: record.reason }),
       ...(record.instead && { instead: record.instead }),
       ...shown,

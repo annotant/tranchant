@@ -33,7 +33,7 @@ const MAX_AGENTS = 8
  * @property {string} [reviewModel] The model of each lens's reviewer, the summary agent and a discussing agent.
  * @property {string} [verifyModel] The model of each finding's verifier.
  * @property {number} [maxFixAgents] Fix agents at a time, 1 to MAX_AGENTS.
- * @property {number} [maxReviewAgents] Review agents (reviewers, verifiers, discussers) at a time.
+ * @property {number} [maxReviewAgents] Review agents (reviewers, verifiers, discussers) at a time; as many lens cleanings, apart.
  * @property {string} [recipe] The recipe `/tranchant review` runs without `--recipe`: an absolute path, or `~/…`.
  * @property {string[]} [disabledLenses] The lenses of the recipe not run.
  * @property {Record<string, string>} [lensModels] By lens of the recipe, its reviewer's model.

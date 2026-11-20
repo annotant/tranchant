@@ -272,6 +272,41 @@ const fetchSettings = () => request<SettingsPayload>(SETTINGS)
 /** The changes to the lenses the server takes, by route. */
 export type LensRoute = 'import' | 'add' | 'discard' | 'save' | 'remove' | 'clean'
 
+/** One file a glob typed in Add a lens matches: its source, the lens name it gets, why it reads as no reviewer. */
+export interface LensMatch {
+  source: string
+  name: string
+  notReviewer?: string
+  /** The lenses made from this same file, and those being added from it. */
+  already?: { scope: 'local' | 'global'; name: string; adding?: true }[]
+}
+
+/** What `GET /api/lens/matches` answers: the matches, how many more were left out, or the folder of a glob that matched nothing. */
+export interface LensMatches {
+  matches: LensMatch[]
+  more?: number
+  folder?: {
+    label: string
+    files: string[]
+    count: number
+    missing?: true
+    /** The error code of a folder that is there but cannot be read. */
+    unreadable?: string
+  }
+}
+
+/** The files a glob matches, as the server finds them from the project's root. */
+export const fetchLensMatches = (source: string) =>
+  request<LensMatches>(`/api/lens/matches?${new URLSearchParams({ source }).toString()}`)
+
+/** What a change to the lenses answers: the settings, the cleanings it made, the matches it refused. */
+export interface LensDone {
+  settings?: SettingsPayload
+  cleaning?: string
+  cleanings?: string[]
+  refused?: { source: string; reason: string }[]
+}
+
 /** The prompt a lens's reviewer reads, built as a review builds it. */
 export const fetchLensPrompt = (scope: string, name: string) =>
   request<{ prompt: string }>(
@@ -347,10 +382,10 @@ export function useSettings() {
   const lens = useCallback(
     async (route: LensRoute, body: Record<string, unknown>) => {
       try {
-        const done = await request<{ settings?: SettingsPayload; cleaning?: string }>(
-          `/api/lens/${route}`,
-          { method: 'POST', body: JSON.stringify(body) },
-        )
+        const done = await request<LensDone>(`/api/lens/${route}`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        })
         setError(undefined)
         if (!done.settings) await reload()
         else {

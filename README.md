@@ -107,7 +107,9 @@ whose source settles how a library behaves.
 `--recipe <path>` runs your own, in the same shape.
 
 Beside the recipe's lenses, **Settings › Lenses** adds a team's reviewer as
-a lens of its own: a plugin's skill or agent, or a file. A cleaning agent
+a lens of its own: a plugin's skill or agent, or a file; a glob
+(`.claude/agents/*-review.md`) adds every file it matches, listed first to
+check and rename, one cleaning agent each. A cleaning agent
 reads it once and writes the lens Tranchant runs, its review kept and its
 orchestration, output format, posting and questions left out, with
 added instructions (the files it takes, its topics, its buckets) the user can
