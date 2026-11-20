@@ -18,6 +18,7 @@ import {
   useInside,
   usePick,
 } from './LensGlob'
+import { alreadyText, type Picked, SourcePicker } from './SourcePicker'
 import {
   type CleaningEntry,
   KNOWN_MODELS,
@@ -668,6 +669,8 @@ function AddLens({
   onImport: (body: Record<string, unknown>) => Promise<unknown>
 }) {
   const [source, setSource] = useState('')
+  const [browsing, setBrowsing] = useState(false)
+  const [picked, setPicked] = useState<Picked>()
   const [name, setName] = useState('')
   const [scope, setScope] = useState<Added>('local')
   const [context, setContext] = useState('')
@@ -739,16 +742,59 @@ function AddLens({
       <Field
         id="tr-lns-add-source"
         label="Source"
-        help="A reviewer: a plugin's skill, agent or command, or a path to one or to a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. A command is never a lens itself, nor an agent that starts the agents it names: Tranchant lists them, and each one can become a lens. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out."
+        help={
+          picked
+            ? pickedHelp(picked)
+            : "A reviewer: a plugin's skill, agent or command, or a path to one or to a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. Browse lists what is installed and the files Tranchant may list. A command is never a lens itself, nor an agent that starts the agents it names: Tranchant lists them, and each one can become a lens. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out."
+        }
       >
-        <input
-          id="tr-lns-add-source"
-          className="tr-input tr-text"
-          value={source}
-          placeholder="plugin:name, a path, or a glob"
-          required
-          onChange={(event) => setSource(event.currentTarget.value)}
-        />
+        <div className="tr-source-row">
+          <input
+            id="tr-lns-add-source"
+            className="tr-input tr-text"
+            value={source}
+            placeholder="plugin:name, a path, or a glob"
+            required
+            onChange={(event) => {
+              setSource(event.currentTarget.value)
+              setPicked(undefined)
+            }}
+          />
+          <button
+            type="button"
+            className="tr-btn"
+            aria-expanded={browsing}
+            aria-controls="tr-lns-add-picker"
+            disabled={frozen}
+            onClick={() => setBrowsing(!browsing)}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            </svg>
+            {browsing ? 'Close' : 'Browse…'}
+          </button>
+        </div>
+        {browsing && (
+          <SourcePicker
+            id="tr-lns-add-picker"
+            onPick={(one) => {
+              setSource(one.source)
+              setPicked(one)
+              setBrowsing(false)
+            }}
+            onClose={() => setBrowsing(false)}
+          />
+        )}
       </Field>
       {!many && (
         <Field
@@ -852,6 +898,15 @@ function AddLens({
       </div>
     </form>
   )
+}
+
+/** What Source's help says of a source picked from the list. */
+function pickedHelp(picked: Picked) {
+  if (picked.already?.length)
+    return `Picked ${picked.source}: it is ${alreadyText(picked.already).replace(/^already lens/, 'already the source of lens')}. Adding it again makes a second lens from it. The field stays yours to edit.`
+  if (picked.off)
+    return `Picked ${picked.source}: its plugin is turned off for this project, so the lens would not build until it is turned on (/plugin). The field stays yours to edit.`
+  return `Picked ${picked.source}. The field stays yours to edit.`
 }
 
 /** What a cleaning removed from its source and added for Tranchant. */

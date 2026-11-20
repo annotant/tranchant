@@ -316,6 +316,62 @@ export interface LensMatches {
 export const fetchLensMatches = (source: string) =>
   request<LensMatches>(`/api/lens/matches?${new URLSearchParams({ source }).toString()}`)
 
+/** One skill, agent or command the source's picker offers, written as Source takes it. */
+export interface PickerItem {
+  kind: LensKind
+  name: string
+  source: string
+  already?: LensMatch['already']
+}
+
+/** What `GET /api/lens/catalog` answers: the installed plugins', the project's and the user's skills, agents and commands, names only. */
+export interface LensCatalog {
+  plugins: {
+    name: string
+    version?: string
+    folder: string
+    /** Turned off for this project: a lens made from it would not build. */
+    enabled: boolean
+    items: PickerItem[]
+  }[]
+  /** Claude Code's register of plugins cannot be read. */
+  pluginsError?: string
+  project: { folder: string; items: PickerItem[] }
+  user: { folder: string; items: PickerItem[] }
+  /** The folders the Files tab may list. */
+  roots: string[]
+}
+
+/** What the source's picker lists in a tab. */
+export const fetchLensCatalog = () => request<LensCatalog>('/api/lens/catalog')
+
+/** Where the Files tab browses: the project, Claude Code's folder, the plugins' folders. */
+export type PickerRoot = 'project' | 'user' | 'plugins'
+
+/** One entry of a folder: one to open, a Markdown file to pick, or one shown and never opened, `reason` saying why. */
+export interface FolderEntry {
+  name: string
+  kind: 'folder' | 'file' | 'hidden' | 'link' | 'unreadable' | 'other'
+  source?: string
+  reason?: string
+  already?: LensMatch['already']
+}
+
+/** What `GET /api/lens/folder` answers: a folder under one of the roots, names only. */
+export interface LensFolder {
+  root: PickerRoot
+  /** Inside its root, `/`-separated; '' for the root itself. */
+  path: string
+  label: string
+  entries: FolderEntry[]
+  more?: number
+}
+
+/** A folder of a root, or one typed (`go`), placed in the root it lies in; refused outside them. */
+export const fetchLensFolder = (
+  where: { root: PickerRoot; path: string } | { go: string },
+) => request<LensFolder>(`/api/lens/folder?${new URLSearchParams(where).toString()}`)
+
 /** What a change to the lenses answers: the settings, the cleanings it made, the matches it refused. */
 export interface LensDone {
   settings?: SettingsPayload

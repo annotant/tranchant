@@ -16,8 +16,9 @@
 // one write at a time, with every lens that could run on the project, the
 // recipe's and those the user added (lib/userlens.mjs), and the lenses being
 // cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
-// them again, lists a glob's matches (lib/glob.mjs) and the reviewers a
-// command, or an agent that starts others, holds (lib/inside.mjs), imports
+// them again, lists a glob's matches (lib/glob.mjs), the reviewers a
+// command, or an agent that starts others, holds (lib/inside.mjs), and what
+// the source's picker offers, names only (lib/picker.mjs), imports
 // several at once, and prints CLEAN for each cleaning the hooks start an
 // agent on;
 // it pushes `settings` when the file, a lens or a cleaning changes. It serves
@@ -65,6 +66,13 @@ import {
 } from './lib/cleaning.mjs'
 import { GlobRefusal, MAX_MATCHES, matchSources, withAlready } from './lib/glob.mjs'
 import { insideOf } from './lib/inside.mjs'
+import {
+  FolderRefusal,
+  catalogOf,
+  goToFolder,
+  isRoot,
+  listFolder,
+} from './lib/picker.mjs'
 import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
 import {
   LensFileRefusal,
@@ -1301,6 +1309,62 @@ async function handle(req, res) {
       await knownLenses(),
     )
     return send(res, 200, { inside: { ...inside, starts: marked?.starts ?? [] } })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lens/catalog') {
+    const [catalog, known] = await Promise.all([catalogOf(lensRoot), knownLenses()])
+    const mark = (/** @type {import('./lib/picker.mjs').Item[]} */ items) =>
+      withAlready(lensRoot, items, known).map((one, i) => ({
+        ...items[i],
+        ...(one.already && { already: one.already }),
+      }))
+    return send(res, 200, {
+      ...catalog,
+      plugins: catalog.plugins.map((one) => ({ ...one, items: mark(one.items) })),
+      project: { ...catalog.project, items: mark(catalog.project.items) },
+      user: { ...catalog.user, items: mark(catalog.user.items) },
+    })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lens/folder') {
+    const go = url.searchParams.get('go')
+    const root = url.searchParams.get('root') ?? ''
+    const relative = url.searchParams.get('path') ?? ''
+    const listing =
+      go !== null
+        ? () => goToFolder(lensRoot, go)
+        : isRoot(root)
+          ? () => listFolder(lensRoot, root, relative)
+          : undefined
+    if (!listing)
+      return send(res, 400, {
+        error: 'root (project, user or plugins), or go, is required',
+      })
+    if ((go ?? relative).length > 1024)
+      return send(res, 400, { error: 'the path is longer than 1024 characters' })
+    let folder
+    try {
+      folder = await listing()
+    } catch (error) {
+      if (!(error instanceof FolderRefusal)) throw error
+      return send(res, 409, { error: error.message, roots: error.roots })
+    }
+    const files = folder.entries.flatMap((one) =>
+      one.source ? [{ source: one.source, name: one.name }] : [],
+    )
+    const marked = new Map(
+      withAlready(lensRoot, files, await knownLenses()).map((one) => [
+        one.source,
+        one.already,
+      ]),
+    )
+    return send(res, 200, {
+      ...folder,
+      entries: folder.entries.map((one) => {
+        const already = one.source ? marked.get(one.source) : undefined
+        return already ? { ...one, already } : one
+      }),
+    })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/lens/import') {

@@ -2396,3 +2396,182 @@ test('/api/lens/inside lists the agents a command starts, those being added said
     { scope: 'local', name: 'code-review', adding: true },
   ])
 })
+
+test("/api/lens/catalog lists the plugins' skills, agents and commands, a turned-off one said, the project's and the user's .claude, names only", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const plugins = await tempDir(t, 'tranchant-plugins-')
+  const install = async (/** @type {string} */ name) => {
+    const root = path.join(plugins, name)
+    await mkdir(path.join(root, 'agents'), { recursive: true })
+    await mkdir(path.join(root, 'skills', 'code-review'), { recursive: true })
+    await mkdir(path.join(root, 'commands'), { recursive: true })
+    await writeFile(
+      path.join(root, 'agents', 'code-reviewer-api.md'),
+      'Review the API.\n',
+    )
+    await writeFile(
+      path.join(root, 'agents', 'code-review.md'),
+      'Same name as a skill.\n',
+    )
+    await writeFile(path.join(root, 'skills', 'code-review', 'SKILL.md'), 'Review.\n')
+    await writeFile(path.join(root, 'commands', 'review-mr.md'), 'Run them.\n')
+    await writeFile(path.join(root, 'agents', 'notes.txt'), 'Not an agent.\n')
+    return root
+  }
+  const roots = {
+    workflow: await install('workflow'),
+    dba: await install('dba'),
+    tranchant: await install('tranchant'),
+  }
+  await mkdir(path.join(claude, 'plugins'), { recursive: true })
+  await writeFile(
+    path.join(claude, 'plugins', 'installed_plugins.json'),
+    JSON.stringify({
+      version: 2,
+      plugins: Object.fromEntries(
+        Object.entries(roots).map(([name, root]) => [
+          `${name}@team`,
+          [{ scope: 'user', installPath: root, version: '2.5.0' }],
+        ]),
+      ),
+    }),
+  )
+  await writeFile(
+    path.join(claude, 'settings.json'),
+    JSON.stringify({ enabledPlugins: { 'dba@team': false } }),
+  )
+  await mkdir(path.join(claude, 'agents'), { recursive: true })
+  await writeFile(path.join(claude, 'agents', 'react-review.md'), 'Hooks.\n')
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  await mkdir(path.join(server.project, '.claude', 'skills', 'code-style'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(server.project, '.claude', 'skills', 'code-style', 'SKILL.md'),
+    'Style.\n',
+  )
+  const catalog = await json(await fetch(`${server.base}/api/lens/catalog`))
+  // Tranchant's own is left out: its lenses are built in.
+  assert.deepEqual(
+    catalog.plugins.map((/** @type {any} */ one) => [one.name, one.enabled, one.version]),
+    [
+      ['dba', false, '2.5.0'],
+      ['workflow', true, '2.5.0'],
+    ],
+  )
+  const workflow = catalog.plugins[1]
+  assert.deepEqual(
+    workflow.items.map((/** @type {any} */ one) => [one.kind, one.name, one.source]),
+    [
+      ['skill', 'code-review', 'workflow:code-review'],
+      // workflow:code-review is the skill's: the agent of the same name is written by its path.
+      ['agent', 'code-review', path.join(roots.workflow, 'agents', 'code-review.md')],
+      ['agent', 'code-reviewer-api', 'workflow:code-reviewer-api'],
+      ['command', 'review-mr', 'workflow:review-mr'],
+    ],
+  )
+  assert.deepEqual(catalog.project, {
+    folder: '.claude/',
+    items: [{ kind: 'skill', name: 'code-style', source: '.claude/skills/code-style' }],
+  })
+  assert.deepEqual(
+    catalog.user.items.map((/** @type {any} */ one) => one.name),
+    ['react-review'],
+  )
+  assert.equal(catalog.roots.length, 3)
+
+  // One added already, or being added, says so.
+  const added = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      source: 'workflow:code-reviewer-api',
+      name: 'api',
+    }),
+  })
+  assert.equal(added.status, 200)
+  const again = await json(await fetch(`${server.base}/api/lens/catalog`))
+  assert.deepEqual(
+    again.plugins[1].items.find(
+      (/** @type {any} */ one) => one.name === 'code-reviewer-api',
+    ).already,
+    [{ scope: 'local', name: 'api', adding: true }],
+  )
+})
+
+test('/api/lens/folder lists names under the allowed roots: hidden files, links out and unreadable folders shown, never opened; a folder outside refused', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const outside = await tempDir(t, 'tranchant-outside-')
+  await mkdir(path.join(outside, 'checklists'))
+  await writeFile(path.join(outside, 'checklists', 'secret.md'), 'Outside.\n')
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  const docs = path.join(server.project, 'docs')
+  await mkdir(path.join(docs, 'checklists'), { recursive: true })
+  await mkdir(path.join(docs, 'private'))
+  // Empty: the project's folder is removed after the test whatever its rights.
+  await chmod(path.join(docs, 'private'), 0o000)
+  await writeFile(path.join(docs, 'review-checklist.md'), 'Check.\n')
+  await writeFile(path.join(docs, 'notes.txt'), 'Notes.\n')
+  await writeFile(path.join(docs, '.env'), 'TOKEN=1\n')
+  await symlink(path.join(outside, 'checklists'), path.join(docs, 'shared'))
+  await symlink(path.join(docs, 'checklists'), path.join(docs, 'here'))
+  const folder = (/** @type {Record<string, string>} */ query) =>
+    fetch(`${server.base}/api/lens/folder?${new URLSearchParams(query).toString()}`)
+
+  const listed = await json(await folder({ root: 'project', path: 'docs' }))
+  assert.equal(listed.label, 'docs/')
+  const byName = Object.fromEntries(
+    listed.entries.map((/** @type {any} */ one) => [one.name, one]),
+  )
+  assert.equal(byName.checklists.kind, 'folder')
+  // A link that stays in its root is followed: a folder like any other.
+  assert.equal(byName.here.kind, 'folder')
+  assert.equal(byName.shared.kind, 'link')
+  assert.equal(byName['.env'].kind, 'hidden')
+  assert.equal(byName['notes.txt'].kind, 'other')
+  assert.deepEqual(byName['review-checklist.md'], {
+    name: 'review-checklist.md',
+    kind: 'file',
+    source: 'docs/review-checklist.md',
+  })
+  // Root runs as root in some CI containers: it reads every folder.
+  if (process.getuid?.() !== 0) assert.equal(byName.private.kind, 'unreadable')
+  // Nothing of a file's text: names only.
+  assert.doesNotMatch(JSON.stringify(listed), /TOKEN|Check\./)
+
+  for (const query of /** @type {Record<string, string>[]} */ ([
+    { root: 'project', path: 'docs/shared' },
+    { root: 'project', path: '../' },
+    { root: 'project', path: 'docs/../..' },
+    { root: 'project', path: '.git' },
+    { go: outside },
+    { go: path.join(outside, 'missing') },
+    { go: path.join(docs, 'shared') },
+    { go: '../..' },
+  ])) {
+    const refused = await folder(query)
+    assert.equal(refused.status, 409, JSON.stringify(query))
+    const body = await json(refused)
+    assert.equal(body.roots.length, 3)
+    assert.doesNotMatch(JSON.stringify(body), /secret/)
+  }
+  assert.match(
+    (await json(await folder({ go: outside }))).error,
+    /is not listed: it lies outside the folders Tranchant may list/,
+  )
+  // A folder typed from the project, `~/`-free, lands in its root.
+  const typed = await json(await folder({ go: 'docs/checklists/' }))
+  assert.deepEqual([typed.root, typed.path], ['project', 'docs/checklists'])
+  const user = await json(await folder({ go: claude }))
+  assert.deepEqual([user.root, user.path], ['user', ''])
+  assert.equal((await folder({ root: 'elsewhere' })).status, 400)
+  const plugins = await json(await folder({ root: 'plugins', path: '' }))
+  assert.deepEqual(plugins.entries, [])
+})
