@@ -211,12 +211,10 @@ test('a lens with no name given is named after its file, or its skill or agent w
     '.claude/skills/api.v2',
     '.claude/skills/api.v2/SKILL.md',
   ]
+  // A pure rule: imported here, nothing of the test's folders read at import.
+  const { nameOfSource } = await import(path.join(LIB, 'inside.mjs'))
   assert.deepEqual(
-    JSON.parse(
-      await lib(
-        `console.log(JSON.stringify(${JSON.stringify(sources)}.map((one) => inside.nameOfSource(one, ${JSON.stringify(dir)}))))`,
-      ),
-    ),
+    sources.map((one) => nameOfSource(one, dir)),
     [
       'money-review',
       'checkout',
