@@ -240,6 +240,23 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-lenses-center .tr-notice { display: block; padding: 10px 14px; border: 1px solid var(--tr-warn); border-radius: var(--tr-radius); }
 .tr-lenses-center-icon { color: var(--tr-warn); }
 .tr-spinner--big { width: 28px; height: 28px; border-width: 3px; }
+/* A review waiting to start: what will run, a switch per lens, Start. Same column as the lenses' center. */
+.tr-ready { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 48px max(20px, calc((100% - 860px) / 2)) 48px; }
+.tr-ready > * { flex: none; }
+.tr-ready-head { display: flex; flex-direction: column; gap: 6px; }
+.tr-ready-head h2 { font-size: 18px; font-weight: 700; }
+.tr-ready-head p { font-size: 13.5px; max-width: 75ch; }
+.tr-ready-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; font-size: 13.5px; }
+.tr-ready-facts dt { color: var(--tr-muted); font-weight: 600; }
+.tr-ready-facts dd { margin: 0; overflow-wrap: anywhere; }
+.tr-ready .tr-notice { display: block; padding: 10px 14px; border: 1px solid var(--tr-danger); border-radius: var(--tr-radius); background: var(--tr-danger-bg); color: var(--tr-danger); }
+.tr-ready .tr-notice--warn { border-color: var(--tr-warn); background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-lens-rows--switches .tr-lens-row { grid-template-columns: 36px minmax(90px, max-content) minmax(0, 1fr) max-content; }
+.tr-lens-row--off .tr-lens-row-name { color: var(--tr-muted); font-weight: 500; }
+.tr-ready-remember { display: flex; flex-direction: column; gap: 4px; }
+.tr-ready-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.tr-ready-change { margin-left: auto; }
+.tr-chip--ready { background: var(--tr-accent-weak); color: var(--tr-accent); }
 /* The panel hangs from the meta row, not the chip: a chip far right would push it off the window. */
 .tr-header-meta { position: relative; }
 .tr-lenses-control { display: inline-flex; }
@@ -346,6 +363,8 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-report-more { margin-top: 6px; font-size: 12.5px; }
 @media (max-width: 720px) {
   .tr-lens-row { grid-template-columns: 14px minmax(0, 1fr) max-content; }
+  .tr-lens-rows--switches .tr-lens-row { grid-template-columns: 36px minmax(0, 1fr) max-content; }
+  .tr-ready-change { margin-left: 0; }
   .tr-lens-row-source { grid-row: 2; grid-column: 2 / -1; }
   .tr-report-row { grid-template-columns: 14px minmax(0, 1fr) max-content; }
   .tr-report-gist, .tr-report-looked { display: none; }
@@ -444,6 +463,7 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-btn--danger { color: var(--tr-danger); }
 .tr-btn--danger:hover { background: var(--tr-danger-bg); }
 .tr-btn--small { height: 26px; padding: 0 10px; font-size: 13px; }
+.tr-btn--big { height: 36px; padding: 0 18px; font-size: 14px; font-weight: 600; }
 .tr-btn--link { height: auto; padding: 0; border: 0; background: none; color: var(--tr-accent); font-weight: 500; }
 .tr-btn--link:hover { background: none; text-decoration: underline; }
 

@@ -115,6 +115,7 @@ A recipe's lens is read-only but its switch (`disabledLenses`) and its model
   "disabledLenses": ["performance"], // lenses of the recipe not run; absent, every lens runs
   "lensModels": { "bugs": "claude-haiku-5-5" }, // by lens of the recipe, its reviewer's model
   "postWith": "gh", // the CLI that opens issues: "auto" (from the remote, the default), "glab" or "gh"
+  "startReview": false, // /tranchant review builds the lenses, then waits for Start the review on the page (true, the default: it starts)
 }
 ```
 
@@ -136,8 +137,9 @@ removed.
 | `maxFixAgents`    | integer, 1 to 8                   | The hooks, before each round of starts: the fixes waiting start up to it.                                                                                    |
 | `maxReviewAgents` | integer, 1 to 8                   | The hooks, for the reviewers, verifiers and discussing agents together.                                                                                      |
 | `recipe`          | an absolute path, or `~`, `~/…`   | `prepare.mjs`, when the run names no `--recipe` and the project has no local or project recipe: a regular JSON file under 1 MiB. The page shows the recipe in force, its lenses and their sources, or says why it cannot read it. |
-| `disabledLenses`  | lens names, `[\w-]{1,40}` | `prepare.mjs`, when the run names no `--recipe` (a run's own recipe runs whole): a lens of the recipe named is not run, and no other lens takes its files. Every lens off refuses the review: `every lens is turned off…`. The page's Settings › Lenses switches it. |
+| `disabledLenses`  | lens names, `[\w-]{1,40}` | `prepare.mjs`, when the run names no `--recipe` (a run's own recipe runs whole): a lens of the recipe named is not run, and no other lens takes its files. Every lens off refuses the review (`every lens is turned off…`), unless it waits to start: the page can turn one on. The page's Settings › Lenses switches it. |
 | `lensModels`      | lens names, each with a model id | `prepare.mjs`, when the run names no `--recipe`: the model of a lens of the recipe's reviewer, over the recipe's own `model`. `TRANCHANT_MODEL` still wins. |
+| `startReview`     | `true`, `false`                   | `prepare.mjs`: off, `/tranchant review` builds the lenses, then waits for the page's **Start the review**, a switch on each lens for this review ([waiting to start](review-file.md#waiting-to-start)). `--no-start` and `--start` on a run win, never saved. The page's Settings › Review: **Start the review by itself**. |
 | `postWith`        | `auto`, `glab`, `gh`              | The server (`/api/tracker`, `/api/account`) and `issue.mjs`: `glab` or `gh` names the forge for a host neither tool recognises; on a host the other forge owns (`github.com` with `glab`) the tracker is refused, with the reason, so a token never goes to the wrong forge. `auto` reads the host, as before. MR comments always go through `glab`, whose account the batch bar names. |
 
 Options meant for tests and development stay environment variables:

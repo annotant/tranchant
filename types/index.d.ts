@@ -49,7 +49,11 @@ export type ReviewRun = {
    * While lenses whose source changed are cleaned again: the plan the Lenses
    * step builds once they end, and their cleanings' folders still at work.
    */
-  waiting?: { plan: string; cleanings: string[] }
+  waiting?: { plan: string; cleanings: string[]; mode?: '--start' | '--replan' }
+  /** Waiting for the page's Start the review: the plan lenses.mjs starts. */
+  ready?: { plan: string }
+  /** The page's Start or Build the lenses again at work: its plan, until lenses.mjs ends. */
+  starting?: { plan: string }
 }
 
 /**
@@ -115,6 +119,8 @@ declare module 'claude-code' {
       run?: boolean
       target?: string
       recipe?: string
+      /** With run: false waits for the page's Start, true starts at once; absent, the settings say. */
+      start?: boolean
       /** A reviewer to add as a lens, cleaned first; empty, the project's are listed. */
       import?: string
       /** With import: `global` or `local`. */

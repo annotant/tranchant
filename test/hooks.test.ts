@@ -110,7 +110,7 @@ function world(
     seededCleanings?: Record<string, Cleaning>
     refusing?: string
     preparing?: string
-    building?: string
+    building?: string | ((argv: string[]) => string)
     checking?: string
     cleaned?: string
     pending?: string[]
@@ -265,7 +265,8 @@ function world(
     if (e.argv[1]?.endsWith('/scripts/lenses.mjs')) {
       built.push(e.argv.slice(2))
       order.push('lenses')
-      return ok(building, building.startsWith('REVIEW_REFUSED') ? 2 : 0)
+      const says = typeof building === 'string' ? building : building(e.argv.slice(2))
+      return ok(says, says.startsWith('REVIEW_REFUSED') ? 2 : 0)
     }
     if (e.argv[1]?.endsWith('/scripts/verify.mjs'))
       return ok((pending.shift() ?? []).map((id) => `UNVERIFIED ${id}\n`).join(''))
@@ -1120,6 +1121,96 @@ test('review writes the envelope and opens the page first, builds the lenses, th
   ])
     expect(await $.agent.offer(offerOf(agent))).toEqual({ isOffered: false })
   expect(w.completed).toEqual([])
+  await w.exit(0)
+})
+
+test('--no-start builds the lenses and waits: the page builds them again, then Start starts the reviewers once', async ($, on) => {
+  const w = world(on, {
+    building: (argv) => (argv.includes('--start') ? BUILT : 'WAITING\n'),
+  })
+  const text = await review($, w, 'review --no-start')
+  expect(w.prepared).toEqual([{ argv: ['--no-start'], cwd: ROOT }])
+  expect(text.split('\n')[0]).toBe(
+    'The lenses are built: the review starts when you click Start the review on the page.',
+  )
+  expect(w.spawned).toEqual([])
+  // Waiting is not ended: nothing to complete.
+  expect(w.completed).toEqual([])
+  await w.print('BUILD rev-1')
+  expect(w.spawned).toEqual([])
+  await w.print('START rev-1')
+  // A second click while the first starts: the plan is taken, nothing more.
+  await w.print('START rev-1')
+  expect(w.built).toEqual([
+    ['--review', DIR, '--plan', PLAN],
+    ['--review', DIR, '--plan', PLAN, '--replan'],
+    ['--review', DIR, '--plan', PLAN, '--start'],
+  ])
+  // Each checks the lenses then on first: one whose source changed is cleaned again.
+  expect(w.checked).toEqual([
+    ['--review', DIR, '--plan', PLAN, '--check'],
+    ['--review', DIR, '--plan', PLAN, '--check', '--replan'],
+    ['--review', DIR, '--plan', PLAN, '--check', '--start'],
+  ])
+  expect(w.spawned.map((one) => one.type)).toEqual([
+    'tranchant:sm-summary-rev-1',
+    'tranchant:rv-bugs-rev-1',
+    'tranchant:rv-style-rev-1',
+  ])
+  await w.exit(0)
+})
+
+test('a Start a lens refuses waits again, and the next Start starts', async ($, on) => {
+  let starts = 0
+  const w = world(on, {
+    building: (argv) => (argv.includes('--start') && ++starts > 1 ? BUILT : 'WAITING\n'),
+  })
+  await review($, w, 'review --no-start')
+  await w.print('START rev-1')
+  expect(w.spawned).toEqual([])
+  await w.print('START rev-1')
+  expect(w.spawned.map((one) => one.type)).toEqual([
+    'tranchant:sm-summary-rev-1',
+    'tranchant:rv-bugs-rev-1',
+    'tranchant:rv-style-rev-1',
+  ])
+  await w.exit(0)
+})
+
+test('/tranchant stop refuses a review waiting to start: a Start after it starts nothing', async ($, on) => {
+  const w = world(on, { building: 'WAITING\n' })
+  await review($, w, 'review --no-start')
+  await $.command.run(command('stop'))
+  expect(w.built.at(-1)).toEqual([
+    '--review',
+    DIR,
+    '--abandon',
+    'stopped while it waited to start (/tranchant stop)',
+  ])
+  expect(w.completed).toEqual([])
+  await w.print('START rev-1')
+  expect(w.spawned).toEqual([])
+  await w.exit(0)
+})
+
+test('a settings file with Start the review by itself still gives the hooks its models', async ($, on) => {
+  const w = world(on, {
+    settings: { version: 1, reviewModel: 'haiku', startReview: false },
+  })
+  await review($, w)
+  expect(w.registered.get('tranchant:rv-bugs-rev-1')?.model).toBe('haiku')
+  await w.exit(0)
+})
+
+test('--start and --no-start together are refused; the tool takes start: false', async ($, on) => {
+  const w = world(on, { building: 'WAITING\n' })
+  const both = await $.command.run(command('review --start --no-start'))
+  expect(both.text).toMatch(/^Usage: \/tranchant review /)
+  expect(w.prepared).toEqual([])
+  const answer = $.tool.call({ tool: 'mcp__tranchant__open', run: true, start: false })
+  await w.print(READY)
+  expect((await answer).result).toMatch(/^The lenses are built/)
+  expect(w.prepared).toEqual([{ argv: ['--no-start'], cwd: ROOT }])
   await w.exit(0)
 })
 

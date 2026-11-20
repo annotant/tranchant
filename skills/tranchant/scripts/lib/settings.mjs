@@ -38,6 +38,7 @@ const MAX_AGENTS = 8
  * @property {string[]} [disabledLenses] The lenses of the recipe not run.
  * @property {Record<string, string>} [lensModels] By lens of the recipe, its reviewer's model.
  * @property {'auto' | 'glab' | 'gh'} [postWith] The CLI that opens issues: `auto` reads the remote.
+ * @property {boolean} [startReview] Whether `/tranchant review` starts its reviewers once the lenses are built.
  */
 
 /**
@@ -55,6 +56,7 @@ const MAX_AGENTS = 8
  * @property {string[]} disabledLenses
  * @property {Record<string, string>} lensModels
  * @property {'auto' | 'glab' | 'gh'} postWith
+ * @property {boolean} startReview
  */
 
 /** @type {Readonly<Values>} */
@@ -71,6 +73,7 @@ export const DEFAULTS = Object.freeze({
   disabledLenses: [],
   lensModels: {},
   postWith: 'auto',
+  startReview: true,
 })
 
 /** A settings file, or a change to it, this Tranchant refuses, and why. */
@@ -140,6 +143,10 @@ export function validateSettings(input) {
       )
         throw new SettingsRefusal(`${key}: a whole number from 1 to ${MAX_AGENTS}`)
       settings[key] = value
+    } else if (key === 'startReview') {
+      if (typeof value !== 'boolean')
+        throw new SettingsRefusal('startReview: true or false')
+      settings.startReview = value
     } else if (key === 'recipe') {
       if (
         typeof value !== 'string' ||

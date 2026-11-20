@@ -9,6 +9,17 @@ released to the `stable` branch.
 
 ### Added
 
+- **Start the review yourself, once the lenses are built.** A new setting,
+  **Start the review by itself** (on by default), and `/tranchant review
+  --no-start` for one run (`--start` forces it on; neither is saved): the
+  lenses build, then the page waits in its center with what will run (the
+  target, the lenses on and the files each reads, the agents, the token note
+  past 12 reviewers), a switch on each lens for this review and **Start the
+  review**. **Remember these choices** saves them on Start as Settings ›
+  Lenses does. A lens that cannot be built no longer refuses the review
+  there: turned off, the review starts; **Build the lenses again** builds
+  them anew, as the way back from Settings does.
+
 - **The lens that found each finding.** After `/tranchant review`, each row
   of the findings list and the finding's detail name the lens that found
   it, on a quiet chip. A finding no lens found (a review opened from a

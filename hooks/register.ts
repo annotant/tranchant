@@ -266,6 +266,8 @@ function soundSettings(raw: unknown): raw is Record<string, unknown> {
         value.length <= 1024 &&
         /^(?:\/|~(?:\/|$))/.test(value.trim())
       )
+    // Read by prepare.mjs alone: a review that waits says so on its WAITING line.
+    if (key === 'startReview') return typeof value === 'boolean'
     if (key === 'disabledLenses')
       return (
         Array.isArray(value) &&
@@ -785,6 +787,9 @@ async function onLine(
       return discussLater($, watched.dir, id)
     case 'CLEAN':
       return cleanFromPage($, watched, id)
+    case 'START':
+    case 'BUILD':
+      return startWaiting($, watched, kind)
     default:
       // POSTED, POST_FAILED, MOVED, ISSUE_FAILED, AGENT_ENDED: the server's own doing.
       return debug($, `${tag(id)}: ${kind}`)
@@ -1099,14 +1104,16 @@ async function openCommand($: $, args: string) {
     return rest.length > 1 ? COMMENTS_USAGE : startComments($, rest[0])
   if (first === 'review') {
     const parsed = reviewArgs(rest)
-    return 'error' in parsed ? parsed.error : startReview($, parsed.target, parsed.recipe)
+    return 'error' in parsed
+      ? parsed.error
+      : startReview($, parsed.target, parsed.recipe, parsed.start)
   }
   if (first === 'import') {
     const parsed = importArgs(rest)
     return 'error' in parsed ? parsed.error : startImport($, parsed)
   }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] | import [<skill, agent or path>] [--to global | local] [--name <lens>] [--context <skill>] | comments [<pull request or merge request url>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] [--context <skill>] | comments [<pull request or merge request url>] | status | stop'
   return openReview($, word)
 }
 
@@ -1218,7 +1225,7 @@ let reviewDispatching: Promise<void> = Promise.resolve()
 let completing: Promise<void> = Promise.resolve()
 
 const REVIEW_USAGE =
-  'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]'
+  'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>] [--start | --no-start]'
 const COMMENTS_USAGE = 'Usage: /tranchant comments [<pull request or merge request url>]'
 
 const AGENT_PREFIX = {
@@ -1652,8 +1659,8 @@ async function unverified($: $, dir: string) {
  */
 async function completeIfDone($: $, dir: string) {
   const run = (await read($, reviewRuns))[dir]
-  // Waiting for a lens's cleaning: no reviewer started yet.
-  if (!run || run.queue.length || run.waiting) return
+  // Waiting for a lens's cleaning, or for Start: no reviewer started yet.
+  if (!run || run.queue.length || run.waiting || run.ready || run.starting) return
   if ([...startingReview.values()].some((one) => one.dir === dir)) return
   const agents = Object.values(await read($, reviewAgents))
   if (agents.some((one) => one.review === dir && one.running)) return
@@ -1747,7 +1754,9 @@ async function stopReviewing($: $) {
   for (const [dir, ids] of Object.entries(asked))
     for (const id of ids) await unanswered($, dir, id)
   const runsNow = await read($, reviewRuns)
-  const waiting = Object.keys(runsNow).filter((dir) => runsNow[dir]?.waiting)
+  const waiting = Object.keys(runsNow).filter(
+    (dir) => runsNow[dir]?.waiting || runsNow[dir]?.ready || runsNow[dir]?.starting,
+  )
   // Out of the runs and not running first: a cleaner ending meanwhile starts no reviewer.
   await update($, reviewRuns, (all) =>
     Object.fromEntries(Object.entries(all).filter(([dir]) => !waiting.includes(dir))),
@@ -1762,7 +1771,7 @@ async function stopReviewing($: $) {
     // Stopped: its lens keeps its last version, and no failure on its source.
     await runClean($, one.project, ['--check', one.dir, '--stopped'])
   }
-  // A review waiting for its lenses' cleaning never reached its reviewers: refused, said why.
+  // A review waiting for its lenses' cleaning, or for Start, never reached its reviewers: refused, said why.
   for (const dir of waiting) {
     const ran = await $.process
       .run([
@@ -1771,7 +1780,11 @@ async function stopReviewing($: $) {
         '--review',
         dir,
         '--abandon',
-        'stopped while its lenses were cleaned again (/tranchant stop)',
+        runsNow[dir]?.ready
+          ? 'stopped while it waited to start (/tranchant stop)'
+          : runsNow[dir]?.starting
+            ? 'stopped while its lenses were built to start (/tranchant stop)'
+            : 'stopped while its lenses were cleaned again (/tranchant stop)',
       ])
       .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
     if (!ran.stdout.includes('REVIEW_REFUSED '))
@@ -1818,14 +1831,25 @@ async function registerReviewAgentsAgain($: $) {
   }
 }
 
-/** The words of `/tranchant review`: its target and `--recipe <file>`, or what is wrong. */
+/**
+ * The words of `/tranchant review`: its target, `--recipe <file>` and
+ * `--start` or `--no-start` (absent, the settings say), or what is wrong.
+ */
 function reviewArgs(words: string[]) {
   const at = words.indexOf('--recipe')
   const recipe = at === -1 ? undefined : words[at + 1]
   if (at !== -1 && !recipe) return { error: REVIEW_USAGE }
-  const rest = at === -1 ? words : words.filter((_, i) => i !== at && i !== at + 1)
+  const flags = words.filter((one) => one === '--start' || one === '--no-start')
+  if (flags.length > 1) return { error: REVIEW_USAGE }
+  const rest = words.filter(
+    (one, i) =>
+      (at === -1 || (i !== at && i !== at + 1)) &&
+      one !== '--start' &&
+      one !== '--no-start',
+  )
   if (rest.length > 1) return { error: REVIEW_USAGE }
-  return { target: rest[0], recipe }
+  const start = flags[0] === undefined ? undefined : flags[0] === '--start'
+  return { target: rest[0], recipe, start }
 }
 
 const linesOf = (stdout: string) =>
@@ -1839,9 +1863,15 @@ const linesOf = (stdout: string) =>
  * plan; it opens through the same path as a review file, so the server and
  * the page start first; then lenses.mjs builds each lens of the plan, the
  * page showing its progress, and refuses the review when one cannot be
- * built; then the summary agent and the reviewers queue, one per lens.
+ * built; then the summary agent and the reviewers queue, one per lens. A
+ * review that waits to start stops once they are built, refusing nothing.
  */
-async function startReview($: $, target: string | undefined, recipe: string | undefined) {
+async function startReview(
+  $: $,
+  target: string | undefined,
+  recipe: string | undefined,
+  start?: boolean,
+) {
   const cwd = normalize(await $.session.cwd())
   // A path names another repository, its current branch: no branch starts with `.` or `/`.
   const folder = target && /^[./]/.test(target) ? resolve(cwd, target) : undefined
@@ -1854,6 +1884,7 @@ async function startReview($: $, target: string | undefined, recipe: string | un
         `${skillDir($)}/scripts/prepare.mjs`,
         ...(target && !folder ? [target] : []),
         ...(recipe ? ['--recipe', resolve(cwd, recipe)] : []),
+        ...(start === undefined ? [] : [start ? '--start' : '--no-start']),
       ],
       { cwd: folder ?? cwd },
     )
@@ -1889,17 +1920,6 @@ async function startReview($: $, target: string | undefined, recipe: string | un
     await abandon("Tranchant's server did not start")
     return served
   }
-  // The lenses whose source changed are cleaned again first: the reviewers wait for them.
-  const checked = await $.process
-    .run(['node', lensesScript, '--review', dir, '--plan', plan, '--check'])
-    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
-  const checkSaid = linesOf(checked.stdout)
-  const checkRefused = checkSaid.find((line) => line.startsWith('REVIEW_REFUSED '))
-  if (checkRefused)
-    return [
-      `Tranchant cannot review: ${checkRefused.slice('REVIEW_REFUSED '.length)}`,
-      served,
-    ].join('\n')
   const notes = settingsNote
     ? [`The settings were not read, the defaults apply: ${short(settingsNote, 300)}`]
     : []
@@ -1907,11 +1927,50 @@ async function startReview($: $, target: string | undefined, recipe: string | un
   for (const line of ran.stderr.split('\n'))
     if (/^lens \S+ \(\w+\) not run: /.test(line.trim()))
       notes.push(short(line.trim(), 300))
+  const project = watched.review?.project ?? folder ?? cwd
+  const [first = '', ...more] = await checkThenBuild($, dir, plan, project)
+  return [first, ...notes, ...more, served].join('\n')
+}
+
+/**
+ * The lenses whose source changed are cleaned again first, the build
+ * waiting for them; else the build at once (buildAndQueue). Its lines, the
+ * first one what the person reads first.
+ */
+async function checkThenBuild(
+  $: $,
+  dir: string,
+  plan: string,
+  project: string,
+  mode?: '--start' | '--replan',
+) {
+  const lensesScript = `${skillDir($)}/scripts/lenses.mjs`
+  const checked = await $.process
+    .run([
+      'node',
+      lensesScript,
+      '--review',
+      dir,
+      '--plan',
+      plan,
+      '--check',
+      ...(mode ? [mode] : []),
+    ])
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const checkSaid = linesOf(checked.stdout)
+  const checkRefused = checkSaid.find((line) => line.startsWith('REVIEW_REFUSED '))
+  if (checkRefused) {
+    await update($, reviewRuns, (all) => {
+      const { [dir]: _gone, ...rest } = all
+      return rest
+    })
+    return [`Tranchant cannot review: ${checkRefused.slice('REVIEW_REFUSED '.length)}`]
+  }
+  const notes: string[] = []
   if (checked.exitCode !== 0)
     notes.push(
       `The lenses' sources were not checked, none is cleaned again: ${short(checked.stderr.trim() || `lenses.mjs --check exited ${checked.exitCode}`, 300)}`,
     )
-  const project = watched.review?.project ?? folder ?? cwd
   const made: Prepared[] = []
   for (const line of checkSaid) {
     if (!line.startsWith('STALE ')) continue
@@ -1930,15 +1989,14 @@ async function startReview($: $, target: string | undefined, recipe: string | un
       notes.push(`The lens ${stale.name} was not cleaned again: ${prepared.refused}`)
     else made.push(prepared.made)
   }
-  if (!made.length)
-    return [await buildAndQueue($, dir, plan), ...notes, served].join('\n')
+  if (!made.length) return [await buildAndQueue($, dir, plan, mode), ...notes]
   // Waiting first: a cleaner that ends at once still finds the review waiting on it.
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
       queue: [],
       verifying: [],
-      waiting: { plan, cleanings: made.map((one) => one.dir) },
+      waiting: { plan, cleanings: made.map((one) => one.dir), ...(mode && { mode }) },
     },
   }))
   for (const one of made) {
@@ -1949,18 +2007,24 @@ async function startReview($: $, target: string | undefined, recipe: string | un
     }
   }
   return [
-    `Cleaning ${made.length} lens(es) again, their source changed: the reviewers start once they end.`,
+    `Cleaning ${made.length} lens(es) again, their source changed: ${mode === '--replan' ? 'the lenses are built' : 'the reviewers start'} once they end.`,
     ...notes,
-    served,
-  ].join('\n')
+  ]
 }
 
 /**
  * The Lenses step's build, once no lens waits for its cleaning: lenses.mjs
  * builds each lens of the plan, and refuses the review when one cannot be
- * built; then the summary agent and the reviewers queue, one per lens.
+ * built; then the summary agent and the reviewers queue, one per lens. A
+ * review that waits to start says `WAITING`: its plan kept for the page's
+ * Start (`--start`) or Build the lenses again (`--replan`).
  */
-async function buildAndQueue($: $, dir: string, plan: string) {
+async function buildAndQueue(
+  $: $,
+  dir: string,
+  plan: string,
+  mode?: '--start' | '--replan',
+) {
   const lensesScript = `${skillDir($)}/scripts/lenses.mjs`
   const abandon = (why: string) =>
     $.process
@@ -1969,9 +2033,21 @@ async function buildAndQueue($: $, dir: string, plan: string) {
         debug($, `${dir}: lenses.mjs --abandon failed: ${message(error)}`),
       )
   const built = await $.process
-    .run(['node', lensesScript, '--review', dir, '--plan', plan])
+    .run(['node', lensesScript, '--review', dir, '--plan', plan, ...(mode ? [mode] : [])])
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
   const said = linesOf(built.stdout)
+  // A start /tranchant stop ended meanwhile: nothing queued, nothing waits.
+  const stopped = mode !== undefined && !(await read($, reviewRuns))[dir]?.starting
+  if (said.includes('WAITING')) {
+    if (stopped) return 'Tranchant stopped: the review did not start.'
+    await update($, reviewRuns, (all) => ({
+      ...all,
+      [dir]: { queue: [], verifying: [], ready: { plan } },
+    }))
+    return mode === '--start'
+      ? `Tranchant did not start the review: ${short(built.stderr.trim() || 'a lens that is on cannot be built', 300)}. The page says which.`
+      : 'The lenses are built: the review starts when you click Start the review on the page.'
+  }
   const notBuilt = said.find((line) => line.startsWith('REVIEW_REFUSED '))
   // The page shows the lens and the fix; the terminal says it in one line.
   if (notBuilt) {
@@ -1996,6 +2072,11 @@ async function buildAndQueue($: $, dir: string, plan: string) {
     const why = short(built.stderr.trim() || `lenses.mjs exited ${built.exitCode}`, 300)
     await abandon(`lenses.mjs printed no lens: ${why}`)
     return `Tranchant could not build the lenses: ${why}`
+  }
+  if (stopped) {
+    // Built before the stop reached it: complete, with no reviewer.
+    await finishReview($, dir, '/tranchant stop', true)
+    return 'Tranchant stopped: the review did not start.'
   }
   await update($, reviewRuns, (all) => ({
     ...all,
@@ -2028,6 +2109,7 @@ async function reviewWaitingOn($: $, cleaningDir: string) {
 /** One of a review's cleanings ended: the last one builds the lenses, and the reviewers start. */
 async function cleaningEnded($: $, dir: string, cleaningDir: string) {
   let plan: string | undefined
+  let mode: '--start' | '--replan' | undefined
   await update($, reviewRuns, (all) => {
     const run = all[dir]
     if (!run?.waiting) return all
@@ -2035,12 +2117,45 @@ async function cleaningEnded($: $, dir: string, cleaningDir: string) {
     if (left.length)
       return { ...all, [dir]: { ...run, waiting: { ...run.waiting, cleanings: left } } }
     plan = run.waiting.plan
+    mode = run.waiting.mode
     const { waiting: _done, ...rest } = run
-    return { ...all, [dir]: rest }
+    return { ...all, [dir]: { ...rest, ...(mode && { starting: { plan } }) } }
   })
   if (!plan) return
-  const said = await buildAndQueue($, dir, plan)
+  const said = await buildAndQueue($, dir, plan, mode)
   $.ui.toast(short(said.split('\n')[0] ?? said, 300))
+}
+
+/**
+ * The page's Start the review (`START`), or Build the lenses again
+ * (`BUILD`), on a review waiting to start: its plan moved from `ready` to
+ * `starting` first, so a second click meanwhile starts nothing and
+ * /tranchant stop finds it; the lenses whose source changed are cleaned
+ * again first; a start a lens refuses waits again.
+ */
+async function startWaiting($: $, watched: Watch, kind: 'START' | 'BUILD') {
+  const dir = watched.dir
+  let plan: string | undefined
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run?.ready) return all
+    plan = run.ready.plan
+    return { ...all, [dir]: { queue: [], verifying: [], starting: { plan } } }
+  })
+  if (!plan) {
+    $.ui.toast(
+      `Tranchant did not ${kind === 'START' ? 'start the review' : 'build the lenses again'}: this session holds no review waiting for it. Run /tranchant review again.`,
+    )
+    return
+  }
+  const [said = ''] = await checkThenBuild(
+    $,
+    dir,
+    plan,
+    watched.review?.project ?? '',
+    kind === 'START' ? '--start' : '--replan',
+  )
+  $.ui.toast(short(said, 300))
 }
 
 // ---------------------------------------------------------------------------
@@ -2400,6 +2515,7 @@ async function reviewStatus($: $, dir: string) {
   const queue = (run?.queue ?? []).map(
     (job, index) => `${index + 1}. ${reviewAgentName(job)}`,
   )
+  if (run?.ready) return ['  Lenses built: waiting for Start the review on the page.']
   const cap = (await settingsOf($)).maxReviewAgents
   return [
     `  Reviewing${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${cap} review agents at work.`,
@@ -2451,6 +2567,11 @@ export const register: Register = (on) => {
             description:
               "With run: a recipe file to use instead of the plugin's default one.",
           },
+          start: {
+            type: 'boolean',
+            description:
+              'With run: false builds the lenses and waits for the user to start the review on the page; true starts it at once. Absent, the settings say. Never saved.',
+          },
           import: {
             type: 'string',
             description:
@@ -2486,7 +2607,7 @@ export const register: Register = (on) => {
       description:
         'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, the comments of a PR/MR, status, or stop)',
       argumentHint:
-        '<review.json> | review [<branch> | <mr url>] | import [<source>] [--to global|local] | comments [<pr/mr url>] | status | stop',
+        '<review.json> | review [<branch> | <mr url>] [--no-start] | import [<source>] [--to global|local] | comments [<pr/mr url>] | status | stop',
       immediate: true,
     })
     await registerRunning($)
@@ -2527,7 +2648,8 @@ export const register: Register = (on) => {
         typeof e.target === 'string' && e.target.trim() ? e.target.trim() : undefined
       const recipe =
         typeof e.recipe === 'string' && e.recipe.trim() ? e.recipe.trim() : undefined
-      return { result: await startReview($, target, recipe) }
+      const start = typeof e.start === 'boolean' ? e.start : undefined
+      return { result: await startReview($, target, recipe, start) }
     }
     const { review } = e
     if (typeof review !== 'string' || !review.trim())

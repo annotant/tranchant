@@ -4,6 +4,7 @@ import {
   postAnswer,
   postDiscuss,
   postDecisions,
+  postStart,
   postStop,
   useDiff,
   useUnfold,
@@ -31,12 +32,13 @@ import {
   orderedFindings,
   plural,
   type Review,
+  type StartChoices,
   stateOf,
   unverifiedIds,
 } from './domain'
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
-import { LensesCenter, LensesControl } from './LensesStep'
+import { LensesCenter, LensesControl, ReadyCenter } from './LensesStep'
 import { ReviewAgents } from './ReviewAgents'
 import type { View } from './settings'
 import { LensesView } from './LensesView'
@@ -158,17 +160,23 @@ function Header({
               checkout moved
             </span>
           )}
-          {isReviewing(review) && (
-            <span
-              className="tr-chip tr-chip--live"
-              role="status"
-              aria-label="Review in progress"
-            >
-              <span className="tr-spinner" aria-hidden="true" />
-              {review.status === 'preparing'
-                ? 'building the lenses'
-                : `review in progress · ${plural(review.findings.length, 'finding')} so far`}
+          {review.status === 'preparing' && lenses?.state === 'waiting' ? (
+            <span className="tr-chip tr-chip--ready" role="status">
+              ready to start
             </span>
+          ) : (
+            isReviewing(review) && (
+              <span
+                className="tr-chip tr-chip--live"
+                role="status"
+                aria-label="Review in progress"
+              >
+                <span className="tr-spinner" aria-hidden="true" />
+                {review.status === 'preparing'
+                  ? 'building the lenses'
+                  : `review in progress · ${plural(review.findings.length, 'finding')} so far`}
+              </span>
+            )
           )}
           {review.status === 'refused' && (
             <span className="tr-chip tr-chip--warn" role="status">
@@ -292,6 +300,32 @@ export default function App() {
     if (theme) applyTheme(theme)
   }, [theme])
   const [notice, setNotice] = useState<string>()
+  // A review waiting to start: the switches of its ready screen, kept while the Settings show.
+  const [choicesPick, setChoices] = useState<StartChoices>()
+  const savedChoices = payload?.lenses?.choices
+  const startChoices: StartChoices = useMemo(
+    () => choicesPick ?? savedChoices ?? { lenses: {}, remember: false },
+    [choicesPick, savedChoices],
+  )
+  const waiting =
+    payload?.review.status === 'preparing' && payload.lenses?.state === 'waiting'
+  // The settings changed while away from the review: its lenses are built again on the way back.
+  const seenSettings = useRef(settings.payload)
+  const buildOnReturn = useRef(false)
+  useEffect(() => {
+    if (settings.payload === seenSettings.current) return
+    seenSettings.current = settings.payload
+    if (route !== 'review' && waiting) buildOnReturn.current = true
+  }, [settings.payload, route, waiting])
+  useEffect(() => {
+    if (route !== 'review' || !waiting || !buildOnReturn.current) return
+    buildOnReturn.current = false
+    postStart(startChoices, true).catch((error: unknown) =>
+      setNotice(
+        `The lenses were not built again: ${error instanceof Error ? error.message : 'the server did not answer'}`,
+      ),
+    )
+  }, [route, waiting, startChoices])
   // A decision left no open finding to move to: the detail says so until the reviewer opens one.
   const [settled, setSettled] = useState(false)
 
@@ -619,7 +653,24 @@ export default function App() {
         )}
         {header}
         {settingsNotice}
-        <LensesCenter step={payload?.lenses} review={review} />
+        {notice && (
+          <p className="tr-notice" role="status">
+            {notice}
+          </p>
+        )}
+        {payload?.lenses?.state === 'waiting' && review.status === 'preparing' ? (
+          <ReadyCenter
+            step={payload.lenses}
+            review={review}
+            choices={startChoices}
+            cap={values?.maxReviewAgents}
+            model={values?.reviewModel}
+            onChoices={setChoices}
+            onStart={(build) => postStart(startChoices, build).then(() => undefined)}
+          />
+        ) : (
+          <LensesCenter step={payload?.lenses} review={review} />
+        )}
       </div>
     )
   }

@@ -20,6 +20,8 @@ export interface SettingsValues {
   /** By lens of the recipe, its reviewer's model. */
   lensModels: Record<string, string>
   postWith: PostWith
+  /** Whether `/tranchant review` starts its reviewers once the lenses are built. */
+  startReview: boolean
 }
 
 export type SettingKey = keyof SettingsValues

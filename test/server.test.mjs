@@ -1772,6 +1772,7 @@ const DEFAULT_SETTINGS = {
   disabledLenses: [],
   lensModels: {},
   postWith: 'auto',
+  startReview: true,
 }
 
 /** A server with a settings folder of its own, and ways to read and write its file. */
@@ -2153,4 +2154,83 @@ test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, chang
   )
   assert.equal((await lensPost('remove', { scope: 'global', name: 'cents' })).status, 409)
   assert.equal((await lensPost('discard', { id: '../x' })).status, 400)
+})
+
+test('a review waiting to start: Build and Start print their line with the choices, Start saves them when asked', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, {
+    overrides: { status: 'preparing', verify: true },
+    env: { XDG_CONFIG_HOME: config },
+  })
+  const send = (/** @type {string} */ route, /** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/review/${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const choices = path.join(server.dir, 'choices.json')
+  const settingsFile = path.join(config, 'tranchant', 'settings.json')
+  const rows = [
+    { name: 'bugs', source: 'tranchant:bugs', state: 'ready', files: 2 },
+    { name: 'docs', source: 'tranchant:docs', state: 'idle', files: 1, off: true },
+  ]
+  /** lenses.json waiting, as lenses.mjs writes it again after each Start or Build. */
+  const waiting = (/** @type {object} */ more = {}) =>
+    writeFile(
+      path.join(server.dir, 'lenses.json'),
+      JSON.stringify({
+        state: 'waiting',
+        wait: 'flag',
+        changed: 2,
+        lenses: rows,
+        ...more,
+      }),
+    )
+  // Its lenses still building: nothing to start.
+  const early = await send('start', { lenses: {}, remember: false })
+  assert.equal(early.status, 409)
+  await assert.rejects(readFile(choices))
+  await waiting()
+  assert.equal(
+    (await send('start', { lenses: { bugs: 'no' }, remember: false })).status,
+    400,
+  )
+  assert.equal((await send('start', { lenses: {} })).status, 400)
+  let printed = server.output().length
+  const built = await send('build', { lenses: { docs: true }, remember: false })
+  assert.equal(built.status, 200)
+  assert.equal(await server.nextLine('BUILD ', printed), `BUILD ${server.review?.id}`)
+  assert.deepEqual(JSON.parse(await readFile(choices, 'utf8')), {
+    lenses: { docs: true },
+    remember: false,
+  })
+  // That Build not taken up yet (lenses.json has not moved): no second one.
+  const twice = await send('start', { lenses: {}, remember: false })
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /being built again/)
+  // Nothing saved by a build, nor by a start that does not ask.
+  await assert.rejects(readFile(settingsFile))
+  await waiting()
+  // A settings file it cannot read: nothing saved, nothing started.
+  await mkdir(path.dirname(settingsFile), { recursive: true })
+  await writeFile(settingsFile, '{ not json')
+  const unread = await send('start', { lenses: { bugs: false }, remember: true })
+  assert.equal(unread.status, 409)
+  assert.match((await json(unread)).error, /the settings cannot be saved/)
+  assert.equal(await readFile(settingsFile, 'utf8'), '{ not json')
+  await rm(settingsFile)
+  printed = server.output().length
+  const started = await send('start', {
+    lenses: { bugs: false, docs: true },
+    remember: true,
+  })
+  assert.equal(started.status, 200)
+  assert.equal(await server.nextLine('START ', printed), `START ${server.review?.id}`)
+  const stored = async () => JSON.parse(await readFile(settingsFile, 'utf8'))
+  assert.deepEqual((await stored()).disabledLenses, ['bugs'])
+  // A run's own recipe: nothing to remember.
+  await waiting({ own: true })
+  const own = await send('start', { lenses: { bugs: true }, remember: true })
+  assert.equal(own.status, 409)
+  assert.deepEqual((await stored()).disabledLenses, ['bugs'])
 })
