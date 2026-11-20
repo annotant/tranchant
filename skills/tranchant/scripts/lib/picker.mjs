@@ -5,7 +5,8 @@
 import path from 'node:path'
 import { constants } from 'node:fs'
 import { access, lstat, readdir, realpath, stat } from 'node:fs/promises'
-import { claudeDir, installedPlugins, LensRefusal } from './lens.mjs'
+import { claudeDir, installedPlugins, isPluginName, LensRefusal } from './lens.mjs'
+import { errorCode } from './errors.mjs'
 import { sourceLabel } from './inside.mjs'
 import { expandHome } from './settings.mjs'
 
@@ -16,10 +17,12 @@ import { expandHome } from './settings.mjs'
  * @property {string} name
  * @property {string} [version]
  * @property {string} folder Its install folder, from `~/` or absolute.
- * @property {boolean} enabled Turned off for this project: its lenses would not build.
+ * @property {boolean} enabled False when a settings file turns it off for this project: its lenses would not build.
  * @property {Item[]} items
+ * @property {string} [problem] Why some of its items cannot be listed: its folder missing, or unreadable.
+ * @property {number} [more] Items past the most listed.
  */
-/** @typedef {{ folder: string, items: Item[] }} DotClaude */
+/** @typedef {{ folder: string, items: Item[], problem?: string, more?: number }} DotClaude */
 /**
  * @typedef {object} Catalog
  * @property {PluginGroup[]} plugins
@@ -31,15 +34,16 @@ import { expandHome } from './settings.mjs'
 /** @typedef {'project' | 'user' | 'plugins'} Root */
 /**
  * One entry of a folder: a folder to open, a Markdown file to pick, or one
- * shown and never opened (`hidden`, `link` leaving its root, `unreadable`,
- * `other`), `reason` saying why.
+ * shown and never opened (`hidden`; `link` leaving its root, to a hidden
+ * place or broken; `unreadable`; `other`, no Markdown file or one that
+ * cannot be told), `reason` saying why.
  * @typedef {{ name: string, kind: 'folder' | 'file' | 'hidden' | 'link' | 'unreadable' | 'other', source?: string, reason?: string }} Entry
  */
 /**
  * @typedef {object} Folder
  * @property {Root} root
  * @property {string} path Inside its root, `/`-separated; '' for the root itself.
- * @property {string} label The folder as Source would name it.
+ * @property {string} label The folder as Source would name it; prose for the plugins' root.
  * @property {Entry[]} entries
  * @property {number} [more] Entries past the most listed.
  */
@@ -76,38 +80,103 @@ export class FolderRefusal extends Error {
 const isFile = async (/** @type {string} */ file) =>
   (await stat(file).catch(() => undefined))?.isFile() ?? false
 
-const namesIn = async (/** @type {string} */ dir) =>
-  (await readdir(dir).catch(() => []))
-    .filter((name) => !name.startsWith('.'))
+/** Whether a path inside a root passes through a hidden folder or file. */
+const hiddenIn = (/** @type {string} */ relative) =>
+  relative
+    .split(/[/\\]/)
+    .some((one) => one === '..' || (one.startsWith('.') && one !== OPENED_DOT))
+
+/**
+ * The names of a folder that holds skills, agents or commands, those `keep`
+ * accepts, at most MAX_ENTRIES; a folder missing is none, one unreadable
+ * says so.
+ * @param {string} dir
+ * @param {(name: string) => boolean} keep
+ */
+async function namesIn(dir, keep) {
+  /** @type {string[]} */
+  let names
+  try {
+    names = await readdir(dir)
+  } catch (error) {
+    const code = errorCode(error)
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { names: [], more: 0 }
+    return { names: [], more: 0, unreadable: `${path.basename(dir)}/ cannot be read` }
+  }
+  const kept = names
+    .filter((name) => !name.startsWith('.') && keep(name))
     .toSorted((a, b) => a.localeCompare(b))
-    .slice(0, MAX_ENTRIES)
+  return {
+    names: kept.slice(0, MAX_ENTRIES),
+    more: Math.max(0, kept.length - MAX_ENTRIES),
+  }
+}
 
 /**
  * The skills, agents and commands of a folder that holds them (a plugin's
- * root, a `.claude`), each written as `write` makes its source.
+ * root, a `.claude`), each written as `write` makes its source; why some
+ * cannot be listed, and how many were left out.
  * @param {string} home
  * @param {(kind: Kind, name: string, file: string) => string} write
- * @returns {Promise<Item[]>}
  */
 async function itemsIn(home, write) {
   /** @type {Item[]} */
   const items = []
-  for (const name of await namesIn(path.join(home, 'skills'))) {
+  /** @type {string[]} */
+  const problems = []
+  let more = 0
+  const skills = await namesIn(path.join(home, 'skills'), () => true)
+  more += skills.more
+  if (skills.unreadable) problems.push(skills.unreadable)
+  for (const name of skills.names) {
     const file = path.join(home, 'skills', name, 'SKILL.md')
     if (await isFile(file))
       items.push({ kind: 'skill', name, source: write('skill', name, file) })
   }
   for (const kind of /** @type {const} */ (['agent', 'command'])) {
     const dir = path.join(home, `${kind}s`)
-    for (const entry of await namesIn(dir)) {
+    const found = await namesIn(dir, (name) => /\.md$/i.test(name))
+    more += found.more
+    if (found.unreadable) problems.push(found.unreadable)
+    for (const entry of found.names) {
       const file = path.join(dir, entry)
       // A regular file only, as Claude Code loads it: a FIFO is no agent.
-      if (!/\.md$/i.test(entry) || !(await isFile(file))) continue
+      if (!(await isFile(file))) continue
       const name = entry.replace(/\.md$/i, '')
       items.push({ kind, name, source: write(kind, name, file) })
     }
   }
-  return items
+  return {
+    items,
+    ...(problems.length && { problem: problems.join(', ') }),
+    ...(more && { more }),
+  }
+}
+
+/**
+ * How a plugin's own skill, agent or command is written as a source:
+ * `plugin:name` when that resolves to it (a skill first, then an agent, then
+ * a command, as resolveSource and Claude Code look them up), else undefined.
+ * @param {string} plugin
+ * @param {string} root
+ * @param {Kind} kind
+ * @param {string} name
+ */
+async function pluginSource(plugin, root, kind, name) {
+  const label = `${plugin}:${name}`
+  if (!isPluginName(label)) return undefined
+  const before = /** @type {Kind[]} */ (['skill', 'agent', 'command']).slice(
+    0,
+    ['skill', 'agent', 'command'].indexOf(kind),
+  )
+  for (const other of before) {
+    const file =
+      other === 'skill'
+        ? path.join(root, 'skills', name, 'SKILL.md')
+        : path.join(root, `${other}s`, `${name}.md`)
+    if (await isFile(file)) return undefined
+  }
+  return label
 }
 
 /**
@@ -129,18 +198,25 @@ export async function catalogOf(project) {
     )) {
       if (one.name === 'tranchant') continue
       const taken = new Set()
-      const items = await itemsIn(one.root, (kind, name, file) => {
+      const listed = await itemsIn(one.root, (kind, name, file) => {
         // plugin:name resolves to a skill first, then an agent, then a command.
-        if (taken.has(name)) return sourceLabel(file, 'home', project)
+        const label = `${one.name}:${name}`
+        if (taken.has(name) || !isPluginName(label))
+          return sourceLabel(file, 'home', project)
         taken.add(name)
-        return `${one.name}:${name}`
+        return label
       })
+      const there = (await stat(one.root).catch(() => undefined))?.isDirectory()
       plugins.push({
         name: one.name,
         ...(one.version && { version: one.version }),
         folder: `${sourceLabel(one.root, 'home', project)}/`,
         enabled: one.enabled,
-        items,
+        items: listed.items,
+        ...(!there
+          ? { problem: 'its install folder is missing: reinstall it (/plugin)' }
+          : listed.problem && { problem: listed.problem }),
+        ...(listed.more && { more: listed.more }),
       })
     }
   } catch (error) {
@@ -152,9 +228,9 @@ export async function catalogOf(project) {
     /** @type {'project' | 'home'} */ from,
   ) => ({
     folder: `${sourceLabel(dir, from, project)}/`,
-    items: await itemsIn(dir, (kind, _name, file) =>
+    ...(await itemsIn(dir, (kind, _name, file) =>
       sourceLabel(kind === 'skill' ? path.dirname(file) : file, from, project),
-    ),
+    )),
   })
   return {
     plugins,
@@ -177,10 +253,18 @@ function within(/** @type {string} */ outer, /** @type {string} */ inner) {
  * @param {string} project
  */
 async function rootsOf(project) {
-  const plugins = (await installedPlugins(project).catch(() => [])).filter(
-    (one) => one.name !== 'tranchant',
-  )
+  /** @type {Awaited<ReturnType<typeof installedPlugins>>} */
+  let installed = []
+  let pluginsError
+  try {
+    installed = await installedPlugins(project)
+  } catch (error) {
+    if (!(error instanceof LensRefusal)) throw error
+    pluginsError = error.message
+  }
+  const plugins = installed.filter((one) => one.name !== 'tranchant')
   return {
+    pluginsError,
     project,
     user: claudeDir(),
     plugins: new Map(plugins.map((one) => [one.name, one.root])),
@@ -197,25 +281,29 @@ const realOf = (/** @type {string} */ file) => realpath(file).catch(() => undefi
 
 /**
  * One entry of `dir`, a folder of the root at `realRoot`: what it is,
- * without reading it. A link is followed only while it stays in its root.
+ * without reading it. A link is followed only while it stays in its root
+ * and out of its hidden places. A plugin's own skill, agent or command is
+ * written `plugin:name` when that resolves to it: the form that follows its
+ * updates, and the one its lenses are known by.
  * @param {string} dir
  * @param {string} name
- * @param {string} realRoot
- * @param {string} project
- * @returns {Promise<Entry | undefined>}
+ * @param {{ realRoot: string, project: string, plugin?: { name: string, root: string } | undefined }} where
+ * @returns {Promise<Entry>}
  */
-async function entryOf(dir, name, realRoot, project) {
+async function entryOf(dir, name, { realRoot, project, plugin }) {
   const full = path.join(dir, name)
   if (name.startsWith('.') && name !== OPENED_DOT)
     return { name, kind: 'hidden', reason: 'hidden: shown, never opened' }
   const own = await lstat(full).catch(() => undefined)
-  if (!own) return undefined
+  if (!own) return { name, kind: 'other', reason: 'cannot be read' }
   let found = own
   if (own.isSymbolicLink()) {
     const real = await realOf(full)
     if (!real) return { name, kind: 'link', reason: 'a broken link: not followed' }
     if (!within(realRoot, real))
-      return { name, kind: 'link', reason: 'leaves this folder: not followed' }
+      return { name, kind: 'link', reason: 'leaves its root: not followed' }
+    if (hiddenIn(path.relative(realRoot, real)))
+      return { name, kind: 'link', reason: 'leads to a hidden place: not followed' }
     const target = await stat(full).catch(() => undefined)
     if (!target) return { name, kind: 'link', reason: 'a broken link: not followed' }
     found = target
@@ -231,13 +319,90 @@ async function entryOf(dir, name, realRoot, project) {
   }
   if (!found.isFile()) return { name, kind: 'other', reason: 'not a file' }
   if (!/\.md$/i.test(name)) return { name, kind: 'other', reason: 'not a Markdown file' }
-  return { name, kind: 'file', source: sourceLabel(full, 'project', project) }
+  // Source would read it as a glob, and match other files with it.
+  if (/[*?]/.test(name))
+    return { name, kind: 'other', reason: 'its name holds * or ?: read as a glob' }
+  return { name, kind: 'file', source: await sourceOfFile(full, project, plugin) }
+}
+
+/**
+ * How a Markdown file is written as a source: `plugin:name` for a plugin's
+ * own skill, agent or command when that resolves to it, else its path.
+ * @param {string} file
+ * @param {string} project
+ * @param {{ name: string, root: string } | undefined} plugin
+ */
+async function sourceOfFile(file, project, plugin) {
+  if (plugin) {
+    const parts = path.relative(plugin.root, file).split(path.sep)
+    const [folder, entry, last] = parts
+    const own =
+      parts.length === 3 && folder === 'skills' && last === 'SKILL.md'
+        ? { kind: /** @type {Kind} */ ('skill'), name: entry ?? '' }
+        : parts.length === 2 && (folder === 'agents' || folder === 'commands')
+          ? {
+              kind: /** @type {Kind} */ (folder === 'agents' ? 'agent' : 'command'),
+              name: (entry ?? '').replace(/\.md$/i, ''),
+            }
+          : undefined
+    const label =
+      own && (await pluginSource(plugin.name, plugin.root, own.kind, own.name))
+    if (label) return label
+  }
+  return sourceLabel(file, 'project', project)
+}
+
+/**
+ * Walks from a root's folder down `inside`, one folder at a time: refused at
+ * the first that is missing, unreadable, a link out of the root or into its
+ * hidden places, before anything past it is looked at.
+ * @param {string} base
+ * @param {string[]} inside
+ * @param {string} shown The folder as the user named it, for the refusals.
+ * @param {string[]} labels
+ */
+async function walk(base, inside, shown, labels) {
+  const realRoot = await realOf(base)
+  if (!realRoot) throw new FolderRefusal(`${shown}: no such folder`, labels)
+  let dir = base
+  for (const segment of ['', ...inside]) {
+    dir = path.join(dir, segment)
+    let real
+    try {
+      real = await realpath(dir)
+    } catch (error) {
+      const code = errorCode(error)
+      throw new FolderRefusal(
+        code === 'ENOENT' || code === 'ENOTDIR'
+          ? `${shown}: no such folder`
+          : `${shown} cannot be read${typeof code === 'string' ? ` (${code})` : ''}`,
+        labels,
+      )
+    }
+    if (!within(realRoot, real))
+      throw new FolderRefusal(
+        `${shown} leaves its root through a link: not followed`,
+        labels,
+      )
+    if (hiddenIn(path.relative(realRoot, real)))
+      throw new FolderRefusal(`${shown} is not listed: a hidden folder`, labels)
+  }
+  const found = await stat(dir).catch(() => undefined)
+  if (!found?.isDirectory()) throw new FolderRefusal(`${shown} is not a folder`, labels)
+  // A folder listed but not entered would show empty: its files are there.
+  const open = await access(dir, constants.R_OK | constants.X_OK).then(
+    () => true,
+    () => false,
+  )
+  if (!open) throw new FolderRefusal(`${shown} cannot be read`, labels)
+  return { dir, realRoot }
 }
 
 /**
  * The folder `relative` of `root` for the project at `project`: its
- * entries, folders first; the names only, never a file's text. A path that
- * leaves its root (`..`, a hidden folder, a link out of it) is refused.
+ * entries, folders first; the names only, never a file's text. Refused: a
+ * `..` or hidden segment, a link out of its root, a folder missing or
+ * unreadable, an unknown plugin.
  * @param {string} project
  * @param {Root} root
  * @param {string} relative `/`-separated, '' for the root itself.
@@ -246,12 +411,18 @@ async function entryOf(dir, name, realRoot, project) {
 export async function listFolder(project, root, relative) {
   const roots = await rootsOf(project)
   const segments = relative.split('/').filter(Boolean)
-  if (segments.some((one) => one === '..' || (one.startsWith('.') && one !== OPENED_DOT)))
+  const shown = segments.join('/') || '.'
+  if (hiddenIn(segments.join('/')))
     throw new FolderRefusal(
-      `${relative} is not listed: a hidden folder, or one above its root`,
+      `${shown} is not listed: a hidden folder, or one above its root`,
       roots.labels,
     )
-  if (root === 'plugins' && !segments.length)
+  if (root === 'plugins' && !segments.length) {
+    if (roots.pluginsError)
+      throw new FolderRefusal(
+        `Claude Code's plugins cannot be listed: ${roots.pluginsError}`,
+        roots.labels,
+      )
     return {
       root,
       path: '',
@@ -260,51 +431,59 @@ export async function listFolder(project, root, relative) {
         .toSorted((a, b) => a.localeCompare(b))
         .map((name) => ({ name, kind: /** @type {const} */ ('folder') })),
     }
+  }
   let base
+  /** @type {{ name: string, root: string } | undefined} */
+  let plugin
   if (root === 'project') base = roots.project
   else if (root === 'user') base = roots.user
   else {
-    base = roots.plugins.get(segments[0] ?? '')
+    const name = segments[0] ?? ''
+    base = roots.plugins.get(name)
     if (!base)
-      throw new FolderRefusal(`${segments[0]} is no installed plugin`, roots.labels)
+      throw new FolderRefusal(
+        `${name} is not a plugin listed here: Tranchant's own, and those not installed, are not`,
+        roots.labels,
+      )
+    plugin = { name, root: base }
   }
   const inside = root === 'plugins' ? segments.slice(1) : segments
-  const dir = path.join(base, ...inside)
-  const [realRoot, real] = await Promise.all([realOf(base), realOf(dir)])
-  if (!realRoot || !real)
-    throw new FolderRefusal(`${relative || base}: no such folder`, roots.labels)
-  if (!within(realRoot, real))
-    throw new FolderRefusal(
-      `${relative} leaves its root through a link: not followed`,
-      roots.labels,
-    )
-  /** @type {string[]} */
-  let names
+  const { dir, realRoot } = await walk(base, inside, shown, roots.labels)
+  /** @type {import('node:fs').Dirent[]} */
+  let found
   try {
-    names = await readdir(dir)
+    found = await readdir(dir, { withFileTypes: true })
   } catch {
-    throw new FolderRefusal(`${relative || base} cannot be read`, roots.labels)
+    throw new FolderRefusal(`${shown} cannot be read`, roots.labels)
   }
+  // Folders first before the cut: a subfolder past the most listed stays reachable.
+  const sorted = found.toSorted(
+    (a, b) =>
+      Number(!a.isDirectory()) - Number(!b.isDirectory()) || a.name.localeCompare(b.name),
+  )
   /** @type {Entry[]} */
   const entries = []
-  const sorted = names.toSorted((a, b) => a.localeCompare(b))
-  for (const name of sorted.slice(0, MAX_ENTRIES)) {
-    const entry = await entryOf(dir, name, realRoot, project)
-    if (entry) entries.push(entry)
-  }
+  for (const one of sorted.slice(0, MAX_ENTRIES))
+    entries.push(await entryOf(dir, one.name, { realRoot, project, plugin }))
+  const label =
+    root === 'project'
+      ? `${inside.join('/') || '.'}/`
+      : `${sourceLabel(dir, 'home', project)}/`
   return {
     root,
     path: segments.join('/'),
-    label: `${sourceLabel(dir, 'project', project) || '.'}/`,
+    label,
     entries: entries.toSorted((a, b) => rank(a) - rank(b)),
-    ...(names.length > MAX_ENTRIES && { more: names.length - MAX_ENTRIES }),
+    ...(found.length > MAX_ENTRIES && { more: found.length - MAX_ENTRIES }),
   }
 }
 
 /**
  * A folder typed in the picker (from the project, `~/` or absolute), listed
- * from the root it lies in: the plugin's, Claude Code's folder, the
- * project; refused, the roots named, when it lies in none.
+ * from the deepest root its path lies in, by its path alone: a link is
+ * looked at only by the walk, which refuses one leaving its root before
+ * anything past it. Refused, the roots named, when it lies in none, the same
+ * whether it is there or not.
  * @param {string} project
  * @param {string} typed
  * @returns {Promise<Folder>}
@@ -313,7 +492,6 @@ export async function goToFolder(project, typed) {
   const roots = await rootsOf(project)
   const trimmed = typed.trim().replace(/[/\\]+$/, '')
   const full = path.resolve(project, expandHome(trimmed || '.'))
-  const real = await realOf(full)
   /** @type {{ root: Root, base: string, prefix: string[] }[]} */
   const candidates = [
     ...[...roots.plugins].map(([name, dir]) => ({
@@ -327,24 +505,23 @@ export async function goToFolder(project, typed) {
   /** @type {{ root: Root, relative: string, depth: number } | undefined} */
   let best
   for (const one of candidates) {
-    // A folder not there is placed by its path alone: the same refusal outside, there or not.
-    const realBase = real ? await realOf(one.base) : path.resolve(one.base)
-    const place = real ?? full
-    if (!realBase || !within(realBase, place)) continue
-    // The deepest root wins: a plugin's folder lies in Claude Code's.
-    const depth = realBase.length
-    if (best && best.depth >= depth) continue
-    const relative = path.relative(realBase, place).split(path.sep).filter(Boolean)
-    best = { root: one.root, relative: [...one.prefix, ...relative].join('/'), depth }
+    // A root reached through a link (`/tmp` on macOS) is matched by either path.
+    for (const base of [path.resolve(one.base), await realOf(one.base)]) {
+      if (!base || !within(base, full)) continue
+      // The deepest root wins: a plugin's folder lies in Claude Code's.
+      if (best && best.depth >= base.length) continue
+      const relative = path.relative(base, full).split(path.sep).filter(Boolean)
+      best = {
+        root: one.root,
+        relative: [...one.prefix, ...relative].join('/'),
+        depth: base.length,
+      }
+    }
   }
   if (!best)
     throw new FolderRefusal(
       `${trimmed || typed} is not listed: it lies outside the folders Tranchant may list`,
       roots.labels,
     )
-  const found = real ? await stat(real).catch(() => undefined) : undefined
-  if (!found) throw new FolderRefusal(`${trimmed}: no such folder`, roots.labels)
-  if (!found.isDirectory())
-    throw new FolderRefusal(`${trimmed} is not a folder`, roots.labels)
   return listFolder(project, best.root, best.relative)
 }

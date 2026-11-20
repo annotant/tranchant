@@ -11,7 +11,7 @@ released to the `stable` branch.
 
 - **Pick a lens's source.** In Settings › Lenses, **Add a lens** has
   **Browse…** beside Source: a picker under the field, with a search box
-  and four tabs, each counting its matches. **Plugins** lists each installed
+  and four tabs, the three lists counting their matches. **Plugins** lists each installed
   plugin's skills, agents and commands, with its version and folder; a
   plugin turned off for this project is said so, its items still pickable
   (*plugin off here: the lens would not build*). **This project** and
@@ -22,9 +22,11 @@ released to the `stable` branch.
   folders are shown dimmed with why, never opened; a folder outside the
   roots is refused, the roots named. An item that is a lens already says so
   and stays pickable: once picked, Source's help says adding it makes a
-  second lens. Picking fills Source, which stays editable. Names only: no
-  file is read before it is added. Tranchant's own lenses are built in, not
-  listed.
+  second lens. Picking fills Source, which stays editable. Names only while
+  browsing: a file's first lines are read once it is in Source, as for a
+  source typed, to list the agents it starts. A plugin's own skill, agent or
+  command is written `plugin:name` in Files too. Tranchant's own lenses are
+  built in, not listed.
 
 - **The lenses inside a command.** In Settings › Lenses, **Add a lens**
   takes a command as its source, a plugin's (`pr-review-toolkit:review-pr`)

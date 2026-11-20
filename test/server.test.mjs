@@ -2575,3 +2575,104 @@ test('/api/lens/folder lists names under the allowed roots: hidden files, links 
   const plugins = await json(await folder({ root: 'plugins', path: '' }))
   assert.deepEqual(plugins.entries, [])
 })
+
+test("/api/lens/folder browses a plugin's folder, its own files written plugin:name; a link into a hidden place, a hidden path or a link out answer the same whether what lies past them is there or not", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const plugins = await tempDir(t, 'tranchant-plugins-')
+  const outside = await tempDir(t, 'tranchant-outside-')
+  await mkdir(path.join(outside, 'exists'))
+  const workflow = path.join(plugins, 'workflow')
+  await mkdir(path.join(workflow, 'agents'), { recursive: true })
+  await mkdir(path.join(workflow, 'skills', 'x'), { recursive: true })
+  await writeFile(path.join(workflow, 'agents', 'rev.md'), 'Review.\n')
+  await writeFile(path.join(workflow, 'agents', 'x.md'), 'Shadowed by the skill.\n')
+  await writeFile(path.join(workflow, 'skills', 'x', 'SKILL.md'), 'Skill.\n')
+  await mkdir(path.join(claude, 'plugins'), { recursive: true })
+  const register = path.join(claude, 'plugins', 'installed_plugins.json')
+  await writeFile(
+    register,
+    JSON.stringify({
+      version: 2,
+      plugins: {
+        'workflow@team': [{ scope: 'user', installPath: workflow }],
+        'tranchant@team': [{ scope: 'user', installPath: plugins }],
+        'gone@team': [{ scope: 'user', installPath: path.join(plugins, 'gone') }],
+      },
+    }),
+  )
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  const folder = (/** @type {Record<string, string>} */ query) =>
+    fetch(`${server.base}/api/lens/folder?${new URLSearchParams(query).toString()}`)
+
+  const roots = await json(await folder({ root: 'plugins', path: '' }))
+  assert.deepEqual(
+    roots.entries.map((/** @type {any} */ one) => one.name),
+    ['gone', 'workflow'],
+  )
+  const agents = await json(await folder({ root: 'plugins', path: 'workflow/agents' }))
+  assert.equal(agents.path, 'workflow/agents')
+  assert.deepEqual(
+    agents.entries.map((/** @type {any} */ one) => [one.name, one.source]),
+    [
+      ['rev.md', 'workflow:rev'],
+      // workflow:x is the skill's: the agent of the same name keeps its path.
+      ['x.md', path.join(workflow, 'agents', 'x.md')],
+    ],
+  )
+  const went = await json(await folder({ go: path.join(workflow, 'agents') }))
+  assert.deepEqual([went.root, went.path], ['plugins', 'workflow/agents'])
+  for (const one of ['tranchant', 'nope/x'])
+    assert.equal((await folder({ root: 'plugins', path: one })).status, 409, one)
+  const catalog = await json(await fetch(`${server.base}/api/lens/catalog`))
+  assert.match(
+    catalog.plugins.find((/** @type {any} */ one) => one.name === 'gone').problem,
+    /install folder is missing/,
+  )
+
+  const project = server.project
+  await mkdir(path.join(project, '.git'))
+  await writeFile(path.join(project, '.git', 'config'), '[core]\n')
+  await mkdir(path.join(project, '.secret'))
+  await writeFile(path.join(project, '.secret', 'key'), 'k\n')
+  await symlink(path.join(project, '.git'), path.join(project, 'g'))
+  await symlink(outside, path.join(project, 'out'))
+  await writeFile(path.join(project, 'what?.md'), 'Glob-like.\n')
+  const top = await json(await folder({ root: 'project', path: '' }))
+  const byName = Object.fromEntries(
+    top.entries.map((/** @type {any} */ one) => [one.name, one]),
+  )
+  assert.equal(top.label, './')
+  assert.deepEqual(
+    [byName.g.kind, byName.g.reason],
+    ['link', 'leads to a hidden place: not followed'],
+  )
+  assert.equal(byName['what?.md'].kind, 'other')
+  const error = async (/** @type {Record<string, string>} */ query) => {
+    const answer = await folder(query)
+    assert.equal(answer.status, 409, JSON.stringify(query))
+    return (await json(answer)).error.replace(/^\S+/, '…')
+  }
+  assert.match(await error({ root: 'project', path: 'g' }), /hidden folder/)
+  assert.match(await error({ go: 'g/hooks' }), /hidden folder/)
+  // Past a hidden name, or a link out, the answer says nothing of what lies there.
+  assert.equal(await error({ go: '.secret/key' }), await error({ go: '.secret/nokey' }))
+  assert.equal(await error({ go: 'out/exists' }), await error({ go: 'out/nothere' }))
+  assert.equal(
+    await error({ root: 'project', path: 'out/exists' }),
+    await error({ root: 'project', path: 'out/nothere' }),
+  )
+
+  // A register that cannot be read: the catalog and the project's folders still answer.
+  await writeFile(register, '{')
+  const broken = await json(await fetch(`${server.base}/api/lens/catalog`))
+  assert.match(broken.pluginsError, /cannot be read/)
+  assert.deepEqual(broken.plugins, [])
+  assert.equal((await folder({ root: 'project', path: '' })).status, 200)
+  assert.match(
+    (await json(await folder({ root: 'plugins', path: '' }))).error,
+    /plugins cannot be listed/,
+  )
+})

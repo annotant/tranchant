@@ -69,9 +69,9 @@ const matches = (q: string, ...texts: string[]) =>
 /**
  * The source's picker, under the field: the installed plugins' skills,
  * agents and commands, the project's `.claude` and the user's, and a file
- * browser over the folders the server may list. Names only: no file is
- * read before it is added as a lens. A pick fills Source; the field stays
- * the user's to edit.
+ * browser over the folders the server may list. Names only while
+ * browsing: a pick fills Source, which reads the file's first lines for the
+ * agents it starts; the field stays the user's to edit.
  */
 export function SourcePicker({
   id,
@@ -88,7 +88,7 @@ export function SourcePicker({
   const [folder, setFolder] = useState<Load<LensFolder>>()
   const [refused, setRefused] = useState<{ path: string; error: string }>()
   const [goTo, setGoTo] = useState('')
-  // Only the last folder asked shows: a slow answer never replaces a later one.
+  // The last folder asked wins over a slower one.
   const asked = useRef(0)
   const q = query.trim().toLowerCase()
 
@@ -107,16 +107,25 @@ export function SourcePicker({
   const open = useCallback(
     async (where: { root: PickerRoot; path: string } | { go: string }) => {
       const turn = ++asked.current
+      const last = () => turn === asked.current
       try {
         const answer = await fetchLensFolder(where)
-        if (turn !== asked.current) return
-        setRefused(undefined)
-        setFolder({ state: 'done', answer })
+        // A slow answer never replaces a later one, but fills a tab still empty.
+        setFolder((shown) =>
+          last() || shown?.state !== 'done' ? { state: 'done', answer } : shown,
+        )
+        if (last()) setRefused(undefined)
       } catch (error) {
-        if (turn !== asked.current) return
+        if (!last()) return
         // A folder typed and refused leaves the one open as it is.
-        if ('go' in where) setRefused({ path: where.go, error: message(error) })
-        else setFolder({ state: 'error', error: message(error) })
+        if ('go' in where) {
+          setRefused({ path: where.go, error: message(error) })
+          setFolder((shown) =>
+            shown?.state === 'loading'
+              ? { state: 'error', error: 'No folder open: pick a root above.' }
+              : shown,
+          )
+        } else setFolder({ state: 'error', error: message(error) })
       }
     },
     [],
@@ -199,7 +208,7 @@ export function SourcePicker({
           placeholder="Search by name: skills, agents, commands, files"
           onChange={(event) => setQuery(event.currentTarget.value)}
           onKeyDown={(event) => {
-            // Inside Add a lens's form: Enter searches, it never imports.
+            // Inside Add a lens's form: Enter never imports; the search is live.
             if (event.key === 'Enter') event.preventDefault()
           }}
         />
@@ -250,7 +259,7 @@ export function SourcePicker({
               </p>
             )}
             {pluginItems
-              .filter((plugin) => plugin.items.length)
+              .filter((plugin) => plugin.items.length || (!q && plugin.problem))
               .map((plugin) => (
                 <div className="tr-picker-group" key={plugin.name}>
                   <div className="tr-picker-group-head">
@@ -263,6 +272,9 @@ export function SourcePicker({
                         turned off for this project
                       </span>
                     )}
+                    {plugin.problem && (
+                      <span className="tr-chip tr-chip--warn">{plugin.problem}</span>
+                    )}
                   </div>
                   {plugin.items.map((item) => (
                     <ItemButton
@@ -272,9 +284,10 @@ export function SourcePicker({
                       onPick={() => pick(item, !plugin.enabled)}
                     />
                   ))}
+                  <More count={plugin.more} />
                 </div>
               ))}
-            {!counts.plugins && (
+            {!counts.plugins && !pluginItems.some((plugin) => plugin.problem) && (
               <Empty
                 q={query}
                 elsewhere={elsewhere}
@@ -285,6 +298,12 @@ export function SourcePicker({
         )}
         {(tab === 'project' || tab === 'user') && listed && (
           <div className="tr-picker-body">
+            {listed[tab].problem && (
+              <p className="tr-picker-refused" role="alert">
+                Some of {listed[tab].folder} cannot be listed: {listed[tab].problem}.
+              </p>
+            )}
+            <More count={listed[tab].more} />
             {KIND_GROUPS.map(([kind, title, dir]) => {
               const items = ownItems(tab).filter((item) => item.kind === kind)
               if (!items.length) return null
@@ -328,9 +347,10 @@ export function SourcePicker({
         )}
       </div>
       <p className="tr-picker-foot">
-        Names only: Tranchant reads a file once you add it as a lens. Hidden files and
-        links that leave these folders are shown, never opened. Tranchant&apos;s own
-        lenses are built in: not listed.
+        Names only while you browse: once picked, Source reads a file&apos;s first lines
+        for the agents it starts, and the cleaning agent reads it whole when you add it.
+        Hidden files and links that leave these folders are shown, never opened.
+        Tranchant&apos;s own lenses are built in: not listed.
       </p>
     </section>
   )
@@ -345,11 +365,12 @@ function ItemButton({
   off?: boolean
   onPick: () => void
 }) {
-  const aside = item.already?.length
-    ? alreadyText(item.already)
-    : off
-      ? 'plugin off here: the lens would not build'
-      : ''
+  const aside = [
+    item.already?.length && alreadyText(item.already),
+    off && 'plugin off here: the lens would not build',
+  ]
+    .filter(Boolean)
+    .join('; ')
   return (
     <button
       type="button"
@@ -371,6 +392,16 @@ function ItemButton({
         {aside}
       </span>
     </button>
+  )
+}
+
+/** The items a folder holds past the most listed: typed in Source, they still work. */
+function More({ count }: { count: number | undefined }) {
+  if (!count) return null
+  return (
+    <p className="tr-picker-empty">
+      {count} more left out of this list: type one&apos;s name or path in Source.
+    </p>
   )
 }
 

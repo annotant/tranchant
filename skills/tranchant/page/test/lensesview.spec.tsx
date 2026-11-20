@@ -1136,6 +1136,15 @@ function stubPicker() {
           })
         : answer(200, DOCS)
     }
+    if (url.endsWith('path=docs%2Fchecklists'))
+      return answer(200, {
+        root: 'project',
+        path: 'docs/checklists',
+        label: 'docs/checklists/',
+        entries: [
+          { name: 'security.md', kind: 'file', source: 'docs/checklists/security.md' },
+        ],
+      })
     if (url.startsWith('/api/lens/folder'))
       return answer(200, { root: 'project', path: '', label: './', entries: [] })
     return answer(200, { inside: null })
@@ -1264,6 +1273,42 @@ test('Files: hidden files, links out and unreadable folders are shown, never ope
     expect(form.getByLabelText('Source')).toHaveProperty(
       'value',
       'docs/review-checklist.md',
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("Enter in the picker's search or Go to a folder never submits Add a lens; a folder opens, and the breadcrumb goes back", async () => {
+  const fetch = stubPicker()
+  try {
+    const { onLens } = renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), { target: { value: 'workflow:x' } })
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const picker = within(screen.getByRole('region', { name: 'Pick a source' }))
+    // fireEvent returns false when the default (the form's submit) was prevented.
+    expect(
+      fireEvent.keyDown(picker.getByLabelText('Search by name'), { key: 'Enter' }),
+    ).toBe(false)
+    fireEvent.click(picker.getByRole('tab', { name: 'Files' }))
+    const goTo = picker.getByLabelText('Go to a folder')
+    fireEvent.change(goTo, { target: { value: 'docs' } })
+    expect(fireEvent.keyDown(goTo, { key: 'Enter' })).toBe(false)
+    expect(onLens).not.toHaveBeenCalled()
+    fireEvent.click(await picker.findByRole('button', { name: /checklists\// }))
+    await picker.findByText('security.md')
+    expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+      '/api/lens/folder?root=project&path=docs%2Fchecklists',
+    )
+    const crumbs = within(picker.getByRole('navigation', { name: 'Folder' }))
+    expect(crumbs.getByText('checklists').getAttribute('aria-current')).toBe('location')
+    fireEvent.click(crumbs.getByRole('button', { name: 'docs' }))
+    await waitFor(() =>
+      expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
+        '/api/lens/folder?root=project&path=docs',
+      ),
     )
   } finally {
     vi.unstubAllGlobals()

@@ -419,8 +419,8 @@ export async function installedPlugin(name, project) {
 
 /**
  * Every plugin Claude Code has installed for the project at `project`, as
- * installedPlugin finds each: the first key of a name, its project's install
- * before the user's, on or off by the settings. Throws a LensRefusal when its
+ * installedPlugin finds each: the first key of a name with an install usable
+ * here, its project's install before the user's, on or off by the settings. Throws a LensRefusal when its
  * register cannot be read.
  * @param {string} project
  */

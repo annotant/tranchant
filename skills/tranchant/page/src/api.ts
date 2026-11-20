@@ -324,20 +324,32 @@ export interface PickerItem {
   already?: LensMatch['already']
 }
 
+/** A `.claude` folder's skills, agents and commands, as the picker lists them. */
+interface DotClaude {
+  folder: string
+  items: PickerItem[]
+  problem?: string
+  more?: number
+}
+
 /** What `GET /api/lens/catalog` answers: the installed plugins', the project's and the user's skills, agents and commands, names only. */
 export interface LensCatalog {
   plugins: {
     name: string
     version?: string
     folder: string
-    /** Turned off for this project: a lens made from it would not build. */
+    /** False when a settings file turns it off for this project: a lens made from it would not build. */
     enabled: boolean
     items: PickerItem[]
+    /** Why some of its items cannot be listed: its folder missing, or unreadable. */
+    problem?: string
+    /** Items past the most listed. */
+    more?: number
   }[]
   /** Claude Code's register of plugins cannot be read. */
   pluginsError?: string
-  project: { folder: string; items: PickerItem[] }
-  user: { folder: string; items: PickerItem[] }
+  project: DotClaude
+  user: DotClaude
   /** The folders the Files tab may list. */
   roots: string[]
 }

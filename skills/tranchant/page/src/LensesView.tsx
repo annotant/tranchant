@@ -902,11 +902,16 @@ function AddLens({
 
 /** What Source's help says of a source picked from the list. */
 function pickedHelp(picked: Picked) {
-  if (picked.already?.length)
-    return `Picked ${picked.source}: it is ${alreadyText(picked.already).replace(/^already lens/, 'already the source of lens')}. Adding it again makes a second lens from it. The field stays yours to edit.`
-  if (picked.off)
-    return `Picked ${picked.source}: its plugin is turned off for this project, so the lens would not build until it is turned on (/plugin). The field stays yours to edit.`
-  return `Picked ${picked.source}. The field stays yours to edit.`
+  return [
+    `Picked ${picked.source}`,
+    picked.already?.length &&
+      `: it is ${alreadyText(picked.already).replace(/^already lens/, 'already the source of lens')}. Adding it again makes a second lens from it`,
+    picked.off &&
+      `${picked.already?.length ? '. Its' : ': its'} plugin is turned off for this project, so the lens would not build until it is turned on (/plugin)`,
+    '. The field stays yours to edit.',
+  ]
+    .filter(Boolean)
+    .join('')
 }
 
 /** What a cleaning removed from its source and added for Tranchant. */

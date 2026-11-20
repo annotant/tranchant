@@ -57,7 +57,7 @@ pattern, read how annotant does it.
   `~/.config/tranchant/`) and the set they make with the recipe's;
   `lib/cleaning.mjs` owns their cleanings, `lib/glob.mjs` the files a
   glob typed as a source matches, `lib/inside.mjs` the reviewers a command,
-  or a source that starts agents, holds, `lib/picker.mjs` what Add a lens's
+  or a source that starts agents, holds; `lib/picker.mjs` what Add a lens's
   picker lists (the plugins', the `.claude` folders', a folder of the
   allowed roots: names only); `lib/plan.mjs` plans the
   lenses a review runs on the change (`prepare.mjs`, and `lenses.mjs` again

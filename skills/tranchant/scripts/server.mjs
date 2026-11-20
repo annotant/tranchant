@@ -16,9 +16,9 @@
 // one write at a time, with every lens that could run on the project, the
 // recipe's and those the user added (lib/userlens.mjs), and the lenses being
 // cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
-// them again, lists a glob's matches (lib/glob.mjs), the reviewers a
-// command, or an agent that starts others, holds (lib/inside.mjs), and what
-// the source's picker offers, names only (lib/picker.mjs), imports
+// them again, lists a glob's matches (lib/glob.mjs) and the reviewers a
+// command, or an agent that starts others, holds (lib/inside.mjs); lists
+// what the source's picker offers, names only (lib/picker.mjs); imports
 // several at once, and prints CLEAN for each cleaning the hooks start an
 // agent on;
 // it pushes `settings` when the file, a lens or a cleaning changes. It serves
