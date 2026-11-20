@@ -55,6 +55,10 @@ const globsOf = (text: string) =>
 const plural = (count: number, one: string, many: string) =>
   `${count} ${count === 1 ? one : many}`
 
+/** Settings › Lenses with this lens's editor open: the key LensesView gives it. */
+export const lensHref = (row: { name: string; scope?: LensScope | undefined }) =>
+  `#settings/lenses/${encodeURIComponent(`${row.scope ?? 'recipe'}:${row.name}`)}`
+
 /** Past this many lenses that run, the page warns of their cost: no cap, a warning. */
 export const MANY_LENSES = 12
 
@@ -112,6 +116,8 @@ export function LensesView({
 }: Props) {
   const [adding, setAdding] = useState(false)
   const [open, setOpen] = useState(focus)
+  // The lens the link names, followed when it is renamed or moved: else it reads as one removed.
+  const [pointed, setPointed] = useState(focus)
   const listed = settings?.lensSet !== undefined
   // Once the lenses are listed: on a page opened at the link, they load after the mount.
   useEffect(() => {
@@ -182,11 +188,11 @@ export function LensesView({
   return (
     <main className="tr-settings tr-settings--wide" aria-labelledby="tr-lenses-title">
       <Head />
-      {focus !== undefined &&
-        !lensSet.lenses.some((lens) => `${lens.scope}:${lens.name}` === focus) && (
+      {pointed !== undefined &&
+        !lensSet.lenses.some((lens) => `${lens.scope}:${lens.name}` === pointed) && (
           <p className="tr-notice" role="status">
-            The lens {focus.slice(focus.indexOf(':') + 1)} is not among these: the review
-            ran another recipe, or the lens was removed since.
+            The lens {pointed.slice(pointed.indexOf(':') + 1)} is not among these: the
+            review ran another recipe, or the lens was removed since.
           </p>
         )}
       {settings.problem && (
@@ -268,6 +274,16 @@ export function LensesView({
                         recleaning={recleaning.has(key)}
                         open={open === key}
                         onOpen={() => setOpen(open === key ? undefined : key)}
+                        onMoved={(to) => {
+                          const next = `${to.scope}:${to.name}`
+                          // The save answers late: another lens opened since stays open.
+                          setOpen((now) => (now === key ? next : now))
+                          if (pointed !== key) return
+                          setPointed(next)
+                          // A page left since keeps its own link.
+                          if (location.hash === lensHref(lens))
+                            history.replaceState(null, '', lensHref(to))
+                        }}
                         onSwitch={(on) =>
                           lens.scope === 'recipe'
                             ? setRecipe(lens.name, { on })
@@ -837,6 +853,7 @@ function LensRow({
   recleaning,
   open,
   onOpen,
+  onMoved,
   onSwitch,
   onRecipeModel,
   onLens,
@@ -847,6 +864,8 @@ function LensRow({
   recleaning: boolean
   open: boolean
   onOpen: () => void
+  /** Its save renamed it or moved it to another scope. */
+  onMoved: (to: { scope: Added; name: string }) => void
   onSwitch: (on: boolean) => void
   onRecipeModel: (model: string | null) => void
   onLens: Props['onLens']
@@ -856,6 +875,9 @@ function LensRow({
   const state = recleaning
     ? { text: 'being cleaned again…', tone: 'accent' }
     : standing(lens)
+  // Not saved yet: a closed editor, or a blank name, shows the saved one.
+  const [draft, setDraft] = useState<string>()
+  const name = (open && draft?.trim()) || lens.name
   const id = `tr-lns-${lens.scope}-${lens.name}`
   return (
     <li className={`tr-lns-item${open ? ' tr-lns-item--open' : ''}`}>
@@ -867,7 +889,7 @@ function LensRow({
           onChange={onSwitch}
         />
         <span className="tr-lns-name" id={id}>
-          {lens.name}
+          {name}
         </span>
         <span className="tr-lns-meta">
           <code className="tr-lns-source" title="Its source">
@@ -888,7 +910,10 @@ function LensRow({
           className="tr-btn tr-btn--small"
           aria-expanded={open}
           aria-controls={`${id}-edit`}
-          onClick={onOpen}
+          onClick={() => {
+            setDraft(undefined)
+            onOpen()
+          }}
         >
           {open ? 'Close' : builtIn ? 'View' : 'Edit'}
         </button>
@@ -917,6 +942,8 @@ function LensRow({
               lens={lens}
               frozen={frozen}
               onLens={onLens}
+              onName={setDraft}
+              onMoved={onMoved}
             />
           )}
         </div>
@@ -1053,10 +1080,15 @@ function AddedLens({
   lens,
   frozen,
   onLens,
+  onName,
+  onMoved,
 }: {
   lens: LensEntry
   frozen: boolean
   onLens: Props['onLens']
+  /** The name as it is typed, for the row to show it. */
+  onName: (name: string) => void
+  onMoved: (to: { scope: Added; name: string }) => void
 }) {
   const scope = lens.scope === 'global' ? 'global' : 'local'
   const [tab, setTab] = useState<'settings' | 'reads'>('settings')
@@ -1071,6 +1103,8 @@ function AddedLens({
   const [removing, setRemoving] = useState(false)
   const id = `tr-lns-${scope}-${lens.name}`
   const target = { scope, name: lens.name }
+  // A form reset by a new cleaning resets the row's name too.
+  useEffect(() => onName(name), [name, onName])
   return (
     <>
       <Tabs id={id} tab={tab} onTab={setTab} />
@@ -1083,6 +1117,7 @@ function AddedLens({
           onSubmit={(event) => {
             event.preventDefault()
             const globs = globsOf(paths).length ? globsOf(paths) : ['**']
+            const to = { scope: where, name: name.trim() }
             // Only what changed: a field left as it was never overwrites a newer cleaning's.
             void onLens('save', {
               ...target,
@@ -1102,7 +1137,10 @@ function AddedLens({
                 }),
                 ...(rules !== (lens.rules ?? '') && { rules }),
               },
-            }).catch(() => undefined)
+            }).then(
+              () => (to.scope !== scope || to.name !== lens.name) && onMoved(to),
+              () => undefined,
+            )
           }}
         >
           <Field

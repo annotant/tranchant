@@ -2,7 +2,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import App from '../src/App'
 import type { LensesProgress } from '../src/domain'
-import { LensesCenter, LensesControl, lensHref } from '../src/LensesStep'
+import { LensesCenter, LensesControl } from '../src/LensesStep'
+import { lensHref } from '../src/LensesView'
 import { fakeServer, payload } from './fixture'
 
 const building: LensesProgress = {

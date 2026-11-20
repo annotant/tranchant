@@ -6,7 +6,7 @@ import {
   type Review,
   type StartChoices,
 } from './domain'
-import { MANY_LENSES } from './LensesView'
+import { lensHref, MANY_LENSES } from './LensesView'
 
 const CHANGE_WORDS: Record<NonNullable<LensRow['change']>, string> = {
   unchanged: 'unchanged',
@@ -15,10 +15,6 @@ const CHANGE_WORDS: Record<NonNullable<LensRow['change']>, string> = {
 }
 
 const SCOPE_WORDS = { local: 'this project', global: 'global' }
-
-/** Settings › Lenses with this lens's editor open: the key LensesView gives it. */
-export const lensHref = (row: Pick<LensRow, 'name' | 'scope'>) =>
-  `#settings/lenses/${encodeURIComponent(`${row.scope ?? 'recipe'}:${row.name}`)}`
 
 const names = (rows: LensRow[]) => rows.map((row) => row.name).join(', ')
 
