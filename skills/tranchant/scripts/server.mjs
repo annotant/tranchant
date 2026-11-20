@@ -65,7 +65,7 @@ import {
   listCleanings,
 } from './lib/cleaning.mjs'
 import { GlobRefusal, MAX_MATCHES, matchSources, withAlready } from './lib/glob.mjs'
-import { insideOf } from './lib/inside.mjs'
+import { insideOf, nameOfSource } from './lib/inside.mjs'
 import {
   FolderRefusal,
   catalogOf,
@@ -1302,7 +1302,10 @@ async function handle(req, res) {
     if (!source.trim() || source.length > 1024)
       return send(res, 400, { error: 'source is required' })
     const inside = await insideOf(lensRoot, source)
-    if (!inside?.starts.length) return send(res, 200, { inside: inside ?? null })
+    // Shown in Name before the cleaning: the name it gets when none is typed.
+    if (!inside)
+      return send(res, 200, { inside: null, name: nameOfSource(source, lensRoot) })
+    if (!inside.starts.length) return send(res, 200, { inside })
     const [marked] = withAlready(
       lensRoot,
       [{ source: inside.label, name: '', starts: inside.starts }],

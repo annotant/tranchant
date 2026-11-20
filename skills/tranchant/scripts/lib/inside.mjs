@@ -6,6 +6,7 @@
 // can become a lens; the source never does.
 import os from 'node:os'
 import path from 'node:path'
+import { statSync } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { LensRefusal, claudeDir, installedPlugin, isPluginName } from './lens.mjs'
 import { expandHome } from './settings.mjs'
@@ -35,6 +36,13 @@ const MAX_NAMED = 40
 /** The entries of one `agents` or `skills` folder read at most: each name is a scan of the source. */
 const MAX_ENTRIES = 500
 
+/** A stem made a lens name: letters, digits, - and _, 40 at most; `lens` when nothing is left. */
+const lensNameOf = (/** @type {string} */ stem) =>
+  stem
+    .replace(/[^\w-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'lens'
+
 /**
  * The lens name a file gets: its file name without the extension, a
  * skill's folder name for its SKILL.md; made a lens name.
@@ -42,15 +50,30 @@ const MAX_ENTRIES = 500
  */
 export function nameOfFile(file) {
   const base = path.basename(file)
-  const stem = /^SKILL\.md$/i.test(base)
-    ? path.basename(path.dirname(file))
-    : base.replace(/\.[^.]+$/, '')
-  return (
-    stem
-      .replace(/[^\w-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40) || 'lens'
+  return lensNameOf(
+    /^SKILL\.md$/i.test(base)
+      ? path.basename(path.dirname(file))
+      : base.replace(/\.[^.]+$/, ''),
   )
+}
+
+/**
+ * The lens name a source gets when none is given: a plugin's skill, agent or
+ * command, its name without the plugin; a file, as nameOfFile; a folder (a
+ * skill's), its name whole.
+ * @param {string} source
+ * @param {string} project What a relative path is from.
+ */
+export function nameOfSource(source, project) {
+  const trimmed = source.trim()
+  if (isPluginName(trimmed))
+    return lensNameOf(trimmed.slice(trimmed.lastIndexOf(':') + 1))
+  const bare = trimmed.replace(/[/\\]+$/, '')
+  // A skill's folder may hold a dot (`api.v2`): no extension to strip from it.
+  const folder = statSync(path.resolve(project, expandHome(bare)), {
+    throwIfNoEntry: false,
+  })?.isDirectory()
+  return folder ? lensNameOf(path.basename(bare)) : nameOfFile(bare)
 }
 
 /**

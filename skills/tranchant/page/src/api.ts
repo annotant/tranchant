@@ -290,9 +290,13 @@ export interface LensMatch {
 }
 
 /** What `GET /api/lens/inside` answers: the reviewers inside a source, or null for a single one. */
-export interface LensInside {
-  inside: { kind: LensKind; label: string; starts: LensMatch[]; more?: number } | null
-}
+/** A single reviewer has the lens name its source gives when none is typed. */
+export type LensInside =
+  | { inside: null; name: string }
+  | {
+      inside: { kind: LensKind; label: string; starts: LensMatch[]; more?: number }
+      name?: never
+    }
 
 /** The reviewers a command, or a source that starts agents, holds, read from its file with no agent. */
 export const fetchLensInside = (source: string) =>

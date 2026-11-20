@@ -13,6 +13,7 @@ import {
   InsideUnread,
   ReadingSource,
   isGlob,
+  nameProblem,
   noteRows,
   useGlob,
   useInside,
@@ -687,11 +688,14 @@ function Field({
   id,
   label,
   help,
+  error,
   children,
 }: {
   id: string
   label: string
   help?: string | undefined
+  /** What is wrong with the value, said in place of the help. */
+  error?: string | undefined
   children: React.ReactNode
 }) {
   return (
@@ -701,7 +705,13 @@ function Field({
       </label>
       <div className="tr-field-body">
         {children}
-        {help && <span className="tr-field-help">{help}</span>}
+        {error ? (
+          <span className="tr-field-help tr-field-error" role="alert">
+            {error}
+          </span>
+        ) : (
+          help && <span className="tr-field-help">{help}</span>
+        )}
       </div>
     </div>
   )
@@ -864,7 +874,8 @@ function AddLens({
   const [source, setSource] = useState('')
   const [browsing, setBrowsing] = useState(false)
   const [picked, setPicked] = useState<Picked>()
-  const [name, setName] = useState('')
+  // Undefined until typed in, and again once the source changes: the field shows the source's name.
+  const [name, setName] = useState<string>()
   const [scope, setScope] = useState<Added>('local')
   const [context, setContext] = useState('')
   const [busy, setBusy] = useState(false)
@@ -891,17 +902,25 @@ function AddLens({
   const rows = noteRows(pick.rows, scope, lenses)
   const checked = rows.filter((row) => row.checked)
   const blocked = checked.some((row) => row.note?.name)
-  const replaces = builtIn.includes(name.trim())
+  const derived =
+    !glob && insideLook.state === 'done' && !insideLook.answer.inside
+      ? insideLook.answer.name
+      : ''
+  const shownName = name ?? derived
+  // Emptied, the name is the source's again, as the server gives it.
+  const lensName = shownName.trim() || derived
+  const problem = lensName ? nameProblem(lensName, scope, lenses) : undefined
+  const replaces = builtIn.includes(lensName)
   const runs = lenses.filter((lens) => lens.runs).length
   const after = many
     ? runs + checked.filter((row) => addsOne(lenses, scope, row.name.trim())).length
-    : runs + (addsOne(lenses, scope, name.trim()) ? 1 : 0)
+    : runs + (addsOne(lenses, scope, lensName) ? 1 : 0)
   const ready = many
     ? (glob ? globLook.state === 'done' : true) &&
       checked.length > 0 &&
       checked.length <= MAX_BATCH &&
       !blocked
-    : !reading
+    : !reading && !problem
   return (
     <form
       className="tr-lns-add"
@@ -921,7 +940,7 @@ function AddLens({
               }
             : {
                 source: source.trim(),
-                ...(name.trim() && { name: name.trim() }),
+                ...(lensName && { name: lensName }),
               }),
           scope,
           ...(context.trim() && { context: context.trim() }),
@@ -951,6 +970,7 @@ function AddLens({
             onChange={(event) => {
               setSource(event.currentTarget.value)
               setPicked(undefined)
+              setName(undefined)
             }}
           />
           <button
@@ -983,6 +1003,7 @@ function AddLens({
             onPick={(one) => {
               setSource(one.source)
               setPicked(one)
+              setName(undefined)
               setBrowsing(false)
             }}
             onClose={() => setBrowsing(false)}
@@ -993,16 +1014,21 @@ function AddLens({
         <Field
           id="tr-lns-add-name"
           label="Name"
-          help={
-            replaces
-              ? `Replaces the built-in ${name.trim()} where it lives.`
-              : 'Optional: absent, one from its source.'
-          }
+          error={problem?.text}
+          help={nameHelp({
+            replaces,
+            lensName,
+            derived,
+            typed: name,
+            unread: insideLook.state === 'error',
+          })}
         >
           <input
             id="tr-lns-add-name"
             className="tr-input tr-text"
-            value={name}
+            value={shownName}
+            placeholder={derived}
+            aria-invalid={problem ? true : undefined}
             onChange={(event) => setName(event.currentTarget.value)}
           />
         </Field>
@@ -1091,6 +1117,34 @@ function AddLens({
       </div>
     </form>
   )
+}
+
+/** What Name's help says: whose the name is, the source's or the person's. */
+function nameHelp({
+  replaces,
+  lensName,
+  derived,
+  typed,
+  unread,
+}: {
+  replaces: boolean
+  lensName: string
+  derived: string
+  typed: string | undefined
+  unread: boolean
+}) {
+  if (replaces) return `Replaces the built-in ${lensName} where it lives.`
+  if (typed?.trim())
+    return derived && typed.trim() !== derived
+      ? `Yours; empty, it is ${derived}, from its source.`
+      : 'Yours.'
+  if (derived)
+    return typed === undefined
+      ? 'From its source: change it to name the lens otherwise.'
+      : `Empty: ${derived}, from its source.`
+  return unread
+    ? 'Its source could not be read here: empty, the import names it after its source.'
+    : 'From its source, shown once it is read.'
 }
 
 /** What Source's help says of a source picked from the list. */

@@ -180,6 +180,29 @@ const shortName = (source: string) =>
     ?.replace(/\.md$/i, '') ?? source
 
 const SCOPE_WORD = { local: "This project's", global: 'The global' } as const
+
+/** Why a lens cannot take `name` where it would live: not a lens name, or another lens's there. */
+export function nameProblem(
+  name: string,
+  scope: 'local' | 'global',
+  lenses: LensEntry[],
+): { tag: 'name' | 'name taken'; text: string } | undefined {
+  if (!LENS_NAME.test(name))
+    return {
+      tag: 'name',
+      text: 'A lens name is letters, digits, - and _ only, 40 at most: change this one.',
+    }
+  // A lens is a folder: on a filesystem that ignores case, Abac is abac.
+  const same = lenses.find(
+    (lens) => lens.scope === scope && lens.name.toLowerCase() === name.toLowerCase(),
+  )
+  if (same)
+    return {
+      tag: 'name taken',
+      text: `${SCOPE_WORD[scope]} ${same.name} is another lens, from ${same.source}: give this one another name.`,
+    }
+  return undefined
+}
 const SCOPE_OF = { local: "this project's", global: 'the global' } as const
 
 /** The lenses made from a match's file, in words: `this project's api-review, and being added as the global api`. */
@@ -210,7 +233,7 @@ export function noteRows(
     const twice = row.checked && seen.has(name)
     if (row.checked) seen.add(name)
     const named = lenses.filter((lens) => lens.name === name)
-    const same = named.find((lens) => lens.scope === scope)
+    const problem = nameProblem(name, scope, lenses)
     const local = named.find((lens) => lens.scope === 'local' && lens.on)
     const other = named.find((lens) => lens.scope !== scope && lens.runs)
     const already = row.already ?? []
@@ -223,20 +246,7 @@ export function noteRows(
         tone: 'warn',
         text: `This file is ${lensesOf(already)}${already.every((one) => one.adding) ? '' : ' already'}: nothing to add.`,
       }
-    else if (!LENS_NAME.test(name))
-      note = {
-        tag: 'name',
-        tone,
-        text: 'A lens name is letters, digits, - and _ only, 40 at most: change this one.',
-        name: true,
-      }
-    else if (same)
-      note = {
-        tag: 'name taken',
-        tone,
-        text: `${SCOPE_WORD[scope]} ${name} is another lens, from ${same.source}: give this one another name.`,
-        name: true,
-      }
+    else if (problem) note = { ...problem, tone, name: true }
     else if (twice)
       note = {
         tag: 'name taken',

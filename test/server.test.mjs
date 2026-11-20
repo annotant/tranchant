@@ -2368,8 +2368,15 @@ test('/api/lens/inside lists the agents a command starts, those being added said
       ['.claude/agents/test-review.md', 'test-review', undefined],
     ],
   )
-  // A single reviewer, and a source that is not there: the usual add.
-  assert.equal((await json(await inside('.claude/agents/code-review.md'))).inside, null)
+  // A single reviewer, and a source that is not there: the usual add, with the name it gets.
+  assert.deepEqual(await json(await inside('.claude/agents/code-review.md')), {
+    inside: null,
+    name: 'code-review',
+  })
+  assert.deepEqual(await json(await inside('workflow:code-reviewer-abac')), {
+    inside: null,
+    name: 'code-reviewer-abac',
+  })
   assert.equal((await json(await inside('.claude/agents/gone.md'))).inside, null)
   assert.equal((await inside('')).status, 400)
 

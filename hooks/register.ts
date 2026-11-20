@@ -2385,7 +2385,17 @@ async function startImport(
     ]),
   )
   if ('refused' in prepared)
-    return `Tranchant cannot import ${source}: ${prepared.refused}`
+    return [
+      `Tranchant cannot import ${source}: ${prepared.refused}`,
+      // Named after its source, the user may not know --name gives another.
+      ...(/is (?:global|this project's) already: edit it, or choose another name$/.test(
+        prepared.refused,
+      )
+        ? [
+            `Give it another name: /tranchant import ${source} --to ${to} --name <lens>${given.context ? ` --context ${given.context}` : ''}.`,
+          ]
+        : []),
+    ].join('\n')
   const { made } = prepared
   const spawned = await spawnCleaner($, made)
   if ('error' in spawned)

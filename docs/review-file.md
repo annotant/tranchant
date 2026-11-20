@@ -792,8 +792,16 @@ as for a recipe's lens.
 
 `/tranchant import [<source>] [--to local | global] [--name <lens>] [--context <skill>]`
 adds a team's reviewer (a plugin's skill or agent, a file or a folder) as a
-lens, cleaned first; the page's **Settings › Lenses** does the same with
-**Add a lens**, whose source may be a glob (`.claude/agents/*-review.md`,
+lens, cleaned first. The name is optional: with no `--name`, the lens is
+named after its source, a file's name without its extension
+(`money-review.md` gives `money-review`), a skill's folder's whole
+(`skills/api.v2/` or its `SKILL.md` gives `api-v2`), a `plugin:name`'s name
+without the plugin (`workflow:code-reviewer-abac` gives `code-reviewer-abac`);
+that name taken, the refusal gives the command again with `--name`. The
+page's **Settings › Lenses** does the same with **Add a lens**, whose Name
+shows that name before the cleaning starts, to change, and says when it
+is no lens name or is taken in the scope chosen (in any case: a lens is a
+folder); its source may be a glob (`.claude/agents/*-review.md`,
 `~/.claude/agents/review-*.md`): the page lists its matches before anything
 runs, each with the lens name its file gives it (to rename): a file that is
 a lens already or being added, under any name, says so and cannot be
