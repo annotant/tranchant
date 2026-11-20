@@ -302,6 +302,8 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-lns-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 12.5px; }
 .tr-lns-add { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; border: 1px solid var(--tr-accent); border-radius: 8px; background: var(--tr-bg-2); }
 .tr-lns-add h3 { font-size: 15px; }
+.tr-lns-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; }
+.tr-lns-batch .tr-progress-bar { flex: 0 1 240px; }
 .tr-matches { width: 100%; }
 .tr-matches-box { width: 100%; max-width: 820px; }
 .tr-matches-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; }

@@ -8,7 +8,14 @@ import path from 'node:path'
 import { open, readdir, stat } from 'node:fs/promises'
 import { expandHome } from './settings.mjs'
 
-/** @typedef {{ source: string, name: string, notReviewer?: string }} Match */
+/**
+ * @typedef {object} Match
+ * @property {string} source
+ * @property {string} name
+ * @property {string} [notReviewer]
+ * @property {Already[]} [already] The lenses, and the lenses being added, made from this same file.
+ */
+/** @typedef {{ scope: 'local' | 'global', name: string, adding?: true }} Already */
 
 /** More matches than this is a glob to narrow: each is one cleaning agent. */
 export const MAX_MATCHES = 40
@@ -183,6 +190,48 @@ export async function matchSources(project, pattern) {
     matches,
     ...(found.length > MAX_MATCHES && { more: found.length - MAX_MATCHES }),
   }
+}
+
+/**
+ * One source as a file: a path from the project, `~/` or absolute, a skill's
+ * folder and its SKILL.md alike; a plugin's name as it is.
+ * @param {string} project
+ * @param {string} label
+ */
+function fileKey(project, label) {
+  const trimmed = label.trim()
+  if (/^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/.test(trimmed)) return trimmed
+  return path.resolve(project, expandHome(trimmed)).replace(/[/\\]SKILL\.md$/i, '')
+}
+
+/**
+ * The matches, each with the lenses already made from its file and those
+ * being added from it: a glob run again, or over a folder whose reviewers
+ * were added one by one under other names.
+ * @param {string} project
+ * @param {Match[]} matches
+ * @param {{ source: string, scope: string, name: string, adding?: boolean }[]} known
+ * @returns {Match[]}
+ */
+export function withAlready(project, matches, known) {
+  /** @type {Map<string, Already[]>} */
+  const byFile = new Map()
+  for (const one of known) {
+    if (one.scope !== 'local' && one.scope !== 'global') continue
+    const key = fileKey(project, one.source)
+    byFile.set(key, [
+      ...(byFile.get(key) ?? []),
+      {
+        scope: one.scope,
+        name: one.name,
+        ...(one.adding && { adding: /** @type {const} */ (true) }),
+      },
+    ])
+  }
+  return matches.map((match) => {
+    const already = byFile.get(fileKey(project, match.source))
+    return already ? { ...match, already } : match
+  })
 }
 
 /** A file's first bytes, enough to tell a reviewer, never the whole file; undefined when it cannot be read. */

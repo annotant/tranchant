@@ -61,7 +61,7 @@ import {
   discardCleaning,
   listCleanings,
 } from './lib/cleaning.mjs'
-import { GlobRefusal, MAX_MATCHES, matchSources } from './lib/glob.mjs'
+import { GlobRefusal, MAX_MATCHES, matchSources, withAlready } from './lib/glob.mjs'
 import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
 import {
   LensFileRefusal,
@@ -1243,12 +1243,30 @@ async function handle(req, res) {
     const source = url.searchParams.get('source') ?? ''
     if (!source.trim() || source.length > 1024)
       return send(res, 400, { error: 'source, a glob, is required' })
+    let matched
     try {
-      return send(res, 200, await matchSources(lensRoot, source))
+      matched = await matchSources(lensRoot, source)
     } catch (error) {
       if (!(error instanceof GlobRefusal)) throw error
       return send(res, 409, { error: error.message })
     }
+    if (!matched.matches.length) return send(res, 200, matched)
+    const { values } = await loadSettings()
+    const [described, cleanings] = await Promise.all([
+      describeLenses({ project: lensRoot, base: review.base, values }),
+      listCleanings(lensRoot).catch(() => []),
+    ])
+    const known = [
+      ...described.lenses,
+      // A failed one adds nothing: its file is free to add again.
+      ...cleanings
+        .filter((one) => !one.again && one.state !== 'failed')
+        .map((one) => ({ ...one, adding: true })),
+    ]
+    return send(res, 200, {
+      ...matched,
+      matches: withAlready(lensRoot, matched.matches, known),
+    })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/lens/import') {

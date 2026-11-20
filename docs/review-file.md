@@ -797,8 +797,9 @@ lens, cleaned first; the page's **Settings › Lenses** does the same with
 `~/.claude/agents/review-*.md`): the page lists its matches before anything
 runs, each with the lens name its file gives it (to rename), a name taken in
 that scope (to rename or uncheck), the lens of another scope it would
-replace, and one that starts other agents, flagged *not a reviewer* and
-unchecked; **Add the N lenses** makes one cleaning per checked match, the
+replace, a file that is a lens already or being added, under any name
+(unchecked; under the same name it blocks), and one that starts other
+agents, flagged *not a reviewer* and unchecked; **Add the N lenses** makes one cleaning per checked match, the
 same scope for all. The page's cleanings (Add a lens, Clean it again now)
 wait for a free cleaning agent: `maxReviewAgents` clean at a time, the
 others say so; one that fails stops none, and the server announces again

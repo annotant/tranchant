@@ -48,8 +48,9 @@ export function useGlobPick(glob: string) {
         try {
           const matches = await fetchLensMatches(glob)
           found = { state: 'done', glob, ...matches }
+          // Added already, or no reviewer: left out unless the person checks it.
           unchecked = matches.matches
-            .filter((one) => one.notReviewer)
+            .filter((one) => one.notReviewer || one.already?.length)
             .map((one) => one.source)
         } catch (error) {
           found = {
@@ -96,6 +97,21 @@ export function useGlobPick(glob: string) {
 }
 
 const SCOPE_WORD = { local: "This project's", global: 'The global' } as const
+const SCOPE_OF = { local: "this project's", global: 'the global' } as const
+
+/** A match's chip when its file is a lens already, or being added. */
+const tagOf = (one: { adding?: true } | undefined) =>
+  one?.adding ? 'being added' : 'added already'
+
+/** The lenses made from a match's file, in words: `this project's api-review already, and being added as the global api`. */
+const lensesOf = (already: NonNullable<LensMatch['already']>) =>
+  already
+    .map((one) =>
+      one.adding
+        ? `being added as ${SCOPE_OF[one.scope]} ${one.name}`
+        : `${SCOPE_OF[one.scope]} ${one.name} already`,
+    )
+    .join(', and ')
 
 /**
  * What a match's row says of it: a name that cannot be, or is taken where
@@ -116,12 +132,23 @@ export function noteRows(
     const same = named.find((lens) => lens.scope === scope)
     const local = named.find((lens) => lens.scope === 'local' && lens.on)
     const other = named.find((lens) => lens.scope !== scope && lens.runs)
+    const already = row.already ?? []
+    // This very file under this very name, where it would live: adding it again fails.
+    const itself = already.find((one) => one.scope === scope && one.name === name)
     let note: Note | undefined
     if (!LENS_NAME.test(name))
       note = {
         tag: 'not a name',
         tone: 'danger',
         text: 'A lens name is letters, digits, - and _ only, 40 at most.',
+        blocks: true,
+      }
+    else if (itself)
+      note = {
+        tag: tagOf(itself),
+        // Checked, it blocks the batch: as a taken name does.
+        tone: row.checked ? 'danger' : 'warn',
+        text: `This file is ${lensesOf([itself])}: uncheck it, or rename this one to add it twice.`,
         blocks: true,
       }
     else if (same)
@@ -137,6 +164,12 @@ export function noteRows(
         tone: 'danger',
         text: 'Another match above has this name: rename one.',
         blocks: true,
+      }
+    else if (already.length)
+      note = {
+        tag: tagOf(already[0]),
+        tone: 'warn',
+        text: `This file is ${lensesOf(already)}: checked, it is added once more.`,
       }
     else if (scope === 'global' && local)
       note = {

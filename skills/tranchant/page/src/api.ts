@@ -277,6 +277,8 @@ export interface LensMatch {
   source: string
   name: string
   notReviewer?: string
+  /** The lenses made from this same file, and those being added from it. */
+  already?: { scope: 'local' | 'global'; name: string; adding?: true }[]
 }
 
 /** What `GET /api/lens/matches` answers: the matches, how many more were left out, or the folder of a glob that matched nothing. */

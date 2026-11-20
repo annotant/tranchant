@@ -1019,3 +1019,25 @@ test('a glob lists 40 matches at most, skips dot files unless it names them, tak
   assert.deepEqual(backtrack.matches, [])
   assert.ok(Date.now() - began < 5000, `${Date.now() - began} ms`)
 })
+
+test("withAlready names the lenses made from a match's file: by its path from the project, ~/ or absolute, a skill's folder and its SKILL.md alike", async (t) => {
+  const { dir } = await repository(t)
+  const out = JSON.parse(
+    await lib(`console.log(JSON.stringify(glob.withAlready(${JSON.stringify(dir)}, [
+  { source: '.claude/agents/money-review.md', name: 'money-review' },
+  { source: '.claude/skills/i18n-review', name: 'i18n-review' },
+  { source: '.claude/agents/api-review.md', name: 'api-review' },
+], [
+  { source: '.claude/agents/money-review.md', scope: 'local', name: 'money' },
+  { source: ${JSON.stringify(path.join(dir, '.claude', 'agents', 'money-review.md'))}, scope: 'global', name: 'cents', adding: true },
+  { source: '.claude/skills/i18n-review/SKILL.md', scope: 'local', name: 'copy' },
+  { source: 'tranchant:bugs', scope: 'recipe', name: 'bugs' },
+])))`),
+  )
+  assert.deepEqual(out[0].already, [
+    { scope: 'local', name: 'money' },
+    { scope: 'global', name: 'cents', adding: true },
+  ])
+  assert.deepEqual(out[1].already, [{ scope: 'local', name: 'copy' }])
+  assert.equal(out[2].already, undefined)
+})

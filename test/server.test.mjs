@@ -2207,6 +2207,16 @@ test("/api/lens/matches lists a glob's matches; /api/lens/import with sources cl
   const lines = []
   for (const id of done.cleanings) lines.push(await server.nextLine(`CLEAN ${id}`, from))
   assert.equal(lines.length, 2)
+  // The same glob again: the files being added say so.
+  const again = await json(await matches('.claude/agents/*-review.md'))
+  assert.deepEqual(
+    again.matches.map((/** @type {any} */ one) => one.already),
+    [
+      [{ scope: 'local', name: 'api-review', adding: true }],
+      undefined,
+      [{ scope: 'local', name: 'perf', adding: true }],
+    ],
+  )
   assert.deepEqual(
     done.settings.cleanings
       .map((/** @type {any} */ one) => [one.name, one.state, one.waiting, one.from])

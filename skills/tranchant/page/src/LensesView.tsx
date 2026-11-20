@@ -290,25 +290,12 @@ export function LensesView({
           </div>
         )}
         {cleanings.length > 0 && (
-          <div className="tr-lns-group">
-            <div className="tr-lns-group-head">
-              <strong id="tr-lns-adding">Lenses being added</strong>
-              <span className="tr-muted" role="status">
-                {batchLine(cleanings)}
-              </span>
-            </div>
-            <ul className="tr-lns-list" aria-labelledby="tr-lns-adding">
-              {cleanings.map((one) => (
-                <CleaningCard
-                  key={one.id}
-                  one={one}
-                  frozen={frozen}
-                  cap={values.maxReviewAgents}
-                  onLens={onLens}
-                />
-              ))}
-            </ul>
-          </div>
+          <BeingAdded
+            cleanings={cleanings}
+            frozen={frozen}
+            cap={values.maxReviewAgents}
+            onLens={onLens}
+          />
         )}
         {groups.map((group) => {
           const lenses = lensSet.lenses.filter((lens) => lens.scope === group.scope)
@@ -556,6 +543,78 @@ function addsOne(lenses: LensEntry[], scope: Added, name: string) {
   const shadowed =
     scope === 'global' && named.some((lens) => lens.scope === 'local' && lens.on)
   return !shadowed && !named.some((lens) => lens.runs)
+}
+
+/**
+ * The lenses being added. Several at once: a bar of how many are cleaned,
+ * the ones still waiting or cleaning folded behind Show the details; those
+ * to check and those that failed stay listed, each waits for the person.
+ */
+function BeingAdded({
+  cleanings,
+  frozen,
+  cap,
+  onLens,
+}: {
+  cleanings: CleaningEntry[]
+  frozen: boolean
+  cap: number
+  onLens: Props['onLens']
+}) {
+  const [details, setDetails] = useState(false)
+  const many = cleanings.length > 1
+  const busy = cleanings.filter((one) => one.state === 'cleaning')
+  const done = cleanings.length - busy.length
+  const shown =
+    many && !details ? cleanings.filter((one) => one.state !== 'cleaning') : cleanings
+  return (
+    <div className="tr-lns-group">
+      <div className="tr-lns-group-head">
+        <strong id="tr-lns-adding">Lenses being added</strong>
+        <span className="tr-muted" role="status">
+          {batchLine(cleanings)}
+        </span>
+      </div>
+      {many && busy.length > 0 && (
+        <div className="tr-lns-batch">
+          <span
+            className="tr-progress-bar"
+            role="progressbar"
+            aria-label="Lenses cleaned"
+            aria-valuemin={0}
+            aria-valuemax={cleanings.length}
+            aria-valuenow={done}
+          >
+            <span style={{ width: `${Math.round((done / cleanings.length) * 100)}%` }} />
+          </span>
+          <span>
+            {done} of {cleanings.length} cleaned
+          </span>
+          <button
+            type="button"
+            className="tr-btn tr-btn--link"
+            aria-expanded={details}
+            onClick={() => setDetails(!details)}
+          >
+            {details ? 'Hide the details' : 'Show the details'}
+          </button>
+        </div>
+      )}
+      {shown.length > 0 && (
+        <ul className="tr-lns-list" aria-labelledby="tr-lns-adding">
+          {shown.map((one) => (
+            <CleaningCard
+              key={one.id}
+              one={one}
+              frozen={frozen}
+              cap={cap}
+              onLens={onLens}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 /** The batch being added, in a line: its glob, then how many stand where. */

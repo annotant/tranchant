@@ -706,7 +706,7 @@ const card = (id: string, name: string, more: Partial<CleaningEntry>): CleaningE
   ...more,
 })
 
-test('a batch being added counts its cards; one waiting for an agent says so and can be discarded', () => {
+test('a batch being added shows a bar of how many are cleaned; the ones at work fold behind Show the details, those to check or failed stay listed', () => {
   const { onLens } = renderLenses([
     { ...READY, from: '.claude/agents/*-review.md' },
     card('c-2', 'i18n-review', {}),
@@ -718,6 +718,19 @@ test('a batch being added counts its cards; one waiting for an agent says so and
       '4 from .claude/agents/*-review.md · 1 to check, 1 cleaning, 1 waiting, 1 failed',
     ),
   ).toBeDefined()
+  expect(
+    screen
+      .getByRole('progressbar', { name: 'Lenses cleaned' })
+      .getAttribute('aria-valuenow'),
+  ).toBe('2')
+  expect(screen.getByText('2 of 4 cleaned')).toBeDefined()
+  const folded = within(screen.getByRole('list', { name: 'Lenses being added' }))
+  // Folded: the one to check and the failed one, nothing at work.
+  expect(folded.getByText('money')).toBeDefined()
+  expect(folded.getByText('perf-review')).toBeDefined()
+  expect(folded.queryByText('security-review')).toBeNull()
+  expect(folded.queryByRole('img', { name: 'being cleaned' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Show the details' }))
   const adding = within(screen.getByRole('list', { name: 'Lenses being added' }))
   expect(adding.getByText('waits for a cleaning agent: 3 at a time')).toBeDefined()
   expect(adding.getAllByRole('img', { name: 'being cleaned' })).toHaveLength(1)
@@ -746,6 +759,65 @@ test('the matches the server refused are said once the others are under way', as
     expect(screen.getByText(/: no such file/)).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: 'dismiss' }))
     expect(screen.queryByText('One match was not added:')).toBeNull()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('one lens being added shows its card, no bar', () => {
+  renderLenses([card('c-2', 'i18n-review', { waiting: true })])
+  expect(screen.queryByRole('progressbar')).toBeNull()
+  expect(screen.getByText('waits for a cleaning agent: 3 at a time')).toBeDefined()
+})
+
+test('a match whose file is a lens already, or being added, starts unchecked; under the same name it blocks', async () => {
+  stubMatches({
+    matches: [
+      {
+        source: '.claude/agents/abac-review.md',
+        name: 'abac',
+        already: [{ scope: 'local', name: 'abac' }],
+      },
+      {
+        source: '.claude/agents/money-review.md',
+        name: 'money-review',
+        already: [{ scope: 'local', name: 'money', adding: true }],
+      },
+      { source: '.claude/agents/i18n-review.md', name: 'i18n-review' },
+    ],
+  })
+  try {
+    renderLenses()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+    fireEvent.change(form.getByLabelText('Source'), {
+      target: { value: '.claude/agents/*-review.md' },
+    })
+    const list = within(await screen.findByRole('list', { name: 'Matches' }))
+    expect(form.getByText('1 checked')).toBeDefined()
+    expect(list.getByText('added already')).toBeDefined()
+    expect(
+      list.getByText(
+        "This file is this project's abac already: uncheck it, or rename this one to add it twice.",
+      ),
+    ).toBeDefined()
+    expect(list.getByText('being added')).toBeDefined()
+    expect(
+      list.getByText(
+        "This file is being added as this project's money: checked, it is added once more.",
+      ),
+    ).toBeDefined()
+    // Checked, the money one is added once more; the abac one blocks under its own name.
+    fireEvent.click(list.getByLabelText('.claude/agents/money-review.md'))
+    expect(form.getByRole('button', { name: 'Add the 2 lenses' })).toHaveProperty(
+      'disabled',
+      false,
+    )
+    fireEvent.click(list.getByLabelText('.claude/agents/abac-review.md'))
+    expect(form.getByRole('button', { name: 'Add the 3 lenses' })).toHaveProperty(
+      'disabled',
+      true,
+    )
   } finally {
     vi.unstubAllGlobals()
   }
