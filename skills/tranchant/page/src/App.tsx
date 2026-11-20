@@ -183,6 +183,11 @@ function Header({
               review refused
             </span>
           )}
+          {(review.group ?? lenses?.group) && (
+            <span className="tr-chip" title="The group of lenses this review runs">
+              group {review.group ?? lenses?.group}
+            </span>
+          )}
           {/* While they build, or refused, the page's center shows them. */}
           {lenses && review.status !== 'preparing' && review.status !== 'refused' && (
             <LensesControl step={lenses} />
@@ -665,8 +670,11 @@ export default function App() {
             choices={startChoices}
             cap={values?.maxReviewAgents}
             model={values?.reviewModel}
+            groups={settings.payload?.groups}
             onChoices={setChoices}
-            onStart={(build) => postStart(startChoices, build).then(() => undefined)}
+            onStart={(build, next) =>
+              postStart(next ?? startChoices, build).then(() => undefined)
+            }
           />
         ) : (
           <LensesCenter step={payload?.lenses} review={review} />
@@ -745,6 +753,10 @@ export default function App() {
         findings={review?.findings ?? []}
         verify={review?.verify === true}
         project={review?.project ?? ''}
+        lensGroup={review?.group}
+        others={(settings.payload?.groups?.list ?? [])
+          .map((group) => group.name)
+          .filter((name) => name !== review?.group)}
         onOpen={open}
       />
       <Summary

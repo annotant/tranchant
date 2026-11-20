@@ -11,7 +11,8 @@ import { lensSet } from './userlens.mjs'
 /**
  * A lens of the plan: its spec, the changed files it reads (`files`, their
  * count) and, among a waiting review's `others`, why it does not run: `off`
- * in the settings, or no changed file in its paths (`files: 0`).
+ * in the settings (in a group's review, not one of the group), or no changed
+ * file in its paths (`files: 0`).
  * @typedef {LensSpec & { files?: number, off?: true }} PlannedLens
  */
 
@@ -39,6 +40,8 @@ function firstWords(error) {
  * not, off in the settings or reading none of its files, for the page to
  * turn on. `own`: the run's own recipe, which runs whole, no lens added and
  * none turned off. `problems` are the added lenses that cannot be read.
+ * `group`: a group's lenses, which run whatever their switches, and none
+ * other; `missing`, those of them that are not among the lenses any more.
  * @param {object} options
  * @param {string} options.project
  * @param {string} options.range
@@ -46,8 +49,17 @@ function firstWords(error) {
  * @param {boolean} options.own
  * @param {{ disabledLenses: string[], lensModels: Record<string, string> }} options.values
  * @param {boolean} [options.all]
+ * @param {import('./groups.mjs').Member[]} [options.group]
  */
-export async function planLenses({ project, range, recipe, own, values, all = false }) {
+export async function planLenses({
+  project,
+  range,
+  recipe,
+  own,
+  values,
+  all = false,
+  group,
+}) {
   /** The changed files that match `paths`, git's `:(glob)` pathspecs. @param {string[]} paths */
   const touched = async (paths) => {
     try {
@@ -76,7 +88,17 @@ export async function planLenses({ project, range, recipe, own, values, all = fa
         recipe,
         disabled: new Set(values.disabledLenses),
         models: values.lensModels,
+        ...(group && { members: group }),
       })
+  const missing =
+    set && group
+      ? group.filter(
+          (one) =>
+            !set.some(
+              (candidate) => candidate.scope === one.scope && candidate.name === one.name,
+            ),
+        )
+      : []
   const problems = (set ?? []).flatMap((one) =>
     one.problem ? [{ name: one.name, scope: one.scope, problem: one.problem }] : [],
   )
@@ -139,5 +161,5 @@ export async function planLenses({ project, range, recipe, own, values, all = fa
       })
     }
   }
-  return { changed, applied, others, inForce: inForce.length, problems }
+  return { changed, applied, others, inForce: inForce.length, problems, missing }
 }

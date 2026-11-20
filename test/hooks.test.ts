@@ -1941,3 +1941,23 @@ test('a discussing agent that cannot start answers its question as failed', asyn
   )
   await w.exit(0)
 })
+
+test('review --group passes the group to prepare.mjs; with --recipe, or with no name, it is refused', async ($, on) => {
+  const w = world(on)
+  await review($, w, 'review feature/cart-discounts --group frontend --no-start')
+  expect(w.prepared).toEqual([
+    {
+      argv: ['feature/cart-discounts', '--group', 'frontend', '--no-start'],
+      cwd: ROOT,
+    },
+  ])
+  for (const args of [
+    'review --group frontend --recipe my.json',
+    'review --group',
+    'review --group --no-start',
+  ]) {
+    const answer = await $.command.run(command(args))
+    expect(answer.text).toMatch(/^Usage: \/tranchant review .*--group <name>/)
+  }
+  expect(w.prepared).toHaveLength(1)
+})

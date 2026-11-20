@@ -270,7 +270,16 @@ export function useAccount(wanted: boolean, tool?: 'glab' | 'gh') {
 const fetchSettings = () => request<SettingsPayload>(SETTINGS)
 
 /** The changes to the lenses the server takes, by route. */
-export type LensRoute = 'import' | 'add' | 'discard' | 'save' | 'remove' | 'clean'
+export type LensRoute =
+  | 'import'
+  | 'add'
+  | 'discard'
+  | 'save'
+  | 'remove'
+  | 'clean'
+  | 'group/save'
+  | 'group/remove'
+  | 'group/default'
 
 /** What a source is, from where it lies: a command is never a lens. */
 type LensKind = 'agent' | 'skill' | 'command'
@@ -394,6 +403,10 @@ export interface LensDone {
   cleaning?: string
   cleanings?: string[]
   refused?: { source: string; reason: string }[]
+  /** A lens removed: the groups it left. */
+  removedFrom?: string[]
+  /** The lens changed, but its groups could not follow: why. */
+  groupsProblem?: string
 }
 
 /** The prompt a lens's reviewer reads, built as a review builds it. */

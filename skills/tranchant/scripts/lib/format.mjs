@@ -267,6 +267,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Record<string, number>} [sources]
  * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.
  * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
+ * @property {string} [group] The group of lenses `/tranchant review` ran, when it ran one.
  * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
  * @property {Finding[]} findings At least one, unless the review is not `complete`.
  */
@@ -892,6 +893,11 @@ export function validateEnvelope(review) {
     problems.push('lenses: an array of { name, source, version?, hash }')
   }
   if (
+    review.group !== undefined &&
+    (typeof review.group !== 'string' || !LENS_NAME.test(review.group))
+  )
+    problems.push('group: a group name, letters, digits, - and _')
+  if (
     review.refusal !== undefined &&
     (!isObject(review.refusal) ||
       !isText(review.refusal.lens, 100) ||
@@ -1015,13 +1021,14 @@ export function envelopeOf(review) {
  * What tells a review from another with the same id, as JSON: its envelope,
  * status, `verify` and what its Lenses step recorded left out. A review that
  * grew, or completed, is still the same one, opened again without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, refusal?: unknown }} review
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, refusal?: unknown }} review
  */
 export function identityOf(review) {
   const {
     status: _status,
     verify: _verify,
     lenses: _lenses,
+    group: _group,
     refusal: _refusal,
     ...identity
   } = envelopeOf(review)

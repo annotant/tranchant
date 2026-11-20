@@ -7,6 +7,7 @@ import {
   type StartChoices,
 } from './domain'
 import { lensHref, MANY_LENSES } from './LensesView'
+import type { GroupsPayload } from './settings'
 
 const CHANGE_WORDS: Record<NonNullable<LensRow['change']>, string> = {
   unchanged: 'unchanged',
@@ -168,7 +169,8 @@ export function LensesCenter({
   return (
     <main className="tr-lenses-center" aria-label="Lenses">
       <span className="tr-spinner tr-spinner--big" aria-hidden="true" />
-      <h2>Building the lenses</h2>
+      <h2>Building the lenses{step?.group && ` of group ${step.group}`}</h2>
+      <GroupNotes notes={step?.notes} />
       {building.length > 0 && (
         <>
           <span
@@ -298,6 +300,18 @@ export function LensesControl({ step }: { step: LensesProgress }) {
   )
 }
 
+/** What a group's review says of its lenses that do not run: removed, or gone. */
+function GroupNotes({ notes }: { notes: string[] | undefined }) {
+  if (!notes?.length) return null
+  return (
+    <div className="tr-notice" role="status">
+      {notes.map((note) => (
+        <p key={note}>{note}.</p>
+      ))}
+    </div>
+  )
+}
+
 /** On for this review: the page's choice, else what the settings say. */
 const isOn = (row: LensRow, choices: StartChoices) =>
   Object.hasOwn(choices.lenses, row.name) ? choices.lenses[row.name] === true : !row.off
@@ -309,14 +323,23 @@ function readyWords(
   flipped: boolean,
   choices: StartChoices,
   changed: number,
+  group: string | undefined,
 ) {
-  const saved = choices.remember ? 'saved on Start' : undefined
+  const saved = choices.remember
+    ? group
+      ? on
+        ? `joins ${group} on Start`
+        : `removed from ${group} on Start`
+      : 'saved on Start'
+    : undefined
   if (!on) {
     const off = flipped
       ? saved
         ? `off · ${saved}`
         : 'off for this review'
-      : 'off in your settings'
+      : group
+        ? `not in ${group}`
+        : 'off in your settings'
     return row.state === 'failed' ? `${off} · it cannot be built` : off
   }
   if (row.state === 'failed') return 'failed'
@@ -334,7 +357,8 @@ function readyWords(
         : row.cleaning === 'held'
           ? 'ready · its last version runs'
           : 'ready'
-  return `${lead} · ${reads}`
+  const inGroup = row.offInSettings ? ' · off in your settings, on in this group' : ''
+  return `${lead} · ${reads}${inGroup}`
 }
 
 /**
@@ -349,6 +373,7 @@ export function ReadyCenter({
   choices,
   cap,
   model,
+  groups,
   onChoices,
   onStart,
 }: {
@@ -358,14 +383,25 @@ export function ReadyCenter({
   /** Review agents at a time, and their model: the settings'. */
   cap: number | undefined
   model: string | null | undefined
+  /** The project's groups: the Group select. */
+  groups?: GroupsPayload | undefined
   onChoices: (next: StartChoices) => void
-  /** Start the review, or (`build`) build the lenses again, waiting still; throws the server's refusal. */
-  onStart: (build: boolean) => Promise<void>
+  /**
+   * Start the review, or (`build`) build the lenses again, waiting still,
+   * with `next` when the choices just changed; throws the server's refusal.
+   */
+  onStart: (build: boolean, next?: StartChoices) => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const rows = step.lenses
   const changed = step.changed ?? 0
+  const group = step.group
+  // The group picked: its lenses are built before the rows follow it.
+  const picked = choices.group !== undefined ? (choices.group ?? undefined) : group
+  const pending = picked !== group
+  const groupNames = groups?.list.map((one) => one.name) ?? []
+  const hasGroups = !step.own && (groupNames.length > 0 || group !== undefined)
   const on = (row: LensRow) => isOn(row, choices)
   const flipped = (row: LensRow) => on(row) !== !row.off
   const running = rows.filter((row) => on(row) && (row.files ?? 0) > 0)
@@ -373,7 +409,7 @@ export function ReadyCenter({
   const off = rows.filter((row) => !on(row))
   const blocking = rows.filter((row) => on(row) && row.state === 'failed')
   const changes = rows.filter(flipped).length
-  const canStart = !busy && !blocking.length && running.length > 0
+  const canStart = !busy && !pending && !blocking.length && running.length > 0
   const toggle = (row: LensRow) => {
     const { [row.name]: _was, ...rest } = choices.lenses
     const next = !on(row)
@@ -383,10 +419,11 @@ export function ReadyCenter({
       lenses: next === !row.off ? rest : { ...rest, [row.name]: next },
     })
   }
-  const act = (build: boolean) => {
+  const act = (build: boolean, next?: StartChoices) => {
     setBusy(true)
     setError(undefined)
-    onStart(build)
+    const asked = next ? onStart(build, next) : onStart(build)
+    asked
       .catch((refusal: unknown) =>
         setError(
           refusal instanceof Error ? refusal.message : 'The server did not answer.',
@@ -408,8 +445,10 @@ export function ReadyCenter({
           {step.wait === 'flag'
             ? 'This run was opened with --no-start'
             : 'Start the review by itself is off in Settings'}
-          : the lenses are built, and no reviewer runs until you start it. Turn off the
-          lenses this change does not need.
+          : the lenses are built, and no reviewer runs until you start it.{' '}
+          {hasGroups
+            ? 'Pick the group this change needs, or turn off a lens for this review.'
+            : 'Turn off the lenses this change does not need.'}
         </p>
       </div>
       <dl className="tr-ready-facts">
@@ -421,6 +460,51 @@ export function ReadyCenter({
           · {review.ownership === 'ours' ? 'your branch' : 'their branch'} ·{' '}
           {plural(changed, 'file')} changed
         </dd>
+        {hasGroups && (
+          <>
+            <dt>
+              <label htmlFor="tr-ready-group">Group</label>
+            </dt>
+            <dd className="tr-grp-select">
+              <select
+                id="tr-ready-group"
+                className="tr-input tr-select"
+                value={picked ?? ''}
+                disabled={busy}
+                onChange={(event) => {
+                  const next: StartChoices = {
+                    lenses: {},
+                    remember: false,
+                    group: event.currentTarget.value || null,
+                  }
+                  onChoices(next)
+                  act(true, next)
+                }}
+              >
+                <option value="">Every lens that is on</option>
+                {groupNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name} ·{' '}
+                    {plural(
+                      groups?.list.find((one) => one.name === name)?.lenses.length ?? 0,
+                      'lens',
+                    )}
+                  </option>
+                ))}
+                {group && !groupNames.includes(group) && (
+                  <option value={group}>{group}</option>
+                )}
+              </select>
+              <span className="tr-muted">
+                {pending && step.problem
+                  ? 'This group could not be planned (above): pick another.'
+                  : pending
+                    ? 'Building the lenses of this group…'
+                    : 'Changed here, the lenses below follow, for this review only.'}
+              </span>
+            </dd>
+          </>
+        )}
         <dt>Lenses</dt>
         <dd>
           {running.length} run on this change
@@ -457,6 +541,7 @@ export function ReadyCenter({
           Not started: {error}
         </p>
       )}
+      <GroupNotes notes={step.notes} />
       {step.problem && (
         <p className="tr-notice" role="alert">
           The lenses were not planned again, the last plan stands: {step.problem}
@@ -464,7 +549,11 @@ export function ReadyCenter({
       )}
       <ul
         className="tr-lens-rows tr-lens-rows--switches"
-        aria-label="The lenses, one per row: turn one off for this review"
+        aria-label={
+          group
+            ? `The lenses of ${group}, one per row: turn one off for this review`
+            : 'The lenses, one per row: turn one off for this review'
+        }
       >
         {rows.map((row) => {
           const lit = on(row)
@@ -494,7 +583,7 @@ export function ReadyCenter({
               <span
                 className={`tr-lens-row-state${moved || row.cleaning ? ' tr-lens-row-state--updated' : ''}`}
               >
-                {readyWords(row, lit, moved, choices, changed)}
+                {readyWords(row, lit, moved, choices, changed, group)}
               </span>
               {lit && row.state === 'failed' && row.reason && (
                 <p className="tr-lens-row-reason">{row.reason}</p>
@@ -520,14 +609,22 @@ export function ReadyCenter({
               disabled={busy}
               onChange={() => onChoices({ ...choices, remember: !choices.remember })}
             />
-            Remember these choices
+            {group
+              ? `Save these switches in the group ${group}`
+              : 'Remember these choices'}
           </label>
           <span className="tr-field-help">
-            {changes === 0
-              ? 'Each switch acts on this review only, unless you check this: then Start saves them as Settings › Lenses does, outside the repository.'
-              : choices.remember
-                ? `On Start, your ${plural(changes, 'change')} ${changes === 1 ? 'is' : 'are'} saved as Settings › Lenses saves ${changes === 1 ? 'it' : 'them'}, outside the repository: the next review runs the same lenses.`
-                : `${plural(changes, 'change')} for this review only: the next one runs the lenses as your settings say.`}
+            {group
+              ? changes === 0
+                ? `Each switch acts on this review only, unless you check this: then Start removes the lenses turned off from ${group}, and adds those turned on.`
+                : choices.remember
+                  ? `On Start, ${plural(changes, 'change')} ${changes === 1 ? 'is' : 'are'} saved in ${group}: its next review runs the same lenses.`
+                  : `${plural(changes, 'change')} for this review only: ${group} keeps its lenses.`
+              : changes === 0
+                ? 'Each switch acts on this review only, unless you check this: then Start saves them as Settings › Lenses does, outside the repository.'
+                : choices.remember
+                  ? `On Start, your ${plural(changes, 'change')} ${changes === 1 ? 'is' : 'are'} saved as Settings › Lenses saves ${changes === 1 ? 'it' : 'them'}, outside the repository: the next review runs the same lenses.`
+                  : `${plural(changes, 'change')} for this review only: the next one runs the lenses as your settings say.`}
           </span>
         </div>
       )}
@@ -553,15 +650,22 @@ export function ReadyCenter({
         <span className="tr-muted">
           {busy
             ? 'Asking the server…'
-            : blocking.length
-              ? `Turn ${names(blocking)} off above, or fix ${blocking.length > 1 ? 'them' : 'it'} and build again.`
-              : running.length
-                ? `${plural(running.length, 'reviewer')} start${running.length === 1 ? 's' : ''}${at}.`
-                : 'No lens that is on reads the change: turn one on to start.'}
+            : pending
+              ? 'The lenses of the group picked are being built.'
+              : blocking.length
+                ? `Turn ${names(blocking)} off above, or fix ${blocking.length > 1 ? 'them' : 'it'} and build again.`
+                : running.length
+                  ? `${plural(running.length, 'reviewer')}${group ? ` of ${group}` : ''} start${running.length === 1 ? 's' : ''}${at}.`
+                  : 'No lens that is on reads the change: turn one on to start.'}
         </span>
         <a className="tr-btn tr-btn--link tr-ready-change" href="#settings/lenses">
           Change the lenses
         </a>
+        {hasGroups && (
+          <a className="tr-btn tr-btn--link" href="#settings/lenses/groups">
+            Change the groups
+          </a>
+        )}
       </div>
       <p className="tr-field-help">
         Back from Settings › Lenses, the lenses are built again before you start, as the

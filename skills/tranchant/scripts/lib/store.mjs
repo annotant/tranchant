@@ -666,16 +666,24 @@ export function createStore(dir) {
 
     /**
      * The Lenses step built every lens: the review runs, `reviewing`, and
-     * records the lenses it runs. Refused unless it is `preparing`.
+     * records the lenses it runs, and the group they are, when one is.
+     * Refused unless it is `preparing`.
      * @param {import('./format.mjs').LensRecord[]} lenses
+     * @param {string} [group]
      * @returns {Promise<void>}
      */
-    prepared(lenses) {
+    prepared(lenses, group) {
       return withFileLock(reviewFile, async () => {
         const envelope = await readEnvelope()
         if (statusOf(envelope) !== 'preparing')
           throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
-        await writeChecked({ ...envelope, status: 'reviewing', lenses })
+        const { group: _was, ...rest } = envelope
+        await writeChecked({
+          ...rest,
+          status: 'reviewing',
+          lenses,
+          ...(group && { group }),
+        })
       })
     },
 
