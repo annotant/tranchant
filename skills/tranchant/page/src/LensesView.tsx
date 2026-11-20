@@ -55,6 +55,10 @@ const globsOf = (text: string) =>
 const plural = (count: number, one: string, many: string) =>
   `${count} ${count === 1 ? one : many}`
 
+/** Settings › Lenses with this lens's editor open: the key LensesView gives it. */
+export const lensHref = (row: { name: string; scope?: LensScope | undefined }) =>
+  `#settings/lenses/${encodeURIComponent(`${row.scope ?? 'recipe'}:${row.name}`)}`
+
 /** Past this many lenses that run, the page warns of their cost: no cap, a warning. */
 export const MANY_LENSES = 12
 
@@ -112,7 +116,7 @@ export function LensesView({
 }: Props) {
   const [adding, setAdding] = useState(false)
   const [open, setOpen] = useState(focus)
-  // The lens the link names, followed when it is renamed: else it reads as one removed.
+  // The lens the link names, followed when it is renamed or moved: else it reads as one removed.
   const [pointed, setPointed] = useState(focus)
   const listed = settings?.lensSet !== undefined
   // Once the lenses are listed: on a page opened at the link, they load after the mount.
@@ -270,15 +274,15 @@ export function LensesView({
                         recleaning={recleaning.has(key)}
                         open={open === key}
                         onOpen={() => setOpen(open === key ? undefined : key)}
-                        onMoved={(next) => {
-                          setOpen(next)
+                        onMoved={(to) => {
+                          const next = `${to.scope}:${to.name}`
+                          // The save answers late: another lens opened since stays open.
+                          setOpen((now) => (now === key ? next : now))
                           if (pointed !== key) return
                           setPointed(next)
-                          history.replaceState(
-                            null,
-                            '',
-                            `#settings/lenses/${encodeURIComponent(next)}`,
-                          )
+                          // A page left since keeps its own link.
+                          if (location.hash === lensHref(lens))
+                            history.replaceState(null, '', lensHref(to))
                         }}
                         onSwitch={(on) =>
                           lens.scope === 'recipe'
@@ -860,8 +864,8 @@ function LensRow({
   recleaning: boolean
   open: boolean
   onOpen: () => void
-  /** Its save renamed or moved it: its key, `<scope>:<name>`, is now `next`. */
-  onMoved: (next: string) => void
+  /** Its save renamed it or moved it to another scope. */
+  onMoved: (to: { scope: Added; name: string }) => void
   onSwitch: (on: boolean) => void
   onRecipeModel: (model: string | null) => void
   onLens: Props['onLens']
@@ -871,7 +875,7 @@ function LensRow({
   const state = recleaning
     ? { text: 'being cleaned again…', tone: 'accent' }
     : standing(lens)
-  // The name typed in its open editor, shown on the row before it is saved.
+  // Not saved yet: a closed editor, or a blank name, shows the saved one.
   const [draft, setDraft] = useState<string>()
   const name = (open && draft?.trim()) || lens.name
   const id = `tr-lns-${lens.scope}-${lens.name}`
@@ -1084,7 +1088,7 @@ function AddedLens({
   onLens: Props['onLens']
   /** The name as it is typed, for the row to show it. */
   onName: (name: string) => void
-  onMoved: (next: string) => void
+  onMoved: (to: { scope: Added; name: string }) => void
 }) {
   const scope = lens.scope === 'global' ? 'global' : 'local'
   const [tab, setTab] = useState<'settings' | 'reads'>('settings')
@@ -1113,7 +1117,7 @@ function AddedLens({
           onSubmit={(event) => {
             event.preventDefault()
             const globs = globsOf(paths).length ? globsOf(paths) : ['**']
-            const renamed = `${where}:${name.trim()}`
+            const to = { scope: where, name: name.trim() }
             // Only what changed: a field left as it was never overwrites a newer cleaning's.
             void onLens('save', {
               ...target,
@@ -1134,7 +1138,7 @@ function AddedLens({
                 ...(rules !== (lens.rules ?? '') && { rules }),
               },
             }).then(
-              () => renamed !== `${scope}:${lens.name}` && onMoved(renamed),
+              () => (to.scope !== scope || to.name !== lens.name) && onMoved(to),
               () => undefined,
             )
           }}

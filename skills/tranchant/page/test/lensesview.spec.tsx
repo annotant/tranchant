@@ -241,7 +241,7 @@ const answered = (lenses: LensEntry[]) =>
 const field = (value: unknown, key: string): unknown =>
   typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
 
-/** The lenses as the server answers them, renamed and moved by each save. */
+/** The view over a fake server whose saves rename and move a lens; it refuses other routes and the name `refused`. */
 function renderSaving(focus?: string) {
   function Saving() {
     const [settings, setSettings] = useState(() => answered(LENSES))
@@ -317,6 +317,73 @@ test('the lens the page was opened at, renamed, is no lens gone: the link follow
     await screen.findByRole('region', { name: 'policies' })
     expect(screen.queryByRole('status')).toBeNull()
     expect(location.hash).toBe('#settings/lenses/local%3Apolicies')
+  } finally {
+    location.hash = ''
+  }
+})
+
+test('a save that keeps the name keeps the editor open; one that moves the lens alone follows it', async () => {
+  renderSaving()
+  fireEvent.click(group('This project').getByRole('button', { name: 'Edit' }))
+  const editor = screen.getByRole('region', { name: 'abac' })
+  fireEvent.change(within(editor).getByLabelText('Added instructions'), {
+    target: { value: '- Mine.' },
+  })
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))
+  await act(() => Promise.resolve())
+  expect(screen.getByRole('region', { name: 'abac' })).toBe(editor)
+  fireEvent.click(within(editor).getByRole('button', { name: 'Global' }))
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(
+      group('Global · every project').getAllByRole('button', { name: 'Close' }),
+    ).toHaveLength(1),
+  )
+  expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1)
+})
+
+/** The view over these lenses, its saves answered with nothing. */
+const quietView = (lenses: LensEntry[]) => (
+  <LensesView
+    settings={answered(lenses)}
+    offline={false}
+    onDismiss={() => undefined}
+    onSave={() => undefined}
+    onLens={() => Promise.resolve({})}
+  />
+)
+
+test('a lens cleaned again while it is renamed shows its saved name, as its form does', () => {
+  const { rerender } = render(quietView(LENSES))
+  fireEvent.click(group('This project').getByRole('button', { name: 'Edit' }))
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'policies' } })
+  expect(group('This project').getByText('policies')).toBeDefined()
+  rerender(
+    quietView(
+      LENSES.map((one) =>
+        one.name === 'abac'
+          ? { ...one, cleaned: { ...cleaned, at: '2026-11-19T00:00:00Z' } }
+          : one,
+      ),
+    ),
+  )
+  expect(group('This project').getByText('abac')).toBeDefined()
+  expect(screen.getByLabelText('Name')).toHaveProperty('value', 'abac')
+})
+
+test('another lens renamed leaves the link the page was opened at as it was', async () => {
+  location.hash = '#settings/lenses/local%3Aabac'
+  try {
+    renderSaving('local:abac')
+    fireEvent.click(group('Global · every project').getByRole('button', { name: 'Edit' }))
+    const editor = screen.getByRole('region', { name: 'bugs' })
+    fireEvent.change(within(editor).getByLabelText('Name'), {
+      target: { value: 'flaws' },
+    })
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }))
+    await screen.findByRole('region', { name: 'flaws' })
+    expect(location.hash).toBe('#settings/lenses/local%3Aabac')
+    expect(screen.queryByRole('status')).toBeNull()
   } finally {
     location.hash = ''
   }
