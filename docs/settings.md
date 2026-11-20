@@ -43,8 +43,10 @@ any repository, in one of two scopes:
 
 **Tranchant's configuration is never committed nor pushed.** Under a name,
 the first lens that is on runs: the project's, then a global one, then the
-recipe's (turned off by `disabledLenses`). 12 lenses per scope at most. A
-run with `--recipe` runs that recipe whole, no lens added.
+recipe's (turned off by `disabledLenses`). The number of lenses has no cap:
+past 12 that run on the project, Settings › Lenses warns that each one is one
+more reviewer agent on every review. A run with `--recipe` runs that recipe
+whole, no lens added, and is not warned.
 
 The folder holds `lens.md`, the lens's domain as the cleaning agent wrote it,
 and `lens.json`:
@@ -134,8 +136,8 @@ removed.
 | `maxFixAgents`    | integer, 1 to 8                   | The hooks, before each round of starts: the fixes waiting start up to it.                                                                                    |
 | `maxReviewAgents` | integer, 1 to 8                   | The hooks, for the reviewers, verifiers and discussing agents together.                                                                                      |
 | `recipe`          | an absolute path, or `~`, `~/…`   | `prepare.mjs`, when the run names no `--recipe` and the project has no local or project recipe: a regular JSON file under 1 MiB. The page shows the recipe in force, its lenses and their sources, or says why it cannot read it. |
-| `disabledLenses`  | up to 12 lens names, `[\w-]{1,40}` | `prepare.mjs`, when the run names no `--recipe` (a run's own recipe runs whole): a lens of the recipe named is not run, and no other lens takes its files. Every lens off refuses the review: `every lens is turned off…`. The page's Settings › Lenses switches it. |
-| `lensModels`      | up to 12 lens names, each with a model id | `prepare.mjs`, when the run names no `--recipe`: the model of a lens of the recipe's reviewer, over the recipe's own `model`. `TRANCHANT_MODEL` still wins. |
+| `disabledLenses`  | lens names, `[\w-]{1,40}` | `prepare.mjs`, when the run names no `--recipe` (a run's own recipe runs whole): a lens of the recipe named is not run, and no other lens takes its files. Every lens off refuses the review: `every lens is turned off…`. The page's Settings › Lenses switches it. |
+| `lensModels`      | lens names, each with a model id | `prepare.mjs`, when the run names no `--recipe`: the model of a lens of the recipe's reviewer, over the recipe's own `model`. `TRANCHANT_MODEL` still wins. |
 | `postWith`        | `auto`, `glab`, `gh`              | The server (`/api/tracker`, `/api/account`) and `issue.mjs`: `glab` or `gh` names the forge for a host neither tool recognises; on a host the other forge owns (`github.com` with `glab`) the tracker is refused, with the reason, so a token never goes to the wrong forge. `auto` reads the host, as before. MR comments always go through `glab`, whose account the batch bar names. |
 
 Options meant for tests and development stay environment variables:

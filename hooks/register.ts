@@ -269,7 +269,6 @@ function soundSettings(raw: unknown): raw is Record<string, unknown> {
     if (key === 'disabledLenses')
       return (
         Array.isArray(value) &&
-        value.length <= 12 &&
         value.every((one) => typeof one === 'string' && /^[\w-]{1,40}$/.test(one))
       )
     // Read by prepare.mjs alone: the lens's model reaches the hooks on its LENS line.
@@ -277,7 +276,6 @@ function soundSettings(raw: unknown): raw is Record<string, unknown> {
       return (
         typeof value === 'object' &&
         !Array.isArray(value) &&
-        Object.keys(value).length <= 12 &&
         Object.entries(value).every(
           ([lens, model]) =>
             /^[\w-]{1,40}$/.test(lens) &&

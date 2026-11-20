@@ -727,3 +727,25 @@ test('a lens turned off keeps its files from the otherwise lens; one otherwise l
     'opus',
   )
 })
+
+test('a scope holds more than 12 lenses, local or global: a 13th is added, a 14th moved, and all run', async (t) => {
+  const { dir } = await repository(t)
+  const source = '.claude/agents/money-review.md'
+  const local = Array.from({ length: 13 }, (_, i) => `mine${i}`)
+  const global = Array.from({ length: 13 }, (_, i) => `all${i}`)
+  t.after(() =>
+    lib(
+      `for (const name of ${JSON.stringify([...global, 'mine12'])}) await userlens.removeUserLens(${JSON.stringify(dir)}, 'global', name).catch(() => undefined)`,
+    ),
+  )
+  for (const name of local) await addLens(dir, [source, '--to', 'local', '--name', name])
+  for (const name of global)
+    await addLens(dir, [source, '--to', 'global', '--name', name])
+  await lib(
+    `await userlens.updateUserLens(${JSON.stringify(dir)}, 'local', 'mine12', { scope: 'global' })`,
+  )
+  const { plan } = await prepared(dir)
+  const planned = plan.lenses.map((/** @type {any} */ lens) => lens.name)
+  for (const name of [...local, ...global])
+    assert.ok(planned.includes(name), planned.join())
+})

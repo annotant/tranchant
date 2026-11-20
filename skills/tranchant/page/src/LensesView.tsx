@@ -55,6 +55,23 @@ const globsOf = (text: string) =>
 const plural = (count: number, one: string, many: string) =>
   `${count} ${count === 1 ? one : many}`
 
+/** Past this many lenses that run, the page warns of their cost: no cap, a warning. */
+const MANY_LENSES = 12
+
+/** Each lens that runs is one reviewer agent: said past MANY_LENSES. */
+function ManyLenses({ count, adding }: { count: number; adding?: boolean }) {
+  if (count <= MANY_LENSES) return null
+  return (
+    <p className="tr-notice" role="status">
+      {adding
+        ? `With this one, ${count} lenses are on for this project.`
+        : `${count} lenses are on for this project.`}{' '}
+      Each lens is one more reviewer agent on every review: more lenses use more tokens. A
+      lens turned off costs nothing.
+    </p>
+  )
+}
+
 /** What a lens's row says of it, in one line: where it runs, its topics, its model. */
 function facts(lens: LensEntry) {
   const on = lens.otherwise
@@ -206,6 +223,7 @@ export function LensesView({
           A lens of this project wins over a global one of the same name, which wins over
           the recipe&rsquo;s; turned off, the next one runs.
         </p>
+        {!adding && <ManyLenses count={runs} />}
         {settings.recipeProblem && (
           <p className="tr-recipe-problem">
             The recipe cannot be read: {settings.recipeProblem}
@@ -214,6 +232,7 @@ export function LensesView({
         {adding && (
           <AddLens
             frozen={frozen}
+            lenses={lensSet.lenses}
             builtIn={lensSet.lenses
               .filter((lens) => lens.scope === 'recipe')
               .map((lens) => lens.name)}
@@ -460,11 +479,14 @@ function ScopeSegment({
 /** Add a lens: its source, its name, where it lives, its context skill; then the cleaning agent. */
 function AddLens({
   frozen,
+  lenses,
   builtIn,
   onCancel,
   onImport,
 }: {
   frozen: boolean
+  /** The lenses as they stand, this one not among them. */
+  lenses: LensEntry[]
   builtIn: string[]
   onCancel: () => void
   onImport: (body: Record<string, unknown>) => Promise<unknown>
@@ -475,6 +497,13 @@ function AddLens({
   const [context, setContext] = useState('')
   const [busy, setBusy] = useState(false)
   const replaces = builtIn.includes(name.trim())
+  // The first lens that is on runs under a name: the project's, then a global one.
+  const named = lenses.filter((lens) => lens.name === name.trim())
+  const shadowed =
+    scope === 'global' && named.some((lens) => lens.scope === 'local' && lens.on)
+  const takesOver = named.some((lens) => lens.runs)
+  const runs = lenses.filter((lens) => lens.runs).length
+  const after = shadowed || takesOver ? runs : runs + 1
   return (
     <form
       className="tr-lns-add"
@@ -493,6 +522,7 @@ function AddLens({
       }}
     >
       <h3 id="tr-lns-add-title">Add a lens</h3>
+      <ManyLenses count={after} adding={after > runs} />
       <Field
         id="tr-lns-add-source"
         label="Source"

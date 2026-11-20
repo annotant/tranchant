@@ -671,8 +671,7 @@ A lens names one of `prompt`, `source`, or `use` with `add`. A glob is a git
 repository, with `**` crossing folders and `*` staying within a name. A lens
 runs once per review, when at least one changed file matches one of its
 globs; the lens with `otherwise` (one at most, no `paths`) runs when a
-changed file matches no other lens's globs, its `PATHS` those files. A
-recipe has 12 lenses at most, Tranchant's included when it `extends` them.
+changed file matches no other lens's globs, its `PATHS` those files.
 The agent's prompt gives `LENS`, `REVIEW`, `SKILL`, `PROJECT`, `BASE`,
 `HEAD`, `RANGE` (the git range of the change), `OWNERSHIP`, `PATHS` and,
 when the lens declares them, `TOPICS`; it adds its findings with

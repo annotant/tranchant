@@ -85,7 +85,6 @@ const CHOICES = /** @type {const} */ ({
 /** A model id or alias: `claude-opus-5-5`, `opus`, a Bedrock id with dots. */
 const MODEL = /^[\w.:-]{1,80}$/
 const LENS_NAME = /^[\w-]{1,40}$/
-const MAX_LENSES = 12
 const MAX_PATH = 1024
 
 /** @param {string} key @returns {key is keyof typeof CHOICES} */
@@ -98,7 +97,6 @@ const isCapKey = (key) => key === 'maxFixAgents' || key === 'maxReviewAgents'
 /** @param {unknown} value @returns {value is string[]} */
 const isLensNames = (value) =>
   Array.isArray(value) &&
-  value.length <= MAX_LENSES &&
   value.every((one) => typeof one === 'string' && LENS_NAME.test(one))
 
 /** `~` and `~/…` as the user's home: what a person types in the page. */
@@ -153,23 +151,18 @@ export function validateSettings(input) {
       settings.recipe = value.trim()
     } else if (key === 'disabledLenses') {
       if (!isLensNames(value))
-        throw new SettingsRefusal(
-          `disabledLenses: up to ${MAX_LENSES} lens names, letters, digits, - and _`,
-        )
+        throw new SettingsRefusal('disabledLenses: lens names, letters, digits, - and _')
       settings.disabledLenses = [...new Set(value)]
     } else if (key === 'lensModels') {
       if (
         typeof value !== 'object' ||
         Array.isArray(value) ||
-        Object.keys(value).length > MAX_LENSES ||
         !Object.entries(value).every(
           ([lens, model]) =>
             LENS_NAME.test(lens) && typeof model === 'string' && MODEL.test(model),
         )
       )
-        throw new SettingsRefusal(
-          `lensModels: up to ${MAX_LENSES} lens names, each with a model id`,
-        )
+        throw new SettingsRefusal('lensModels: lens names, each with a model id')
       if (Object.keys(value).length) settings.lensModels = { ...value }
     } else throw new SettingsRefusal(`${key}: not a setting`)
   }

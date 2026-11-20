@@ -58,8 +58,6 @@ import { SETTINGS_DIR, expandHome } from './settings.mjs'
 
 const LENS_VERSION = 1
 const MODEL = /^[\w.:-]{1,80}$/
-/** Lenses of a scope at most: each is one more agent on every review. */
-export const MAX_SCOPE_LENSES = 12
 const MAX_RULES = 8 * 1024
 const MAX_LIST = 20
 const MAX_TEXT = 500
@@ -310,7 +308,7 @@ export async function writeUserLens(
  * @param {string} project
  * @returns {Promise<Listed[]>}
  */
-export async function listUserLenses(scope, project) {
+async function listUserLenses(scope, project) {
   const root = scopeDir(scope, project)
   const names = (await readdir(root, { withFileTypes: true }).catch(() => []))
     .filter((entry) => entry.isDirectory() && LENS_NAME.test(entry.name))
@@ -434,10 +432,6 @@ export async function updateUserLens(project, scope, name, change) {
     refuse(
       `a lens named ${renamed} is ${to === 'global' ? 'global' : "this project's"} already`,
     )
-  if (target !== dir && to !== scope) {
-    const count = (await listUserLenses(to, project)).length
-    if (count >= MAX_SCOPE_LENSES) refuse(`${MAX_SCOPE_LENSES} lenses of a scope at most`)
-  }
   /** @type {any} */
   // A global lens runs from every project: its paths are recorded absolute.
   const next = {

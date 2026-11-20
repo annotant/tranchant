@@ -327,3 +327,53 @@ test('the page opened at a lens shows its editor and scrolls to it; another link
     location.hash = ''
   }
 })
+
+/** Fourteen lenses of the recipe, the last one replaced: thirteen run, less the one turned off. */
+const manyLenses = (off?: string): LensEntry[] =>
+  Array.from({ length: 14 }, (_, i) => ({
+    name: `l${i}`,
+    scope: 'recipe',
+    on: `l${i}` !== off,
+    runs: `l${i}` !== off && i !== 13,
+    source: `tranchant:l${i}`,
+    paths: ['**'],
+  }))
+const manyView = (set: LensEntry[]) => (
+  <LensesView
+    settings={settingsPayload(
+      {},
+      {
+        recipeFrom: 'plugin',
+        lensSet: { dirs: { global: '/g', local: '/l' }, lenses: set },
+      },
+    )}
+    offline={false}
+    onDismiss={() => undefined}
+    onSave={() => undefined}
+    onLens={() => Promise.resolve({})}
+  />
+)
+
+test('past 12 lenses that run, a warning says how many and that each costs tokens; one off removes it', () => {
+  const { rerender } = render(manyView(manyLenses()))
+  expect(screen.getByText(/^13 lenses are on for this project\./).textContent).toMatch(
+    /one more reviewer agent on every review: more lenses use more\s+tokens/,
+  )
+  rerender(manyView(manyLenses('l3')))
+  expect(screen.queryByText(/lenses are on for this project/)).toBeNull()
+  // Adding one takes the count back to 13: the form says so before it is added.
+  fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+  expect(screen.getByText(/^With this one, 13 lenses are on/)).toBeDefined()
+  // In place of one that runs, the count stays; of one turned off, it grows.
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'l0' } })
+  expect(screen.queryByText(/lenses are on for this project/)).toBeNull()
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'l3' } })
+  expect(screen.getByText(/^With this one, 13 lenses are on/)).toBeDefined()
+})
+
+test('while a lens is added past the warning, the form alone says the count', () => {
+  render(manyView(manyLenses()))
+  fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+  expect(screen.getAllByText(/lenses are on for this project/)).toHaveLength(1)
+  expect(screen.getByText(/^With this one, 14 lenses are on/)).toBeDefined()
+})

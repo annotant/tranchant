@@ -506,7 +506,7 @@ test('a project recipe the branch adds is not in force: the next one is', async 
   assert.equal(ref.from, 'plugin')
 })
 
-test("an add-on keeps its lens's paths; extends puts Tranchant's lenses first, 12 at most", async () => {
+test("an add-on keeps its lens's paths; extends puts Tranchant's lenses first, with no cap", async () => {
   const lenses = await expandRecipe({
     version: 1,
     extends: 'tranchant',
@@ -522,14 +522,14 @@ test("an add-on keeps its lens's paths; extends puts Tranchant's lenses first, 1
   assert.ok(security?.paths.includes('**/*.tsx'))
   assert.ok(!security?.paths.includes('**'))
   assert.equal(lenses[0]?.prompt, 'tranchant:correctness')
-  await assert.rejects(
-    expandRecipe({
-      version: 1,
-      extends: 'tranchant',
-      lenses: ['a', 'b', 'c'].map((name) => ({ name, source: './x.md' })),
-    }),
-    /12 lenses at most, the plugin's included/,
-  )
+  const many = await expandRecipe({
+    version: 1,
+    extends: 'tranchant',
+    lenses: ['a', 'b', 'c', 'd'].map((name) => ({ name, source: './x.md' })),
+  })
+  assert.equal(many.length, 14)
+  const own = Array.from({ length: 13 }, (_, i) => ({ name: `l${i}`, source: './x.md' }))
+  assert.equal((await expandRecipe({ version: 1, lenses: own })).length, 13)
 })
 
 test('the store moves a review out of preparing once, and a refused one nowhere', async (t) => {
