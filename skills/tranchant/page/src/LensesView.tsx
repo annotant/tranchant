@@ -22,6 +22,8 @@ interface Props {
   onSave: (change: SettingsChange) => void
   /** A change to the lenses the user added; rejects when the server refuses it. */
   onLens: (route: LensRoute, body: Record<string, unknown>) => Promise<unknown>
+  /** The lens whose editor opens first, `<scope>:<name>`: a link from a refused review. */
+  focus?: string | undefined
 }
 
 type Added = 'global' | 'local'
@@ -89,9 +91,19 @@ export function LensesView({
   onDismiss,
   onSave,
   onLens,
+  focus,
 }: Props) {
   const [adding, setAdding] = useState(false)
-  const [open, setOpen] = useState<string>()
+  const [open, setOpen] = useState(focus)
+  const listed = settings?.lensSet !== undefined
+  // Once the lenses are listed: on a page opened at the link, they load after the mount.
+  useEffect(() => {
+    const [scope, ...name] = (focus ?? '').split(':')
+    if (listed && name.length)
+      document
+        .getElementById(`tr-lns-${scope}-${name.join(':')}`)
+        ?.scrollIntoView?.({ block: 'center' })
+  }, [focus, listed])
   if (!settings?.lensSet)
     return (
       <main className="tr-settings tr-settings--wide" aria-labelledby="tr-lenses-title">
@@ -153,6 +165,13 @@ export function LensesView({
   return (
     <main className="tr-settings tr-settings--wide" aria-labelledby="tr-lenses-title">
       <Head />
+      {focus !== undefined &&
+        !lensSet.lenses.some((lens) => `${lens.scope}:${lens.name}` === focus) && (
+          <p className="tr-notice" role="status">
+            The lens {focus.slice(focus.indexOf(':') + 1)} is not among these: the review
+            ran another recipe, or the lens was removed since.
+          </p>
+        )}
       {settings.problem && (
         <p className="tr-notice" role="alert">
           The settings file cannot be read, so nothing is written until it is mended or

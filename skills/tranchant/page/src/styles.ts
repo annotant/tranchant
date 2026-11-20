@@ -230,6 +230,30 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-setting-help code { overflow-wrap: anywhere; }
 .tr-recipe-problem { color: var(--tr-danger); font-size: 12.5px; }
 .tr-lens-row-reason--warn { color: var(--tr-warn); }
+/* The scroll container is the full width: its padding centers an 860px column. */
+.tr-lenses-center { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 72px max(20px, calc((100% - 860px) / 2)) 48px; text-align: center; }
+.tr-lenses-center > * { flex: none; }
+.tr-lenses-center h2 { font-size: 18px; font-weight: 700; }
+.tr-lenses-center .tr-progress-bar { width: 280px; }
+.tr-lenses-center-line { max-width: 64ch; color: var(--tr-muted); font-size: 13.5px; }
+.tr-lenses-center .tr-lens-rows, .tr-lenses-center .tr-notice { width: 100%; text-align: left; }
+.tr-lenses-center .tr-notice { display: block; padding: 10px 14px; border: 1px solid var(--tr-warn); border-radius: var(--tr-radius); }
+.tr-lenses-center-icon { color: var(--tr-warn); }
+.tr-spinner--big { width: 28px; height: 28px; border-width: 3px; }
+/* The panel hangs from the meta row, not the chip: a chip far right would push it off the window. */
+.tr-header-meta { position: relative; }
+.tr-lenses-control { display: inline-flex; }
+button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; cursor: pointer; }
+.tr-chip:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: 2px; }
+.tr-chip--lenses { border-color: var(--tr-border); background: var(--tr-bg); color: var(--tr-text); }
+.tr-chip--lenses:hover, .tr-chip--lenses[aria-expanded="true"] { border-color: var(--tr-accent); color: var(--tr-accent); }
+.tr-chip--lenses-warn { border-color: var(--tr-warn); background: var(--tr-warn-bg); color: var(--tr-warn); }
+.tr-chip--lenses-warn:hover, .tr-chip--lenses-warn[aria-expanded="true"] { border-color: var(--tr-warn); color: var(--tr-warn); }
+.tr-lenses-pop { position: absolute; top: calc(100% + 8px); left: 0; z-index: 5; display: flex; flex-direction: column; gap: 10px; width: 780px; max-width: calc(100vw - 40px); max-height: calc(100vh - 140px); overflow: auto; padding: 12px; border: 1px solid var(--tr-border); border-radius: 10px; background: var(--tr-bg); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22); font-size: 13px; white-space: normal; }
+.tr-lenses-pop > * { flex: none; }
+.tr-lenses-pop-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.tr-lenses-pop-head .tr-btn--link { margin-left: auto; font-size: 13px; }
+.tr-lenses-pop-foot { display: flex; justify-content: flex-end; }
 .tr-settings--wide { max-width: 1100px; }
 .tr-lns { display: flex; flex-direction: column; gap: 14px; }
 .tr-lns-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
