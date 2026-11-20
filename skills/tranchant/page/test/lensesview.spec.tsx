@@ -79,6 +79,7 @@ function renderLenses(
   cleanings: CleaningEntry[] = [],
   stored: StoredSettings = {},
   focus?: string,
+  lenses: LensEntry[] = LENSES,
 ) {
   const settings = settingsPayload(stored, {
     recipeFrom: 'plugin',
@@ -87,7 +88,7 @@ function renderLenses(
         global: '/me/.config/tranchant/lenses',
         local: '/me/.config/tranchant/projects/3c1e/lenses',
       },
-      lenses: LENSES,
+      lenses,
     },
     cleanings,
   })
@@ -110,6 +111,55 @@ function renderLenses(
 }
 
 const group = (name: RegExp | string) => within(screen.getByRole('list', { name }))
+
+const recipeLens = (name: string, topics: string[]): LensEntry => ({
+  name,
+  scope: 'recipe',
+  on: true,
+  runs: true,
+  source: `tranchant:${name}`,
+  paths: ['**'],
+  topics,
+})
+
+const added = (
+  name: string,
+  scope: 'local' | 'global',
+  origin: Pick<LensEntry, 'origin' | 'sourceKind'>,
+  topics?: string[],
+): LensEntry => ({
+  name,
+  scope,
+  on: true,
+  runs: true,
+  source: `${name}.md`,
+  paths: ['**'],
+  ...origin,
+  ...(topics && { topics }),
+  rules: '',
+  cleaned,
+})
+
+const MANY: LensEntry[] = [
+  added('money', 'local', { origin: 'picked', sourceKind: 'agent' }, ['Bugs']),
+  added('checkout', 'local', { origin: 'custom' }, ['Tests']),
+  added('code-style', 'global', { origin: 'picked', sourceKind: 'skill' }, [
+    'Conventions',
+  ]),
+  added('anything', 'global', { origin: 'custom' }),
+  recipeLens('correctness', ['Bugs']),
+  recipeLens('conventions', ['Conventions']),
+  recipeLens('docs', ['Code Quality', 'Breaking Changes']),
+  recipeLens('tests', ['Tests']),
+]
+
+const filterBar = () => within(screen.getByRole('search', { name: 'Filter the lenses' }))
+const total = () => document.querySelector('.tr-lns-filter-total')?.textContent
+const rowNames = () =>
+  screen
+    .queryAllByRole('listitem')
+    .map((item) => item.querySelector('.tr-lns-name')?.textContent)
+    .filter(Boolean)
 
 test('the lenses show in three groups, each with its switch, its source and where it stands', () => {
   renderLenses()
@@ -1313,4 +1363,110 @@ test("Enter in the picker's search or Go to a folder never submits Add a lens; a
   } finally {
     vi.unstubAllGlobals()
   }
+})
+
+test('each row names where its lens comes from: built-in, picked up from an agent or a skill, or custom', () => {
+  renderLenses([], {}, undefined, MANY)
+  const local = group('This project')
+  expect(local.getByText('picked up · agent')).toBeDefined()
+  expect(local.getByText('custom · checklist')).toBeDefined()
+  expect(group('Global · every project').getByText('picked up · skill')).toBeDefined()
+  expect(group("Built-in · the plugin's").getAllByText('built-in')).toHaveLength(4)
+})
+
+test('with no filter set, the bar counts every lens and offers no clearing', () => {
+  renderLenses([], {}, undefined, MANY)
+  const bar = filterBar()
+  expect(total()).toBe('8 lenses')
+  expect(bar.queryByRole('button', { name: 'Clear the filters' })).toBeNull()
+  expect(bar.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe(
+    'true',
+  )
+  expect(rowNames()).toHaveLength(8)
+})
+
+test('typing part of a name shows only the lenses whose name contains it; a group with none hides', () => {
+  renderLenses([], {}, undefined, MANY)
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Filter by name' }), {
+    target: { value: 'CO' },
+  })
+  expect(rowNames()).toEqual(['code-style', 'correctness', 'conventions'])
+  expect(screen.queryByRole('list', { name: 'This project' })).toBeNull()
+  expect(total()).toBe('3 of 8 lenses')
+  const heads = [...document.querySelectorAll('.tr-lns-group-head')].map(
+    (head) => head.textContent,
+  )
+  expect(heads.some((head) => head.includes('This project'))).toBe(false)
+  expect(heads.find((head) => head.includes('Global'))).toContain('1 of 2')
+  expect(heads.find((head) => head.includes('Built-in'))).toContain('2 of 4')
+})
+
+test('built-in and a finding kind show only the built-in lenses filing under it; Clear the filters shows them all', () => {
+  renderLenses([], {}, undefined, MANY)
+  fireEvent.click(filterBar().getByRole('button', { name: 'Built-in' }))
+  fireEvent.change(filterBar().getByRole('combobox', { name: 'Finding kind' }), {
+    target: { value: 'Bugs' },
+  })
+  expect(rowNames()).toEqual(['correctness'])
+  expect(
+    filterBar().getByRole('button', { name: 'Built-in' }).getAttribute('aria-pressed'),
+  ).toBe('true')
+  expect(total()).toBe('1 of 8 lenses')
+  fireEvent.click(filterBar().getByRole('button', { name: 'Clear the filters' }))
+  expect(rowNames()).toHaveLength(8)
+  expect(filterBar().getByRole<HTMLSelectElement>('combobox').value).toBe('')
+})
+
+test('a finding kind keeps the lenses that declare no topic: they file under any', () => {
+  renderLenses([], {}, undefined, MANY)
+  fireEvent.click(filterBar().getByRole('button', { name: 'Custom' }))
+  fireEvent.change(filterBar().getByRole('combobox', { name: 'Finding kind' }), {
+    target: { value: 'Tests' },
+  })
+  expect(rowNames()).toEqual(['checkout', 'anything'])
+  fireEvent.click(filterBar().getByRole('button', { name: 'Picked up' }))
+  expect(rowNames()).toEqual([])
+})
+
+test('no lens matches: the filters are named, and Clear the filters brings the groups back', () => {
+  renderLenses([], {}, undefined, MANY)
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Filter by name' }), {
+    target: { value: 'money' },
+  })
+  fireEvent.click(filterBar().getByRole('button', { name: 'Built-in' }))
+  fireEvent.change(filterBar().getByRole('combobox', { name: 'Finding kind' }), {
+    target: { value: 'Tests' },
+  })
+  expect(rowNames()).toEqual([])
+  expect(document.querySelectorAll('.tr-lns-group')).toHaveLength(0)
+  const none = screen.getByText(/No lens matches/)
+  expect(none.textContent).toContain('No lens matches name “money” · built-in · Tests.')
+  fireEvent.click(within(none).getByRole('button', { name: 'Clear the filters' }))
+  expect(screen.queryByText(/No lens matches/)).toBeNull()
+  expect(rowNames()).toHaveLength(8)
+})
+
+test('the lens being edited stays shown while a filter would hide it, with what is typed in it', () => {
+  renderLenses([], {}, undefined, MANY)
+  fireEvent.click(
+    within(screen.getByRole('list', { name: 'This project' }))
+      .getAllByRole('button', { name: 'Edit' })
+      .at(0)!,
+  )
+  const rules = screen.getByLabelText('Added instructions')
+  fireEvent.change(rules, { target: { value: '- Cents only.' } })
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Filter by name' }), {
+    target: { value: 'docs' },
+  })
+  expect(rowNames()).toEqual(['money', 'docs'])
+  // Shown, not counted: one lens matches.
+  expect(total()).toBe('1 of 8 lenses')
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Filter by name' }), {
+    target: { value: 'zzz' },
+  })
+  expect(rowNames()).toEqual(['money'])
+  expect(screen.getByText(/No lens matches/)).toBeDefined()
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Added instructions').value).toBe(
+    '- Cents only.',
+  )
 })

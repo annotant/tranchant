@@ -20,11 +20,13 @@ import {
   checkRecipe,
   findRecipe,
   folderOf,
+  isPluginName,
   originOf,
   readRecipe,
   resolveSource,
 } from './lens.mjs'
 import { SETTINGS_DIR, expandHome } from './settings.mjs'
+import { kindOfPath } from './inside.mjs'
 
 /** @typedef {import('./lens.mjs').LensSpec} LensSpec */
 /** @typedef {'global' | 'local'} Scope */
@@ -625,12 +627,14 @@ export async function describeLenses({ project, base, values }) {
         const standing = lens ? staleness(lens, await hashesOf(lens, project)) : undefined
         return {
           ...row,
+          ...(spec.added && originOfSource(row.source, built.file)),
           ...(built.record.version && { version: built.record.version }),
           ...(standing && standing !== 'clean' && { stale: standing }),
         }
       } catch (error) {
         return {
           ...row,
+          ...(spec.added && originOfSource(row.source)),
           problem: reasonOf(error),
           ...(error instanceof LensRefusal && { fix: error.fix }),
         }
@@ -642,6 +646,27 @@ export async function describeLenses({ project, base, values }) {
     dirs: { global: scopeDir('global', project), local: scopeDir('local', project) },
     lenses,
   }
+}
+
+/**
+ * Where an added lens comes from: `picked` up from an agent, a skill or a
+ * command (`sourceKind`, what its path says it is), or `custom`, a file of
+ * none (a checklist). A plugin's source is always picked up.
+ * @param {string} label
+ * @param {string} [file] Its file, once found; absent, its label is read as a path.
+ * @returns {{ origin: 'picked' | 'custom', sourceKind?: import('./inside.mjs').Kind }}
+ */
+function originOfSource(label, file) {
+  const plugin = isPluginName(label)
+  const named = file ?? expandHome(label)
+  let kind = kindOfPath(named)
+  // A skill added by its folder, its source gone: the folder is all there is to read.
+  if (!kind && !plugin && !file && path.basename(path.dirname(named)) === 'skills')
+    kind = 'skill'
+  // A plugin's agent in a folder of its agents (plugin:folder:agent).
+  if (!kind && plugin && file && named.split(path.sep).includes('agents')) kind = 'agent'
+  if (kind) return { origin: 'picked', sourceKind: kind }
+  return { origin: plugin ? 'picked' : 'custom' }
 }
 
 /** How a lens names its source. @param {LensSpec} lens */

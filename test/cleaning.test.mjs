@@ -4,7 +4,7 @@
 // repository), prepare.mjs runs it beside the recipe's, and lenses.mjs finds
 // a lens whose source changed and runs its new version, or its last one.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import { SCRIPTS, run, tempDir } from './helpers.mjs'
@@ -332,6 +332,63 @@ test('an added lens lives outside the repository, local to its project or global
   assert.match(prompt, /a float on a money path is a finding/)
   assert.match(prompt, /## Added instructions[\s\S]*- My own rule\./)
   assert.doesNotMatch(prompt, /posted on the MR/)
+})
+
+test('each lens says where it comes from: built-in with its topics, picked up from an agent or a skill, or custom from a checklist', async (t) => {
+  const one = await repository(t)
+  await teamPlugin(t)
+  await writeFile(
+    path.join(one.dir, 'checkout.md'),
+    '- A total in floats is a finding.\n',
+  )
+  const skill = path.join(one.dir, '.claude', 'skills', 'i18n-review')
+  await mkdir(skill, { recursive: true })
+  await writeFile(path.join(skill, 'SKILL.md'), 'Every string goes through t().\n')
+  await addLens(one.dir, ['.claude/agents/money-review.md', '--to', 'local'])
+  await addLens(one.dir, ['checkout.md', '--to', 'local'])
+  await addLens(one.dir, ['.claude/skills/i18n-review', '--to', 'local'])
+  await addLens(one.dir, ['team:code-reviewer', '--to', 'local'])
+  await addLens(one.dir, ['team:release', '--to', 'local'])
+  const describe = async () =>
+    JSON.parse(
+      await lib(`import { DEFAULTS } from ${JSON.stringify(path.join(LIB, 'settings.mjs'))}
+const set = await userlens.describeLenses({ project: ${JSON.stringify(one.dir)}, base: 'main', values: DEFAULTS })
+console.log(JSON.stringify(set.lenses))`),
+    )
+  let described = await describe()
+  const find = (/** @type {string} */ scope, /** @type {string} */ name) =>
+    described.find(
+      (/** @type {any} */ lens) => lens.scope === scope && lens.name === name,
+    )
+  const origin = (/** @type {string} */ name) => {
+    const found = find('local', name)
+    return [found.origin, found.sourceKind, Boolean(found.problem)]
+  }
+  assert.deepEqual(origin('money'), ['picked', 'agent', false])
+  assert.deepEqual(origin('checkout'), ['custom', undefined, false])
+  assert.deepEqual(origin('i18n'), ['picked', 'skill', false])
+  assert.deepEqual(origin('code'), ['picked', 'agent', false])
+  assert.deepEqual(origin('release'), ['picked', 'skill', false])
+  // The recipe's lenses carry no origin of their own, and file under the topics their prompts name.
+  assert.equal(find('recipe', 'correctness').origin, undefined)
+  assert.deepEqual(find('recipe', 'correctness').topics, ['Bugs'])
+  assert.deepEqual(find('recipe', 'docs').topics, ['Code Quality', 'Breaking Changes'])
+  assert.ok(
+    described.every(
+      (/** @type {any} */ lens) => lens.scope !== 'recipe' || lens.topics?.length,
+    ),
+  )
+
+  // Their sources gone, a skill by its folder and a plugin's lens are still picked up.
+  await rm(skill, { recursive: true })
+  await writeFile(
+    path.join(claudeDir, 'plugins', 'installed_plugins.json'),
+    JSON.stringify({ version: 2, plugins: {} }),
+  )
+  described = await describe()
+  assert.deepEqual(origin('i18n'), ['picked', 'skill', true])
+  assert.deepEqual(origin('code'), ['picked', undefined, true])
+  assert.deepEqual(origin('checkout'), ['custom', undefined, false])
 })
 
 test('a lens of the project replaces a built-in one of the same name; turned off, the built-in runs again', async (t) => {

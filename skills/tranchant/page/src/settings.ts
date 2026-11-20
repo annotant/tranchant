@@ -78,6 +78,10 @@ export interface LensEntry {
   replaces?: boolean
   source: string
   version?: string
+  /** An added lens's: picked up from an agent, a skill or a command, or custom (a checklist). */
+  origin?: 'picked' | 'custom'
+  /** With `picked`, what its source's path says it is, when it says. */
+  sourceKind?: 'agent' | 'skill' | 'command'
   paths: string[]
   otherwise?: boolean
   topics?: string[]
