@@ -114,6 +114,14 @@ released to the `stable` branch.
 - A review agent's Bash command with a comment (`#`) is refused: the
   shell drops the words after it, which the hooks would still have read.
 
+### Removed
+
+- **A lens's context skill.** Add a lens and the lens editor no longer ask
+  for one, `/tranchant import` no longer takes `--context`, and a reviewer's
+  prompt no longer has a Context block: only a lens's source decides when it
+  is cleaned again. A lens saved with a `context` still runs, without it; the
+  key is dropped at its next save.
+
 ### Fixed
 
 - **A lens's new name, as it is typed.** In Settings › Lenses, the row of
