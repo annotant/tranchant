@@ -46,9 +46,6 @@ import {
  * @property {string} folder Its folder.
  * @property {string} [version]
  * @property {string} sourceHash
- * @property {string} [context]
- * @property {string} [contextFile]
- * @property {string} [contextHash]
  * @property {'cleaning' | 'ready' | 'failed' | 'added'} state
  * @property {true} [queued] Made by the page: it waits for a free cleaning agent until the hooks start it.
  * @property {string} [startedAt] When the hooks started its agent.
@@ -124,10 +121,6 @@ export function agentInput(dir, record) {
     file: record.file,
     folder: record.folder,
     ...(record.version && { version: record.version }),
-    ...(record.contextFile && {
-      context: record.context,
-      contextFile: record.contextFile,
-    }),
     ...(existsSync(kept) && { rules: kept }),
     lens: path.join(dir, 'lens.md'),
     report: path.join(dir, 'report.json'),
@@ -135,9 +128,9 @@ export function agentInput(dir, record) {
 }
 
 /**
- * The source and context of a lens found and hashed, as a cleaning records
- * them; a LensRefusal becomes the cleaning's refusal.
- * @param {{ source: string, context?: string }} lens
+ * The source of a lens found and hashed, as a cleaning records it; a
+ * LensRefusal becomes the cleaning's refusal.
+ * @param {{ source: string }} lens
  * @param {string} project
  */
 async function found(lens, project) {
@@ -148,11 +141,6 @@ async function found(lens, project) {
       folder: hashes.source.folder,
       ...(hashes.source.version && { version: hashes.source.version }),
       sourceHash: hashes.sourceHash,
-      ...(hashes.context && {
-        context: lens.context,
-        contextFile: hashes.context.file,
-        contextHash: hashes.contextHash,
-      }),
     }
   } catch (error) {
     if (error instanceof LensRefusal) throw new CleaningRefusal(error.message)
@@ -166,26 +154,16 @@ async function found(lens, project) {
  * in its scope; a command, or a source that starts reviewers it names, is
  * refused with them. `queued` when the page asks for it: the hooks start its
  * agent once one is free.
- * @param {{ project: string, source: string, name?: string, scope: string, context?: string, queued?: boolean, from?: string }} given
+ * @param {{ project: string, source: string, name?: string, scope: string, queued?: boolean, from?: string }} given
  * @returns {Promise<{ dir: string, record: Cleaning }>}
  */
-export async function createCleaning({
-  project,
-  source,
-  name,
-  scope,
-  context,
-  queued,
-  from,
-}) {
+export async function createCleaning({ project, source, name, scope, queued, from }) {
   if (!isScope(scope))
     throw new CleaningRefusal(
       `a lens is global or local, never in the repository: not ${scope}`,
     )
   if (!isSourceText(source))
     throw new CleaningRefusal('a source is required, on one line: plugin:name, or a path')
-  if (context?.trim() && !isSourceText(context))
-    throw new CleaningRefusal('the context skill is one line: plugin:skill, or a path')
   const lensName = name?.trim() || nameOfSource(source, project)
   let target
   try {
@@ -203,13 +181,7 @@ export async function createCleaning({
   // Before any agent: a command, or a source that starts reviewers it names, holds the lenses, never is one.
   const inside = await insideOf(project, recorded)
   if (inside) throw new CleaningRefusal(insideRefusal(inside))
-  const recordedContext = context?.trim()
-    ? recordedSource(context, scope, project)
-    : undefined
-  const sources = await found(
-    { source: recorded, ...(recordedContext && { context: recordedContext }) },
-    project,
-  )
+  const sources = await found({ source: recorded }, project)
   return start(project, {
     name: lensName,
     scope,
@@ -225,9 +197,9 @@ export async function createCleaning({
  * The cleanings of several sources at once (a glob's matches), all queued:
  * one refused (not found, its name taken, unwritable) does not stop the
  * others, and of two given the same name the first is kept.
- * @param {{ project: string, scope: string, context?: string, from?: string, sources: { source: string, name?: string }[] }} given
+ * @param {{ project: string, scope: string, from?: string, sources: { source: string, name?: string }[] }} given
  */
-export async function createCleanings({ project, scope, context, from, sources }) {
+export async function createCleanings({ project, scope, from, sources }) {
   if (!isScope(scope))
     throw new CleaningRefusal(
       `a lens is global or local, never in the repository: not ${scope}`,
@@ -248,7 +220,6 @@ export async function createCleanings({ project, scope, context, from, sources }
         scope,
         queued: true,
         ...(name && { name }),
-        ...(context && { context }),
         ...(from && { from }),
       })
       names.add(cleaning.record.name)
@@ -451,7 +422,6 @@ function fresh(/** @type {Cleaning} */ record, /** @type {any} */ report) {
     paths: report.paths,
     ...(report.otherwise && { otherwise: true }),
     ...(report.topics && { topics: report.topics }),
-    ...(record.context && { context: record.context }),
     rules: report.rules,
     cleaned: cleanedOf(record, report),
   }
@@ -479,7 +449,6 @@ async function promoted(/** @type {Cleaning} */ record, /** @type {any} */ repor
 const cleanedOf = (record, report) => ({
   at: new Date().toISOString(),
   sourceHash: record.sourceHash,
-  ...(record.contextHash && { contextHash: record.contextHash }),
   ...(record.version && { version: record.version }),
   removed: report.removed,
   added: report.added,
@@ -499,7 +468,6 @@ async function builds(
         name: lens.name,
         paths: lens.paths,
         source: lens.source,
-        ...(lens.context && { context: lens.context }),
         added: { scope: record.scope, dir: trial },
       },
       whereOf(record.project),
@@ -526,7 +494,6 @@ async function recordFailure(
       at: new Date().toISOString(),
       reason: reason.slice(0, 1000),
       sourceHash: record.sourceHash,
-      ...(record.contextHash && { contextHash: record.contextHash }),
     },
   })
 }
@@ -560,7 +527,6 @@ export async function addCleaned(project, id, edits = {}) {
   const base = {
     ...made,
     source: recordedSource(made.source, scope, project),
-    ...(made.context && { context: recordedSource(made.context, scope, project) }),
   }
   const otherwise =
     edits.otherwise === true || (edits.paths === undefined && output.report.otherwise)
@@ -651,7 +617,6 @@ export async function listCleanings(project) {
       again: record.again,
       source: record.source,
       ...(record.version && { version: record.version }),
-      ...(record.context && { context: record.context }),
       ...(record.from && { from: record.from }),
       state: lost ? 'failed' : record.state,
       ...(!lost && record.state === 'cleaning' && record.queued && { waiting: true }),

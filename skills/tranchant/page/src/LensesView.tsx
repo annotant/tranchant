@@ -849,8 +849,8 @@ function batchLine(cleanings: CleaningEntry[]) {
 }
 
 /**
- * Add a lens: its source, its name, where it lives, its context skill; then
- * the cleaning agent. A source with a `*` or a `?` is a glob: its matches
+ * Add a lens: its source, its name, where it lives; then the cleaning
+ * agent. A source with a `*` or a `?` is a glob: its matches
  * replace the name, one cleaning agent each. A source typed whole is read
  * first: a command, or one that starts agents, lists them in its place.
  */
@@ -877,7 +877,6 @@ function AddLens({
   // Undefined until typed in, and again once the source changes: the field shows the source's name.
   const [name, setName] = useState<string>()
   const [scope, setScope] = useState<Added>('local')
-  const [context, setContext] = useState('')
   const [busy, setBusy] = useState(false)
   const typed = source.trim()
   const glob = isGlob(typed)
@@ -943,7 +942,6 @@ function AddLens({
                 ...(lensName && { name: lensName }),
               }),
           scope,
-          ...(context.trim() && { context: context.trim() }),
         })
           .catch(() => undefined)
           .finally(() => setBusy(false))
@@ -1079,19 +1077,6 @@ function AddLens({
           onCheckNone={pick.checkNone}
         />
       )}
-      <Field
-        id="tr-lns-add-context"
-        label="Context skill"
-        help="Optional. Frames the reviewer before its domain: the project's rules, its architecture. Given as data, never loaded as a skill."
-      >
-        <input
-          id="tr-lns-add-context"
-          className="tr-input tr-text"
-          value={context}
-          placeholder="plugin:skill, or a path"
-          onChange={(event) => setContext(event.currentTarget.value)}
-        />
-      </Field>
       <div className="tr-lns-foot">
         <button
           type="submit"
@@ -1567,7 +1552,7 @@ function Reads({ lens }: { lens: LensEntry }) {
       <p className="tr-field-help">
         {lens.scope === 'recipe'
           ? 'Its whole prompt, as the plugin ships it.'
-          : "Tranchant's contract, the context skill, the lens's domain as it was cleaned, and its added instructions: what the reviewer is given, whole."}
+          : "Tranchant's contract, the lens's domain as it was cleaned, and its added instructions: what the reviewer is given, whole."}
       </p>
       {problem ? (
         <p className="tr-recipe-problem">It cannot be built: {problem}</p>
@@ -1656,7 +1641,6 @@ function AddedLens({
   const [otherwise, setOtherwise] = useState(lens.otherwise === true)
   const [topics, setTopics] = useState<string[]>(lens.topics ?? [])
   const [model, setModel] = useState(lens.model ?? '')
-  const [context, setContext] = useState(lens.context ?? '')
   const [rules, setRules] = useState(lens.rules ?? '')
   const [removing, setRemoving] = useState(false)
   const id = `tr-lns-${scope}-${lens.name}`
@@ -1690,9 +1674,6 @@ function AddedLens({
                   : {}),
                 ...(!same(topics, lens.topics ?? []) && { topics }),
                 ...(model !== (lens.model ?? '') && { model: model || null }),
-                ...(context.trim() !== (lens.context ?? '') && {
-                  context: context.trim() || null,
-                }),
                 ...(rules !== (lens.rules ?? '') && { rules }),
               },
             }).then(
@@ -1792,20 +1773,6 @@ function AddedLens({
               value={model}
               disabled={frozen}
               onChange={setModel}
-            />
-          </Field>
-          <Field
-            id={`${id}-context`}
-            label="Context skill"
-            help="Frames the reviewer before its domain: the project's rules, its architecture. Given as data, never loaded as a skill; its changes clean the lens again too."
-          >
-            <input
-              id={`${id}-context`}
-              className="tr-input tr-text"
-              value={context}
-              placeholder="plugin:skill, or a path"
-              disabled={frozen}
-              onChange={(event) => setContext(event.currentTarget.value)}
             />
           </Field>
           <Field

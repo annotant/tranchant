@@ -14,8 +14,7 @@
 // LENS line, and it exits 2. So does any other failure of the step, and
 // `--abandon`, which the hooks run when the step could not run: a review
 // never stays `preparing` with nothing at work on it.
-// --check, first: for each lens the user added, its source and context skill
-// hashed again (lib/userlens.mjs); one that changed since its last cleaning
+// --check, first: for each lens the user added, its source hashed again (lib/userlens.mjs); one that changed since its last cleaning
 // prints `STALE <json>`, `{ name, scope }`, and its row says it is being
 // cleaned again. The hooks clean those, then run the step without --check:
 // a lens cleaned meanwhile says so, one whose cleaning failed runs its last
@@ -356,7 +355,7 @@ async function changedHere(file) {
 /**
  * Where an added lens stands against its source: undefined when it cannot
  * say (the build says why). `held` when the change under review touches its
- * source or its context skill.
+ * source.
  * @param {LensSpec} lens
  */
 async function standing(lens) {
@@ -365,10 +364,7 @@ async function standing(lens) {
     const stored = await readUserLens(lens.added.dir)
     const hashes = await hashesOf(stored, review.project)
     const now = staleness(stored, hashes)
-    const held =
-      now !== 'clean' &&
-      ((await changedHere(hashes.source.file)) ||
-        (hashes.context !== undefined && (await changedHere(hashes.context.file))))
+    const held = now !== 'clean' && (await changedHere(hashes.source.file))
     return { stored, now, held }
   } catch (error) {
     if (error instanceof LensFileRefusal || error instanceof LensRefusal) return undefined

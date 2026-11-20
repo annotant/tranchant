@@ -61,7 +61,6 @@ export type LensScope = 'local' | 'global' | 'recipe'
 interface Cleaned {
   at: string
   sourceHash: string
-  contextHash?: string
   version?: string
   removed: { what: string; why: string }[]
   added: string[]
@@ -86,8 +85,6 @@ export interface LensEntry {
   otherwise?: boolean
   topics?: string[]
   model?: string
-  /** An added lens's. */
-  context?: string
   rules?: string
   rulesEdited?: boolean
   cleaned?: Cleaned
@@ -115,7 +112,6 @@ export interface CleaningEntry {
   again: boolean
   source: string
   version?: string
-  context?: string
   state: 'cleaning' | 'ready' | 'failed'
   /** With `cleaning`: no agent reads it yet, it waits for a free one. */
   waiting?: boolean

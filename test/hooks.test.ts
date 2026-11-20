@@ -41,8 +41,6 @@ const CLEAN_MADE = {
   source: 'workflow:code-reviewer-abac',
   file: '/plugins/workflow/agents/code-reviewer-abac.md',
   folder: '/plugins/workflow/agents',
-  context: 'workflow:abac-rules',
-  contextFile: '/plugins/workflow/skills/abac-rules/SKILL.md',
   lens: '/state/cleanings/cln-1/lens.md',
   report: '/state/cleanings/cln-1/report.json',
 }
@@ -1336,9 +1334,7 @@ test('import asks for the source and the scope first, then starts one cleaning a
   expect(w.cleanRuns.map((one) => one.argv)).toEqual([['--project', ROOT, '--find']])
   expect(w.spawned).toEqual([])
   const { text } = await $.command.run(
-    command(
-      'import workflow:code-reviewer-abac --to local --name abac --context workflow:abac-rules',
-    ),
+    command('import workflow:code-reviewer-abac --to local --name abac'),
   )
   expect(text).toMatch(/^Cleaning workflow:code-reviewer-abac into the lens abac/)
   expect(w.cleanRuns[1]).toEqual({
@@ -1351,8 +1347,6 @@ test('import asks for the source and the scope first, then starts one cleaning a
       'local',
       '--name',
       'abac',
-      '--context',
-      'workflow:abac-rules',
     ],
     cwd: ROOT,
   })
@@ -1377,8 +1371,6 @@ test('import asks for the source and the scope first, then starts one cleaning a
     'SOURCE=workflow:code-reviewer-abac',
     'SOURCE_FILE=/plugins/workflow/agents/code-reviewer-abac.md',
     'SOURCE_FOLDER=/plugins/workflow/agents',
-    'CONTEXT=workflow:abac-rules',
-    'CONTEXT_FILE=/plugins/workflow/skills/abac-rules/SKILL.md',
     `PROJECT=${ROOT}`,
     'NAME=abac',
     'LENS=/state/cleanings/cln-1/lens.md',
@@ -1407,18 +1399,22 @@ test('import asks for the source and the scope first, then starts one cleaning a
   expect((await $.command.run(command('import a b'))).text).toMatch(
     /^Usage: \/tranchant import/,
   )
-  // Named after its source, and that name taken: --name is offered, the context kept.
+  // --context is gone with the context skill.
   expect(
     (
       await $.command.run(
-        command(
-          'import .claude/agents/money-review.md --to local --context workflow:abac-rules',
-        ),
+        command('import workflow:code-reviewer-abac --to local --context x:y'),
       )
+    ).text,
+  ).toMatch(/^Usage: \/tranchant import/)
+  // Named after its source, and that name taken: --name is offered.
+  expect(
+    (
+      await $.command.run(command('import .claude/agents/money-review.md --to local'))
     ).text.split('\n'),
   ).toEqual([
     "Tranchant cannot import .claude/agents/money-review.md: a lens named money-review is this project's already: edit it, or choose another name",
-    'Give it another name: /tranchant import .claude/agents/money-review.md --to local --name <lens> --context workflow:abac-rules.',
+    'Give it another name: /tranchant import .claude/agents/money-review.md --to local --name <lens>.',
   ])
 })
 
