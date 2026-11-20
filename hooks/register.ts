@@ -2683,6 +2683,8 @@ export const register: Register = (on) => {
     if (e.stop === true) return { result: await stopServing($) }
     if (e.status === true) return { result: await statusText($) }
     if (typeof e.import === 'string') {
+      // As /tranchant import refuses --context: a caller from before its removal is told.
+      if (e.context !== undefined) return { result: IMPORT_USAGE }
       const source = e.import.trim() || undefined
       const to = typeof e.to === 'string' && e.to.trim() ? e.to.trim() : undefined
       return {

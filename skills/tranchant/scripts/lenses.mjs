@@ -14,8 +14,9 @@
 // LENS line, and it exits 2. So does any other failure of the step, and
 // `--abandon`, which the hooks run when the step could not run: a review
 // never stays `preparing` with nothing at work on it.
-// --check, first: for each lens the user added, its source hashed again (lib/userlens.mjs); one that changed since its last cleaning
-// prints `STALE <json>`, `{ name, scope }`, and its row says it is being
+// --check, first: for each lens the user added, its source hashed again
+// (lib/userlens.mjs); one that changed since its last cleaning prints
+// `STALE <json>`, `{ name, scope }`, and its row says it is being
 // cleaned again. The hooks clean those, then run the step without --check:
 // a lens cleaned meanwhile says so, one whose cleaning failed runs its last
 // version and says why.

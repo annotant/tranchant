@@ -73,11 +73,15 @@ and `lens.json`:
 }
 ```
 
+A `lens.json` an earlier Tranchant wrote with a `context` key runs without
+it: the key is ignored, and dropped at the lens's next save.
+
 **The re-import.** Each `/tranchant review`, in its Lenses step, hashes
 again the source of every added lens it runs. It is read where it lies (a
 plugin's install, a path from the project's working tree), never at BASE. A
-changed hash cleans that lens again before the reviewers start, the rules the user edited given to the agent and kept; the rest of its
-settings stay as the user set them. When the change under review is what
+changed hash cleans that lens again before the reviewers start, the rules the
+user edited given to the agent and kept; the rest of its settings stay as the
+user set them. When the change under review is what
 changed the source (a file of the repository it touches), the lens is not
 cleaned again: its last version runs, said on the page, so a branch never
 rewrites the lens that reviews it. A cleaning that fails leaves the lens's

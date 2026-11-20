@@ -121,8 +121,8 @@ export async function writeText(/** @type {string} */ file, /** @type {string} *
 const isText = (value) => typeof value === 'string' && value.trim() !== ''
 
 /**
- * A source as a lens names it: one line, no control
- * character, since it becomes a line of the cleaning agent's prompt.
+ * A source as a lens names it: one line, no control character, since it
+ * becomes a line of the cleaning agent's prompt.
  * @param {unknown} value
  * @returns {value is string}
  */

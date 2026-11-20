@@ -849,9 +849,9 @@ function batchLine(cleanings: CleaningEntry[]) {
 }
 
 /**
- * Add a lens: its source, its name, where it lives; then the cleaning
- * agent. A source with a `*` or a `?` is a glob: its matches
- * replace the name, one cleaning agent each. A source typed whole is read
+ * Add a lens: its source, its name, where it lives; then the cleaning agent.
+ * A source with a `*` or a `?` is a glob: its matches replace the name, one
+ * cleaning agent each. A source typed whole is read
  * first: a command, or one that starts agents, lists them in its place.
  */
 function AddLens({

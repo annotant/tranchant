@@ -1396,10 +1396,21 @@ test('import asks for the source and the scope first, then starts one cleaning a
     tool_use_id: 'i1',
   })
   expect(result).toMatch(/^Where should the lens/)
+  expect(
+    (
+      await $.tool.call({
+        tool: 'mcp__tranchant__open',
+        import: 'workflow:code-reviewer-abac',
+        to: 'local',
+        context: 'x:y',
+        tool_use_id: 'i2',
+      })
+    ).result,
+  ).toMatch(/^Usage: \/tranchant import/)
   expect((await $.command.run(command('import a b'))).text).toMatch(
     /^Usage: \/tranchant import/,
   )
-  // --context is gone with the context skill.
+  // An unknown flag, or key, gets the usage.
   expect(
     (
       await $.command.run(

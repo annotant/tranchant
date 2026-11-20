@@ -744,13 +744,19 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
     'lens.json',
   )
   const saved = JSON.parse(await readFile(lensFile, 'utf8'))
-  // As an earlier Tranchant wrote it, its context skill gone since.
+  // As an earlier Tranchant wrote it, its context skill gone since, and its last cleaning failed on the source as it stands.
   await writeFile(
     lensFile,
     JSON.stringify({
       ...saved,
       context: 'workflow:gone',
-      cleaned: { ...saved.cleaned, contextHash: 'a81d' },
+      cleaned: { ...saved.cleaned, sourceHash: 'older', contextHash: 'a81d' },
+      failedCleaning: {
+        at: saved.cleaned.at,
+        reason: 'the agent wrote no lens',
+        sourceHash: saved.cleaned.sourceHash,
+        contextHash: 'b72e',
+      },
     }),
   )
   const review = await prepared(dir)
@@ -777,6 +783,7 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
   const resaved = JSON.parse(await readFile(lensFile, 'utf8'))
   assert.equal(resaved.context, undefined)
   assert.equal(resaved.cleaned.contextHash, undefined)
+  assert.equal(resaved.failedCleaning.contextHash, undefined)
 })
 
 test('a lens turned off keeps its files from the otherwise lens; one otherwise lens runs, the first; lensModels sets a model', async (t) => {

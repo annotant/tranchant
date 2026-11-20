@@ -480,9 +480,9 @@ reviews a change with no producer of your own:
 3. The Lenses step. First, `lenses.mjs --check` hashes each added lens's
    source again: one that changed since its last cleaning prints `STALE
    {name, scope}`, its row says it is cleaned again, and the hooks start its
-   cleaning agent (`clean.mjs --again`); the reviewers wait for every one. A cleaning that fails leaves the lens's last version, the
-   failure recorded on it, so the next review does not clean it again for
-   the same source. Then `lenses.mjs` resolves each lens's source, builds the
+   cleaning agent (`clean.mjs --again`); the reviewers wait for every one. A
+   cleaning that fails leaves the lens's last version, the failure recorded
+   on it, so the next review does not clean it again for the same source. Then `lenses.mjs` resolves each lens's source, builds the
    prompt its reviewer runs ([the lenses](#the-lenses-built-at-every-review))
    and writes its progress to `lenses.json`, which the page shows in its
    center while they build (a spinner, how many are ready, the rows on

@@ -457,7 +457,7 @@ test('What the reviewer reads shows what the cleaning removed and added, and the
   vi.unstubAllGlobals()
 })
 
-test('Add a lens sends its source, name and scope to be cleaned, and asks for no context skill', async () => {
+test('Add a lens sends its source, name and scope to be cleaned', async () => {
   // A single reviewer: nothing inside it to list.
   const fetch = stubMatches({ inside: null, name: 'code-reviewer-api' })
   try {
