@@ -27,13 +27,16 @@
 // makes the plan again from the settings as they stand, the page's choices
 // (<review>/choices.json) applied; --start does too, then builds the lenses
 // on and goes on as above, or back to `waiting` when one cannot be built.
+// The plan's group (prepare.mjs) is in lenses.json from the first write, and
+// in review.json once it runs; a choice of another group (`group` in the
+// choices, `null` for every lens that is on) makes the plan again with it.
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
-import { oneLine } from './lib/format.mjs'
+import { LENS_NAME, oneLine } from './lib/format.mjs'
 import {
   LensRefusal,
   RecipeRefusal,
@@ -43,6 +46,7 @@ import {
   readRecipe,
   storeLens,
 } from './lib/lens.mjs'
+import { forgetRemoved, groupNotes, readGroups } from './lib/groups.mjs'
 import { PlanRefusal, planLenses } from './lib/plan.mjs'
 import { findReview } from './lib/project.mjs'
 import { loadSettings } from './lib/settings.mjs'
@@ -66,7 +70,8 @@ import {
  * @property {string} source
  * @property {'resolving' | 'ready' | 'failed' | 'idle'} state `idle`: not built, a waiting review's lens that does not run.
  * @property {number} [files] In a waiting review: the changed files it reads.
- * @property {true} [off] In a waiting review: off in the settings.
+ * @property {true} [off] In a waiting review: off in the settings; in a group's, not one of the group.
+ * @property {true} [offInSettings] In a group's review: off in the settings, run by the group.
  * @property {'unchanged' | 'updated' | 'new'} [change] With `ready`: against the project's previous review.
  * @property {string} [version]
  * @property {string} [reason] With `failed`; with `cleaning: 'failed'`, why its last version runs.
@@ -139,7 +144,8 @@ const stepFailed = (/** @type {string} */ reason) =>
 if (abandoned !== undefined) await stepFailed(abandoned || 'the step did not run')
 const review = await store.readReview().catch((error) => stepFailed(message(error)))
 /**
- * @type {{ recipe: RecipeRef, lenses: PlannedLens[], own?: true,
+ * @type {{ recipe: RecipeRef, lenses: PlannedLens[], own?: true, group?: string,
+ *   notes?: string[], removed?: import('./lib/groups.mjs').Member[],
  *   wait?: 'setting' | 'flag', changed?: number, others?: PlannedLens[] }}
  */
 let plan = await readFile(String(planFile), 'utf8')
@@ -177,10 +183,14 @@ async function writeProgress(state, rows) {
       ...(choices && { choices }),
       ...(problem && { problem }),
     }
+  const named = {
+    ...(plan.group && { group: plan.group }),
+    ...(plan.notes?.length && { notes: plan.notes }),
+  }
   try {
     await writeFile(
       temp,
-      `${JSON.stringify({ state, ...waits, lenses: rows }, null, 2)}\n`,
+      `${JSON.stringify({ state, ...named, ...waits, lenses: rows }, null, 2)}\n`,
     )
     await rename(temp, progressFile)
     return true
@@ -228,8 +238,9 @@ const range =
 
 /**
  * The page's choices for a waiting review, by lens name: on or off for this
- * review, whatever the settings say; and whether Start saved them.
- * @type {{ lenses: Record<string, boolean>, remember: boolean } | undefined}
+ * review, whatever the settings say; whether Start saved them; and the group
+ * picked, when one was (`null`: every lens that is on).
+ * @type {{ lenses: Record<string, boolean>, remember: boolean, group?: string | null } | undefined}
  */
 let choices
 /** Why a waiting review's plan could not be made again: the page says it, and nothing starts. */
@@ -250,6 +261,10 @@ if (plan.wait) {
         Object.entries(lenses).filter(([, on]) => typeof on === 'boolean'),
       ),
       remember: read.remember === true,
+      ...((read.group === null ||
+        (typeof read.group === 'string' && LENS_NAME.test(read.group))) && {
+        group: read.group,
+      }),
     }
 }
 
@@ -280,6 +295,19 @@ async function replan() {
     if (error instanceof RecipeRefusal) return `recipe: ${error.message}`
     throw error
   }
+  // The group picked on the page, else the plan's; a run's own recipe has none.
+  const name = plan.own
+    ? undefined
+    : choices && choices.group !== undefined
+      ? (choices.group ?? undefined)
+      : plan.group
+  let group
+  if (name) {
+    const read = await readGroups(review.project)
+    if (read.problem) return `group ${name}: ${read.problem}`
+    group = read.groups.groups.find((one) => one.name === name)
+    if (!group) return `no group ${name} in this project any more`
+  }
   let planned
   try {
     planned = await planLenses({
@@ -289,6 +317,7 @@ async function replan() {
       own: plan.own === true,
       values,
       all: true,
+      ...(group && { group: group.lenses }),
     })
   } catch (error) {
     if (error instanceof PlanRefusal) return error.message
@@ -296,8 +325,14 @@ async function replan() {
   }
   for (const one of planned.problems)
     console.error(`lens ${one.name} (${one.scope}) not run: ${oneLine(one.problem)}`)
+  // Read again, never consumed: the removed lenses are forgotten once a review of the group runs.
+  const notes = group ? groupNotes(group.name, group.removed ?? [], planned.missing) : []
+  const { group: _group, notes: _notes, removed: _removed, ...rest } = plan
   const next = {
-    ...plan,
+    ...rest,
+    ...(group && { group: group.name }),
+    ...(notes.length && { notes }),
+    ...(group?.removed && { removed: group.removed }),
     lenses: planned.applied,
     others: planned.others,
     changed: planned.changed.length,
@@ -325,6 +360,7 @@ const rows = shown.map((lens) => ({
   ...(lens.added && { scope: lens.added.scope }),
   ...(plan.wait && { files: lens.files ?? 0 }),
   ...(plan.wait && lens.off && { off: true }),
+  ...(lens.offInSettings && { offInSettings: true }),
 }))
 
 /**
@@ -477,9 +513,14 @@ if (failed) {
   })
 }
 await store
-  .prepared(records)
+  .prepared(records, plan.group)
   .catch((error) =>
     error instanceof StoreRefusal ? refuse(error.message) : stepFailed(message(error)),
+  )
+// The group's review runs: the lenses removed from it it said are said.
+if (plan.group && plan.removed?.length)
+  await forgetRemoved(review.project, plan.group, plan.removed).catch((error) =>
+    console.error(`group ${plan.group}: removed lenses kept: ${oneLine(message(error))}`),
   )
 await writeProgress(
   'ready',

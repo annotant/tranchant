@@ -179,6 +179,9 @@ run script.
 
 `/tranchant review` takes `--recipe <file>` to use your own lenses instead of
 the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)),
+`--group <name>` to run one of the project's groups of lenses (Settings ›
+Lenses › Groups: a backend set and a frontend one, or A and B to compare,
+each lens running whatever its switch),
 and `--no-start` to build the lenses and wait: the page shows what will run, a
 switch on each lens for this review, and **Start the review** (Settings' **Start
 the review by itself**, on by default, does the same for every review when off;

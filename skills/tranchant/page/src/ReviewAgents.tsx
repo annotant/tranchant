@@ -190,6 +190,8 @@ const notCovered = (lenses: readonly string[]) =>
     ? `${lenses[0]} stopped: that lens is not covered`
     : `${lenses.join(', ')} stopped: those lenses are not covered`
 
+const NO_GROUPS: readonly string[] = []
+
 /** Where the review stands, by lens; one line once it is done. */
 export function ReviewAgents({
   agents,
@@ -197,10 +199,16 @@ export function ReviewAgents({
   findings,
   verify,
   project,
+  lensGroup,
+  others = NO_GROUPS,
   onOpen,
 }: {
   agents: readonly ReviewAgent[]
   reviewing: boolean
+  /** The group of lenses the review runs, when it runs one. */
+  lensGroup?: string | undefined
+  /** The project's other groups: a review of one of them is how two are compared. */
+  others?: readonly string[]
   findings: readonly Pick<Finding, 'id' | 'title' | 'verified'>[]
   verify: boolean
   project: string
@@ -226,7 +234,9 @@ export function ReviewAgents({
         {reviewing ? (
           <>
             <span className="tr-spinner" aria-hidden="true" />
-            <span className="tr-progress-title">Reviewing the change</span>
+            <span className="tr-progress-title">
+              Reviewing the change{lensGroup && ` · group ${lensGroup}`}
+            </span>
             <span
               className="tr-progress-bar"
               role="progressbar"
@@ -257,7 +267,9 @@ export function ReviewAgents({
             >
               <path d="M5 12.5l4 4 10-10" />
             </svg>
-            <span className="tr-progress-title">Review done</span>
+            <span className="tr-progress-title">
+              Review done{lensGroup && ` · group ${lensGroup}`}
+            </span>
             <span className="tr-muted">
               {plural(progress.lenses.length, 'lens', 'lenses')} ·{' '}
               {plural(findings.length, 'finding')}
@@ -270,6 +282,18 @@ export function ReviewAgents({
         )}
         {toggle}
       </div>
+      {lensGroup && others.length > 0 && (
+        <p className="tr-muted tr-progress-compare" role="note">
+          This review runs the group {lensGroup}. To compare, review the same change with{' '}
+          {others.map((name, i) => (
+            <span key={name}>
+              {i > 0 && ' or '}
+              <code>--group {name}</code>
+            </span>
+          ))}
+          : each review keeps its group. Comparing their findings is still to come (#112).
+        </p>
+      )}
       {reviewing && (
         <div className="tr-progress-rows">
           {progress.lenses.length > 0 && (

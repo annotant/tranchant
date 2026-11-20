@@ -31,8 +31,10 @@ export interface LensRow {
   state: 'resolving' | 'ready' | 'failed' | 'idle'
   /** In a review waiting to start: the changed files it reads. */
   files?: number
-  /** In a review waiting to start: off in the settings. */
+  /** In a review waiting to start: off in the settings; in a group's, not one of the group. */
   off?: true
+  /** In a group's review: off in the settings, run by the group. */
+  offInSettings?: true
   /** With `ready`: against the project's previous review. */
   change?: 'unchanged' | 'updated' | 'new'
   version?: string
@@ -48,8 +50,10 @@ export interface LensRow {
 /** The page's choices on a review waiting to start: by lens name, on or off for this review. */
 export interface StartChoices {
   lenses: Record<string, boolean>
-  /** Start saves them as Settings › Lenses does. */
+  /** Start saves them as Settings › Lenses does; in a group's review, in the group. */
   remember: boolean
+  /** The group picked before Start, `null` for every lens that is on; absent, the plan's. */
+  group?: string | null
 }
 
 /** The Lenses step's progress: lenses.json. */
@@ -67,6 +71,10 @@ export interface LensesProgress {
   choices?: StartChoices
   /** Why the plan could not be made again (the settings or the recipe unreadable): the last one stands. */
   problem?: string
+  /** The group of lenses the plan runs, when it runs one. */
+  group?: string
+  /** What the group's review says of its lenses that do not run: removed, or gone. */
+  notes?: string[]
 }
 
 /** The seven topics, in the order the page lists them within a bucket. */
@@ -193,6 +201,8 @@ export interface Review {
   status?: Status
   /** The lenses `/tranchant review` ran. */
   lenses?: LensRecord[]
+  /** The group of lenses it ran, when it ran one. */
+  group?: string
   /** With `refused`. */
   refusal?: Refusal
   title: string

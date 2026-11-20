@@ -48,6 +48,8 @@ export interface SettingsPayload {
   lensSet?: LensSet
   /** The lenses being cleaned, or cleaned and waiting to be added. */
   cleanings?: CleaningEntry[]
+  /** The project's groups of lenses, and its default one. */
+  groups?: GroupsPayload
   /** Why the file reads as none: not JSON, another version, a wrong value. The server then writes nothing. */
   problem?: string
 }
@@ -94,6 +96,28 @@ export interface LensEntry {
   /** Why it cannot be built now, and what fixes it. */
   problem?: string
   fix?: string
+}
+
+/** A lens of a group: which one, by its scope and its name. */
+export interface GroupMember {
+  scope: LensScope
+  name: string
+}
+
+/** A group of lenses: one review runs one (`--group <name>`). */
+export interface LensGroup {
+  name: string
+  lenses: GroupMember[]
+}
+
+/** The project's groups, as `GET /api/settings` answers them. */
+export interface GroupsPayload {
+  file: string
+  /** What a review runs with no --group; absent, every lens that is on. */
+  default?: string
+  list: LensGroup[]
+  /** Why the groups file reads as none: nothing is written over it. */
+  problem?: string
 }
 
 interface LensSet {

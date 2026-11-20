@@ -9,6 +9,21 @@ released to the `stable` branch.
 
 ### Added
 
+- **Groups of lenses, one review process per group.** Settings › Lenses has
+  a **Groups** tab beside **Lenses**: a group is a named set of lenses (the
+  project's, the global ones, the built-in ones), made, edited, duplicated
+  (B starts from A) and deleted there, with a name filter, **Check the N
+  shown** and a checkbox on each scope's heading, one lens per name.
+  `/tranchant review --group <name>` runs a group's lenses whatever their
+  switches; with no `--group`, the project's **default group**, *Every lens
+  that is on* until another is picked. Before Start, a **Group** select
+  changes the lenses, and **Save these switches in the group** saves them
+  in it. The header and the progress bar name the group a review runs;
+  each lens on the Lenses tab names its groups, and the filter has a
+  **Group** select. A lens removed leaves every group of the project,
+  and the group's reviews say so until one runs. Groups live with the project's lenses, outside the
+  repository.
+
 - **Only a lens's source is required.** Its name comes from the source: a
   file's name without its extension (a skill's folder's whole), a
   `plugin:name`'s name without the plugin; `money-review.md` is no longer

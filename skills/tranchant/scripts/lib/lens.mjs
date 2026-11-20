@@ -86,6 +86,7 @@ export class LensRefusal extends Error {
  * @property {string} [model]
  * @property {string[]} [topics]
  * @property {{ scope: 'global' | 'local', dir: string }} [added] A lens the user added: its folder holds its cleaned domain (lib/userlens.mjs).
+ * @property {true} [offInSettings] In a group's review: its switch is off, and it runs in the group.
  */
 
 /**

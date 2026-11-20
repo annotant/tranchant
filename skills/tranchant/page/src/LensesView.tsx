@@ -6,6 +6,7 @@ import {
   type SettingsChange,
 } from './api'
 import { TOPICS } from './domain'
+import { GroupsTab, groupsOf } from './LensGroups'
 import {
   GlobMatches,
   InsideMatches,
@@ -22,6 +23,7 @@ import {
 import { alreadyText, type Picked, SourcePicker } from './SourcePicker'
 import {
   type CleaningEntry,
+  type GroupsPayload,
   KNOWN_MODELS,
   type LensEntry,
   type LensScope,
@@ -41,7 +43,11 @@ interface Props {
   onSave: (change: SettingsChange) => void
   /** A change to the lenses the user added; rejects when the server refuses it. */
   onLens: (route: LensRoute, body: Record<string, unknown>) => Promise<LensDone>
-  /** The lens whose editor opens first, `<scope>:<name>`: a link from a refused review. */
+  /**
+   * The lens whose editor opens first, `<scope>:<name>`: a link from a
+   * refused review; `groups` opens the Groups tab, `group:<name>` that
+   * group's editor.
+   */
   focus?: string | undefined
 }
 
@@ -142,30 +148,34 @@ interface Filter {
   name: string
   origin: Origin | undefined
   kind: string
+  /** A group's name: its lenses only. */
+  group: string
 }
 
-const NO_FILTER: Filter = { name: '', origin: undefined, kind: '' }
+const NO_FILTER: Filter = { name: '', origin: undefined, kind: '', group: '' }
 
 const isFiltering = (filter: Filter) =>
-  Boolean(filter.name.trim() || filter.origin || filter.kind)
+  Boolean(filter.name.trim() || filter.origin || filter.kind || filter.group)
 
-function matches(lens: LensEntry, filter: Filter) {
+function matches(lens: LensEntry, filter: Filter, groups: GroupsPayload | undefined) {
   const name = filter.name.trim().toLowerCase()
   return (
     (!name || lens.name.toLowerCase().includes(name)) &&
     (!filter.origin || originOf(lens) === filter.origin) &&
     // A lens that declares no topic files its findings under any.
-    (!filter.kind || !lens.topics?.length || lens.topics.includes(filter.kind))
+    (!filter.kind || !lens.topics?.length || lens.topics.includes(filter.kind)) &&
+    (!filter.group || groupsOf(groups?.list ?? [], lens).includes(filter.group))
   )
 }
 
-/** The filters set, in a line: name "co" · built-in · Bugs. */
+/** The filters set, in a line: name "co" · built-in · Bugs · in frontend. */
 function filterWords(filter: Filter) {
   return [
     filter.name.trim() && `name “${filter.name.trim()}”`,
     filter.origin &&
       ORIGINS.find((one) => one.value === filter.origin)?.label.toLowerCase(),
     filter.kind,
+    filter.group && `in ${filter.group}`,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -212,10 +222,18 @@ export function LensesView({
   const [adding, setAdding] = useState(false)
   // The matches of a glob the server did not clean, with why: the others are under way.
   const [refused, setRefused] = useState<NonNullable<LensDone['refused']>>([])
-  const [open, setOpen] = useState(focus)
+  const toGroups = focus === 'groups' || focus?.startsWith('group:') === true
+  const [tab, setTab] = useState<'lenses' | 'groups'>(toGroups ? 'groups' : 'lenses')
+  // The group whose editor a chip opens; GroupsTab starts again on it.
+  const [groupFocus, setGroupFocus] = useState(
+    focus?.startsWith('group:') ? focus.slice('group:'.length) : undefined,
+  )
+  const [open, setOpen] = useState(toGroups ? undefined : focus)
   // The lens the link names, followed when it is renamed or moved: else it reads as one removed.
-  const [pointed, setPointed] = useState(focus)
+  const [pointed, setPointed] = useState(toGroups ? undefined : focus)
   const [filter, setFilter] = useState<Filter>(NO_FILTER)
+  // A lens removed: the groups it left, said once.
+  const [left, setLeft] = useState('')
   const listed = settings?.lensSet !== undefined
   // Once the lenses are listed: on a page opened at the link, they load after the mount.
   useEffect(() => {
@@ -238,7 +256,8 @@ export function LensesView({
         </p>
       </main>
     )
-  const { lensSet, values, defaults } = settings
+  const { lensSet, values, defaults, groups } = settings
+  const groupList = groups?.list ?? []
   const frozen = offline || settings.problem !== undefined
   const cleanings = (settings.cleanings ?? []).filter((one) => !one.again)
   const recleaning = new Set(
@@ -248,12 +267,12 @@ export function LensesView({
   )
   const runs = lensSet.lenses.filter((lens) => lens.runs).length
   const filtering = isFiltering(filter)
-  const matched = lensSet.lenses.filter((lens) => matches(lens, filter))
+  const matched = lensSet.lenses.filter((lens) => matches(lens, filter, groups))
   // The lens being edited stays shown, never counted: hidden, its editor would drop what is typed.
   const shown = lensSet.lenses.filter(
     (lens) => matched.includes(lens) || `${lens.scope}:${lens.name}` === open,
   )
-  const groups: { scope: LensScope; title: string; where: string; empty?: string }[] = [
+  const sections: { scope: LensScope; title: string; where: string; empty?: string }[] = [
     {
       scope: 'local',
       title: 'This project',
@@ -313,159 +332,236 @@ export function LensesView({
           </button>
         </p>
       )}
-      <section className="tr-section tr-lns" aria-labelledby="tr-lenses-title">
-        <div className="tr-lns-intro">
-          <p>
-            Each lens is one reviewer agent on <code>/tranchant review</code>.{' '}
-            {plural(runs, 'lens runs', 'lenses run')} on this project. A lens you add
-            stays on this machine: Tranchant never writes it in the repository.
-          </p>
-          <button
-            type="button"
-            className="tr-btn tr-btn--primary"
-            disabled={frozen || adding}
-            onClick={() => setAdding(true)}
-          >
-            Add a lens
-          </button>
+      {groups && (
+        <div
+          className="tr-tabs tr-lns-tabs"
+          role="tablist"
+          aria-label="Lenses and groups"
+        >
+          {(
+            [
+              ['lenses', 'Lenses', lensSet.lenses.length],
+              ['groups', 'Groups', groupList.length],
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              className="tr-tab"
+              aria-selected={tab === value}
+              onClick={() => {
+                setTab(value)
+                setGroupFocus(undefined)
+              }}
+            >
+              {label}
+              <span className="tr-tab-count">{count}</span>
+            </button>
+          ))}
         </div>
-        <p className="tr-muted tr-lns-note">
-          A lens of this project wins over a global one of the same name, which wins over
-          the recipe&rsquo;s; turned off, the next one runs.
-        </p>
-        {!adding && <ManyLenses count={runs} />}
-        {settings.recipeProblem && (
-          <p className="tr-recipe-problem">
-            The recipe cannot be read: {settings.recipeProblem}
-          </p>
-        )}
-        {adding && (
-          <AddLens
-            frozen={frozen}
-            lenses={lensSet.lenses}
-            cap={values.maxReviewAgents}
-            builtIn={lensSet.lenses
-              .filter((lens) => lens.scope === 'recipe')
-              .map((lens) => lens.name)}
-            onCancel={() => setAdding(false)}
-            onImport={async (body) => {
-              const done = await onLens('import', body)
-              setAdding(false)
-              setRefused(done.refused ?? [])
-            }}
-          />
-        )}
-        {refused.length > 0 && (
-          <div className="tr-notice" role="status">
+      )}
+      {groups && tab === 'groups' && (
+        <GroupsTab
+          key={groupFocus ?? ''}
+          lenses={lensSet.lenses}
+          groups={groups}
+          frozen={frozen}
+          titles={{
+            local: 'This project',
+            global: 'Global',
+            recipe: 'Built-in',
+          }}
+          originText={originText}
+          onLens={onLens}
+          focus={groupFocus}
+        />
+      )}
+      {(!groups || tab === 'lenses') && (
+        <section
+          className="tr-section tr-lns"
+          aria-labelledby="tr-lenses-title"
+          {...(groups && { role: 'tabpanel' })}
+        >
+          <div className="tr-lns-intro">
             <p>
-              {refused.length === 1
-                ? 'One match was not added:'
-                : `${refused.length} matches were not added:`}
+              Each lens is one reviewer agent on <code>/tranchant review</code>.{' '}
+              {plural(runs, 'lens runs', 'lenses run')} on this project. A lens you add
+              stays on this machine: Tranchant never writes it in the repository.
             </p>
-            <ul>
-              {refused.map((one) => (
-                <li key={one.source}>
-                  <code>{one.source}</code>: {one.reason}
-                </li>
-              ))}
-            </ul>
             <button
               type="button"
-              className="tr-btn tr-btn--link"
-              onClick={() => setRefused([])}
+              className="tr-btn tr-btn--primary"
+              disabled={frozen || adding}
+              onClick={() => setAdding(true)}
             >
-              dismiss
+              Add a lens
             </button>
           </div>
-        )}
-        {cleanings.length > 0 && (
-          <BeingAdded
-            cleanings={cleanings}
-            frozen={frozen}
-            cap={values.maxReviewAgents}
-            onLens={onLens}
-          />
-        )}
-        <LensFilter
-          filter={filter}
-          shown={matched.length}
-          total={lensSet.lenses.length}
-          onChange={setFilter}
-        />
-        {filtering && !matched.length && (
-          <p className="tr-lns-empty">
-            No lens matches {filterWords(filter)}.{' '}
-            <button
-              type="button"
-              className="tr-btn tr-btn--link"
-              onClick={() => setFilter(NO_FILTER)}
-            >
-              Clear the filters
-            </button>
+          <p className="tr-muted tr-lns-note">
+            A lens of this project wins over a global one of the same name, which wins
+            over the recipe&rsquo;s; turned off, the next one runs.
           </p>
-        )}
-        {groups.map((group) => {
-          const all = lensSet.lenses.filter((lens) => lens.scope === group.scope)
-          const lenses = shown.filter((lens) => lens.scope === group.scope)
-          // While filtering, a group with no match hides, even one that says it is empty.
-          if (filtering ? !lenses.length : !lenses.length && !group.empty) return null
-          return (
-            <div className="tr-lns-group" key={group.scope}>
-              <div className="tr-lns-group-head">
-                <strong id={`tr-lns-${group.scope}`}>{group.title}</strong>
-                <code className="tr-muted">{group.where}</code>
-                {filtering && (
-                  <span className="tr-lns-group-count">
-                    {matched.filter((lens) => lens.scope === group.scope).length} of{' '}
-                    {all.length}
-                  </span>
+          {!adding && <ManyLenses count={runs} />}
+          {settings.recipeProblem && (
+            <p className="tr-recipe-problem">
+              The recipe cannot be read: {settings.recipeProblem}
+            </p>
+          )}
+          {adding && (
+            <AddLens
+              frozen={frozen}
+              lenses={lensSet.lenses}
+              cap={values.maxReviewAgents}
+              builtIn={lensSet.lenses
+                .filter((lens) => lens.scope === 'recipe')
+                .map((lens) => lens.name)}
+              onCancel={() => setAdding(false)}
+              onImport={async (body) => {
+                const done = await onLens('import', body)
+                setAdding(false)
+                setRefused(done.refused ?? [])
+              }}
+            />
+          )}
+          {refused.length > 0 && (
+            <div className="tr-notice" role="status">
+              <p>
+                {refused.length === 1
+                  ? 'One match was not added:'
+                  : `${refused.length} matches were not added:`}
+              </p>
+              <ul>
+                {refused.map((one) => (
+                  <li key={one.source}>
+                    <code>{one.source}</code>: {one.reason}
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                className="tr-btn tr-btn--link"
+                onClick={() => setRefused([])}
+              >
+                dismiss
+              </button>
+            </div>
+          )}
+          {cleanings.length > 0 && (
+            <BeingAdded
+              cleanings={cleanings}
+              frozen={frozen}
+              cap={values.maxReviewAgents}
+              onLens={onLens}
+            />
+          )}
+          {left && (
+            <p className="tr-notice" role="status">
+              {left}
+              <button
+                type="button"
+                className="tr-btn tr-btn--link"
+                onClick={() => setLeft('')}
+              >
+                dismiss
+              </button>
+            </p>
+          )}
+          <LensFilter
+            filter={filter}
+            shown={matched.length}
+            total={lensSet.lenses.length}
+            groups={groupList.map((group) => group.name)}
+            onChange={setFilter}
+          />
+          {filtering && !matched.length && (
+            <p className="tr-lns-empty">
+              No lens matches {filterWords(filter)}.{' '}
+              <button
+                type="button"
+                className="tr-btn tr-btn--link"
+                onClick={() => setFilter(NO_FILTER)}
+              >
+                Clear the filters
+              </button>
+            </p>
+          )}
+          {sections.map((group) => {
+            const all = lensSet.lenses.filter((lens) => lens.scope === group.scope)
+            const lenses = shown.filter((lens) => lens.scope === group.scope)
+            // While filtering, a group with no match hides, even one that says it is empty.
+            if (filtering ? !lenses.length : !lenses.length && !group.empty) return null
+            return (
+              <div className="tr-lns-group" key={group.scope}>
+                <div className="tr-lns-group-head">
+                  <strong id={`tr-lns-${group.scope}`}>{group.title}</strong>
+                  <code className="tr-muted">{group.where}</code>
+                  {filtering && (
+                    <span className="tr-lns-group-count">
+                      {matched.filter((lens) => lens.scope === group.scope).length} of{' '}
+                      {all.length}
+                    </span>
+                  )}
+                </div>
+                {lenses.length ? (
+                  <ul className="tr-lns-list" aria-labelledby={`tr-lns-${group.scope}`}>
+                    {lenses.map((lens) => {
+                      const key = `${lens.scope}:${lens.name}`
+                      return (
+                        <LensRow
+                          key={key}
+                          lens={lens}
+                          frozen={frozen}
+                          recleaning={recleaning.has(key)}
+                          open={open === key}
+                          onOpen={() => setOpen(open === key ? undefined : key)}
+                          onMoved={(to) => {
+                            const next = `${to.scope}:${to.name}`
+                            // The save answers late: another lens opened since stays open.
+                            setOpen((now) => (now === key ? next : now))
+                            if (pointed !== key) return
+                            setPointed(next)
+                            // A page left since keeps its own link.
+                            if (location.hash === lensHref(lens))
+                              history.replaceState(null, '', lensHref(to))
+                          }}
+                          onSwitch={(on) =>
+                            lens.scope === 'recipe'
+                              ? setRecipe(lens.name, { on })
+                              : void onLens('save', {
+                                  scope: lens.scope,
+                                  name: lens.name,
+                                  lens: { on },
+                                }).catch(() => undefined)
+                          }
+                          onRecipeModel={(model) => setRecipe(lens.name, { model })}
+                          onLens={async (route, body) => {
+                            const done = await onLens(route, body)
+                            if (done.groupsProblem) setLeft(done.groupsProblem)
+                            else if (route === 'remove' && done.removedFrom?.length)
+                              setLeft(
+                                `${lens.name} removed: it left ${done.removedFrom.length === 1 ? 'the group' : 'the groups'} ${done.removedFrom.join(', ')}, whose next review says so.`,
+                              )
+                            return done
+                          }}
+                          modelOf={values.lensModels[lens.name]}
+                          groups={groups ? groupsOf(groupList, lens) : undefined}
+                          onGroup={(name) => {
+                            setTab('groups')
+                            setGroupFocus(name)
+                          }}
+                        />
+                      )
+                    })}
+                  </ul>
+                ) : (
+                  <p className="tr-muted tr-lns-empty">{group.empty}</p>
                 )}
               </div>
-              {lenses.length ? (
-                <ul className="tr-lns-list" aria-labelledby={`tr-lns-${group.scope}`}>
-                  {lenses.map((lens) => {
-                    const key = `${lens.scope}:${lens.name}`
-                    return (
-                      <LensRow
-                        key={key}
-                        lens={lens}
-                        frozen={frozen}
-                        recleaning={recleaning.has(key)}
-                        open={open === key}
-                        onOpen={() => setOpen(open === key ? undefined : key)}
-                        onMoved={(to) => {
-                          const next = `${to.scope}:${to.name}`
-                          // The save answers late: another lens opened since stays open.
-                          setOpen((now) => (now === key ? next : now))
-                          if (pointed !== key) return
-                          setPointed(next)
-                          // A page left since keeps its own link.
-                          if (location.hash === lensHref(lens))
-                            history.replaceState(null, '', lensHref(to))
-                        }}
-                        onSwitch={(on) =>
-                          lens.scope === 'recipe'
-                            ? setRecipe(lens.name, { on })
-                            : void onLens('save', {
-                                scope: lens.scope,
-                                name: lens.name,
-                                lens: { on },
-                              }).catch(() => undefined)
-                        }
-                        onRecipeModel={(model) => setRecipe(lens.name, { model })}
-                        onLens={onLens}
-                        modelOf={values.lensModels[lens.name]}
-                      />
-                    )
-                  })}
-                </ul>
-              ) : (
-                <p className="tr-muted tr-lns-empty">{group.empty}</p>
-              )}
-            </div>
-          )
-        })}
-      </section>
+            )
+          })}
+        </section>
+      )}
     </main>
   )
 }
@@ -475,11 +571,14 @@ function LensFilter({
   filter,
   shown,
   total,
+  groups,
   onChange,
 }: {
   filter: Filter
   shown: number
   total: number
+  /** The project's groups, by name: a select when there are some. */
+  groups: string[]
   onChange: (filter: Filter) => void
 }) {
   const filtering = isFiltering(filter)
@@ -541,6 +640,28 @@ function LensFilter({
           </option>
         ))}
       </select>
+      {groups.length > 0 && (
+        <>
+          <label className="tr-sr" htmlFor="tr-lns-filter-group">
+            Group
+          </label>
+          <select
+            id="tr-lns-filter-group"
+            className="tr-input tr-select"
+            value={groups.includes(filter.group) ? filter.group : ''}
+            onChange={(event) =>
+              onChange({ ...filter, group: event.currentTarget.value })
+            }
+          >
+            <option value="">Any group</option>
+            {groups.map((name) => (
+              <option key={name} value={name}>
+                In {name}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
       <span className="tr-lns-filter-count">
         <span aria-live="polite" className="tr-lns-filter-total">
           {filtering
@@ -1400,6 +1521,8 @@ function LensRow({
   onRecipeModel,
   onLens,
   modelOf,
+  groups,
+  onGroup,
 }: {
   lens: LensEntry
   frozen: boolean
@@ -1412,6 +1535,10 @@ function LensRow({
   onRecipeModel: (model: string | null) => void
   onLens: Props['onLens']
   modelOf: string | undefined
+  /** The groups it is in; undefined from a server that has none. */
+  groups: string[] | undefined
+  /** Opens a group's editor, on the Groups tab. */
+  onGroup: (name: string) => void
 }) {
   const builtIn = lens.scope === 'recipe'
   const state = recleaning
@@ -1443,6 +1570,24 @@ function LensRow({
             <span className="tr-chip">replaces the {builtIn ? 'next' : 'built-in'}</span>
           )}
           <span className="tr-lns-facts">{facts(lens)}</span>
+          {groups && groups.length > 0 && (
+            <span
+              className="tr-grp-in"
+              aria-label={`${lens.name} is in ${groups.join(', ')}`}
+            >
+              {groups.map((group) => (
+                <button
+                  key={group}
+                  type="button"
+                  className="tr-chip tr-grp-chip"
+                  title={`In the group ${group}: open it`}
+                  onClick={() => onGroup(group)}
+                >
+                  {group}
+                </button>
+              ))}
+            </span>
+          )}
         </span>
         <span className={`tr-lns-state tr-lns-state--${state.tone}`}>
           {recleaning && <span className="tr-spinner" aria-hidden="true" />}
@@ -1482,6 +1627,7 @@ function LensRow({
           ) : (
             <AddedLens
               key={lens.cleaned?.at}
+              groups={groups ?? []}
               lens={lens}
               frozen={frozen}
               onLens={onLens}
@@ -1621,12 +1767,15 @@ function RecipeLens({
 /** A lens the user added: every setting editable, saved together. */
 function AddedLens({
   lens,
+  groups,
   frozen,
   onLens,
   onName,
   onMoved,
 }: {
   lens: LensEntry
+  /** The groups it is in: removed, it leaves them. */
+  groups: string[]
   frozen: boolean
   onLens: Props['onLens']
   /** The name as it is typed, for the row to show it. */
@@ -1803,6 +1952,12 @@ function AddedLens({
                 >
                   Remove {lens.name} for good
                 </button>
+                {groups.length > 0 && (
+                  <span className="tr-muted">
+                    It leaves {groups.length === 1 ? 'the group' : 'the groups'}{' '}
+                    {groups.join(', ')}.
+                  </span>
+                )}
                 <button
                   type="button"
                   className="tr-btn"

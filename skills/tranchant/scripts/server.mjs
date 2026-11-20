@@ -20,7 +20,8 @@
 // command, or an agent that starts others, holds (lib/inside.mjs); lists
 // what the source's picker offers, names only (lib/picker.mjs); imports
 // several at once, and prints CLEAN for each cleaning the hooks start an
-// agent on;
+// agent on; /api/lens/group/* creates, changes and deletes the project's
+// groups of lenses and sets its default one (lib/groups.mjs);
 // it pushes `settings` when the file, a lens or a cleaning changes. It serves
 // the Lenses step's progress (lenses.json) with the review, and prints START
 // or BUILD when the page starts a review waiting to start, or builds its
@@ -74,6 +75,17 @@ import {
   listFolder,
 } from './lib/picker.mjs'
 import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
+import {
+  GroupRefusal,
+  forgetLens,
+  groupsFile,
+  moveLens,
+  readGroups,
+  removeGroup,
+  saveGroup,
+  setDefaultGroup,
+  switchLenses,
+} from './lib/groups.mjs'
 import {
   LensFileRefusal,
   describeLenses,
@@ -388,12 +400,13 @@ function trackerOnce(values) {
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
-  const [described, cleanings] = await Promise.all([
+  const [described, cleanings, groups] = await Promise.all([
     describeLenses({ project: lensRoot, base: review.base, values }),
     listCleanings(lensRoot).catch((error) => {
       console.error(`tranchant server: cleanings unreadable: ${oneLine(String(error))}`)
       return []
     }),
+    readGroups(lensRoot),
   ])
   return {
     path: SETTINGS_FILE,
@@ -408,6 +421,12 @@ async function settingsPayload() {
       .map((lens) => lens.name),
     lensSet: { dirs: described.dirs, lenses: described.lenses },
     cleanings,
+    groups: {
+      file: groups.file,
+      ...(groups.groups.default && { default: groups.groups.default }),
+      list: groups.groups.groups.map(({ name, lenses }) => ({ name, lenses })),
+      ...(groups.problem && { problem: groups.problem }),
+    },
     ...(described.base.problem && { recipeProblem: described.base.problem }),
     ...(problem && { problem }),
   }
@@ -424,7 +443,11 @@ async function lensChange(res, change) {
   try {
     done = await change()
   } catch (error) {
-    if (error instanceof CleaningRefusal || error instanceof LensFileRefusal)
+    if (
+      error instanceof CleaningRefusal ||
+      error instanceof LensFileRefusal ||
+      error instanceof GroupRefusal
+    )
       return send(res, 409, { error: error.message })
     throw error
   }
@@ -1403,7 +1426,12 @@ async function handle(req, res) {
     const lens = lensOf(input)
     if (!lens) return send(res, 400, LENS_REQUIRED)
     const { scope, name } = lens
-    return lensChange(res, () => updateUserLens(lensRoot, scope, name, input.lens))
+    return lensChange(res, async () => {
+      const to = await updateUserLens(lensRoot, scope, name, input.lens)
+      // Renamed or moved, it stays in its groups.
+      const problem = await groupsAfter(() => moveLens(lensRoot, { scope, name }, to))
+      return { ...to, ...(problem && { groupsProblem: problem }) }
+    })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/lens/remove') {
@@ -1411,7 +1439,48 @@ async function handle(req, res) {
     const lens = lensOf(input)
     if (!lens) return send(res, 400, LENS_REQUIRED)
     const { scope, name } = lens
-    return lensChange(res, () => removeUserLens(lensRoot, scope, name))
+    return lensChange(res, async () => {
+      await removeUserLens(lensRoot, scope, name)
+      /** @type {string[]} */
+      let removedFrom = []
+      // Out of every group, which its reviews say.
+      const problem = await groupsAfter(async () => {
+        removedFrom = await forgetLens(lensRoot, { scope, name })
+      })
+      return { removedFrom, ...(problem && { groupsProblem: problem }) }
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/group/save') {
+    const input = await readJson(req)
+    const from = input?.name
+    if (from !== undefined && (typeof from !== 'string' || !LENS_NAME.test(from)))
+      return send(res, 400, { error: 'name: the group changed, or none for a new one' })
+    return lensChange(res, async () => {
+      await saveGroup(lensRoot, from, input?.group)
+      return {}
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/group/remove') {
+    const input = await readJson(req)
+    if (typeof input?.name !== 'string' || !LENS_NAME.test(input.name))
+      return send(res, 400, { error: 'name is required' })
+    return lensChange(res, async () => {
+      await removeGroup(lensRoot, input.name)
+      return {}
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/group/default') {
+    const input = await readJson(req)
+    const name = input?.name
+    if (name !== null && (typeof name !== 'string' || !LENS_NAME.test(name)))
+      return send(res, 400, { error: 'name: a group, or null for every lens that is on' })
+    return lensChange(res, async () => {
+      await setDefaultGroup(lensRoot, name)
+      return {}
+    })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/lens/clean') {
@@ -1452,9 +1521,17 @@ async function handle(req, res) {
       return send(res, 409, {
         error: "a run's own recipe (--recipe) has nothing to save",
       })
+    const group = typeof step.group === 'string' ? step.group : undefined
+    // Started on the rows of the group they show: another one picked is built first.
+    if (starting && choices.group !== undefined && (choices.group ?? undefined) !== group)
+      return send(res, 409, {
+        error: 'the lenses of the group picked are not built yet: wait for them',
+      })
     // Saved as Settings › Lenses saves them, before the start makes the plan again from the settings.
     if (starting && choices.remember) {
-      const saved = await rememberChoices(choices.lenses, step.lenses)
+      const saved = group
+        ? await rememberInGroup(group, choices.lenses, step.lenses)
+        : await rememberChoices(choices.lenses, step.lenses)
       if (saved) return send(res, 409, { error: saved })
     }
     const file = path.join(dir, 'choices.json')
@@ -1499,22 +1576,81 @@ const lensesStamp = () =>
   )
 
 /**
+ * The groups brought in line with a lens change that landed already: a
+ * failure is answered beside it, never as the change's (the lens moved).
+ * @param {() => Promise<unknown>} update
+ * @returns {Promise<string | undefined>}
+ */
+async function groupsAfter(update) {
+  try {
+    await update()
+    return undefined
+  } catch (error) {
+    const code = errorCode(error)
+    console.error(
+      `tranchant server: the groups were not updated: ${oneLine(String(error))}`,
+    )
+    return `the lens changed, but its groups were not updated (${typeof code === 'string' ? code : 'error'}): check Settings › Lenses › Groups`
+  }
+}
+
+/**
  * The page's choices on a review waiting to start: by lens name, on or off
- * for this review; whether Start saves them. Undefined when unsound.
+ * for this review; whether Start saves them; the group picked, when one is
+ * (`null`: every lens that is on). Undefined when unsound.
  * @param {any} input
- * @returns {{ lenses: Record<string, boolean>, remember: boolean } | undefined}
+ * @returns {{ lenses: Record<string, boolean>, remember: boolean, group?: string | null } | undefined}
  */
 function choicesOf(input) {
   const lenses = input?.lenses
   if (!lenses || typeof lenses !== 'object' || Array.isArray(lenses)) return undefined
   if (typeof input.remember !== 'boolean') return undefined
+  const group = input.group
+  if (
+    group !== undefined &&
+    group !== null &&
+    (typeof group !== 'string' || !LENS_NAME.test(group))
+  )
+    return undefined
   const entries = Object.entries(lenses)
   if (
     entries.length > 200 ||
     !entries.every(([name, on]) => LENS_NAME.test(name) && typeof on === 'boolean')
   )
     return undefined
-  return { lenses: Object.fromEntries(entries), remember: input.remember }
+  return {
+    lenses: Object.fromEntries(entries),
+    remember: input.remember,
+    ...(group !== undefined && { group }),
+  }
+}
+
+/**
+ * The switches of a group's review saved in the group: a lens turned off
+ * leaves it, one turned on joins it. Answers why they could not be, else
+ * undefined.
+ * @param {string} group
+ * @param {Record<string, boolean>} lenses
+ * @param {{ name: string, scope?: 'global' | 'local' }[]} rows The Lenses step's rows: which lens a name is.
+ */
+async function rememberInGroup(group, lenses, rows) {
+  /** @type {Map<string, import('./lib/groups.mjs').MemberScope>} */
+  const scopes = new Map(rows.map((row) => [row.name, row.scope ?? 'recipe']))
+  try {
+    await switchLenses(
+      lensRoot,
+      group,
+      Object.entries(lenses).flatMap(([name, on]) => {
+        const scope = scopes.get(name)
+        return scope ? [{ member: { scope, name }, on }] : []
+      }),
+    )
+  } catch (error) {
+    if (error instanceof GroupRefusal) return error.message
+    throw error
+  }
+  void lensesChanged()
+  return undefined
 }
 
 /**
@@ -1948,6 +2084,13 @@ async function lensesChanged() {
       }
     }
   }
+  const groups = groupsFile(lensRoot)
+  marks.push(
+    `${groups} ${await stat(groups).then(
+      (one) => `${one.size} ${one.mtimeMs}`,
+      () => '',
+    )}`,
+  )
   const now = marks.join('\n')
   if (now === lensesSeen) return
   lensesSeen = now

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prepare.mjs [<branch> | <merge request url>] [--recipe <recipe.json>] [--start | --no-start]
+// prepare.mjs [<branch> | <merge request url>] [--recipe <recipe.json> | --group <name>] [--start | --no-start]
 // What `/tranchant review` runs first, from the session's folder: finds the
 // change (the current branch, or <branch>, against the repository's default
 // branch, `ours`, with the branch's open merge request when glab finds one;
@@ -10,6 +10,11 @@
 // user added for the project and globally (lib/userlens.mjs), under each name
 // the first that is on: a local lens, a global one, the recipe's (the
 // settings' `disabledLenses` turn those off, `lensModels` set their model).
+// --group <name> runs that group of the project's (lib/groups.mjs) in their
+// place, its lenses whatever their switches; with no --group, the project's
+// default group when it has one. The plan names the group, and what its
+// review says of its lenses that do not run (`notes`, also on stderr as
+// `group: <note>`).
 // It writes the review's envelope, `preparing`
 // with no finding yet, to <state>/inbox/<id>.json and prints `INBOX <file>`,
 // then the lenses whose paths the change touches to <id>.plan.json next to
@@ -26,7 +31,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs, promisify } from 'node:util'
-import { REVIEW_VERSION, oneLine } from './lib/format.mjs'
+import { LENS_NAME, REVIEW_VERSION, oneLine } from './lib/format.mjs'
+import { groupNotes, readGroups } from './lib/groups.mjs'
 import { STATE_ROOT } from './lib/project.mjs'
 import { RecipeRefusal, findRecipe, readRecipe } from './lib/lens.mjs'
 import { loadSettings } from './lib/settings.mjs'
@@ -253,6 +259,7 @@ try {
     allowPositionals: true,
     options: {
       recipe: { type: 'string' },
+      group: { type: 'string' },
       start: { type: 'boolean' },
       'no-start': { type: 'boolean' },
     },
@@ -265,6 +272,10 @@ if (positionals.length > 1) refuse('give one branch or merge request url at most
 const [target] = positionals
 if (target?.startsWith('-')) refuse(`${target} is not a branch or a merge request url`)
 if (values.start && values['no-start']) refuse('give --start or --no-start, not both')
+if (values.recipe !== undefined && values.group !== undefined)
+  refuse("give --recipe or --group, not both: a run's own recipe runs whole")
+if (values.group !== undefined && !LENS_NAME.test(values.group))
+  refuse(`${values.group} is not a group name: letters, digits, - and _ only`)
 
 const cwd = process.cwd()
 const top = await gitOr(cwd, ['rev-parse', '--show-toplevel'])
@@ -298,6 +309,23 @@ const lenses = await readRecipe(recipe).then(
 const range = theirs
   ? `${change.base}..${change.headSha}`
   : `${change.base}...${change.headSha}`
+// The flag, then the project's default group; a run's own recipe runs whole.
+const groups = values.recipe === undefined ? await readGroups(project) : undefined
+const groupName = values.group ?? groups?.groups.default
+if (groups?.problem) {
+  if (values.group !== undefined) refuse(`group ${values.group}: ${groups.problem}`)
+  // Read as none: the review runs every lens that is on, said.
+  console.error(`groups: ${oneLine(groups.problem)}`)
+}
+const group = groupName
+  ? groups?.groups.groups.find((one) => one.name === groupName)
+  : undefined
+if (values.group !== undefined && !group) {
+  const names = groups?.groups.groups.map((one) => one.name) ?? []
+  refuse(
+    `no group ${values.group} in this project (Settings › Lenses › Groups): ${names.length ? names.join(', ') : 'none yet'}`,
+  )
+}
 // The flag, then the settings: a review waiting to start plans every lens the page can turn on.
 const wait = values['no-start']
   ? 'flag'
@@ -311,6 +339,7 @@ const planned = await planLenses({
   own: values.recipe !== undefined,
   values: settings,
   all: wait !== undefined,
+  ...(group && { group: group.lenses }),
 }).catch((error) => {
   if (error instanceof PlanRefusal) return refuse(error.message)
   throw error
@@ -320,12 +349,19 @@ for (const one of planned.problems)
 if (!planned.changed.length)
   refuse(`${change.branch} has no change against ${change.base}`)
 const { applied, others } = planned
+// Said by every review of the group until one runs: lenses.mjs then forgets them.
+const notes = group ? groupNotes(group.name, group.removed ?? [], planned.missing) : []
 if (!applied.length && !(wait && others.some((lens) => lens.files)))
   refuse(
-    !planned.inForce
-      ? 'every lens is turned off in the settings (Settings › Lenses)'
-      : "no lens of the recipe applies to the change's files",
+    group
+      ? !planned.inForce
+        ? `group ${group.name} has no lens that can run (Settings › Lenses › Groups)${notes.length ? `: ${notes.join('; ')}` : ''}`
+        : `no lens of group ${group.name} applies to the change's files`
+      : !planned.inForce
+        ? 'every lens is turned off in the settings (Settings › Lenses)'
+        : "no lens of the recipe applies to the change's files",
   )
+for (const note of notes) console.error(`group: ${oneLine(note)}`)
 
 const id = randomUUID()
 const envelope = {
@@ -360,6 +396,9 @@ await writeFile(
       // How many files each reads: the ready screen's, while the review waits.
       lenses: wait ? applied : applied.map(({ files: _files, ...lens }) => lens),
       ...(values.recipe && { own: true }),
+      ...(group && { group: group.name }),
+      ...(notes.length && { notes }),
+      ...(group?.removed && { removed: group.removed }),
       ...(wait && { wait, changed: planned.changed.length, others }),
     },
     null,

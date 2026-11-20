@@ -31,7 +31,7 @@ Read the arguments as `[mode] [file]`: the mode is `review`, `import`, `comments
 `stop` or `status`, or none for the open; any other argument is the review file
 (`/tranchant .tranchant/review.json`, `/tranchant ~/Downloads/review.json`).
 After `review` come an optional branch, merge request url or folder, an optional
-`--recipe <file>`, and `--no-start` or `--start`. After `comments` comes an optional pull or merge
+`--recipe <file>` or `--group <name>`, and `--no-start` or `--start`. After `comments` comes an optional pull or merge
 request url.
 
 Everything lives in the skill and in the state folder

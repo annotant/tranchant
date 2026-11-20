@@ -198,6 +198,7 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-unverified { opacity: 0.55; }
 .tr-progress { display: flex; flex-direction: column; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--tr-border); font-size: 13px; }
 .tr-progress-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.tr-progress-compare { margin: 6px 0 0; font-size: 12.5px; }
 .tr-progress-title { font-weight: 700; }
 .tr-progress-ok { color: var(--tr-auto); flex: none; }
 .tr-progress-warn { color: var(--tr-warn); font-weight: 600; }
@@ -396,6 +397,28 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-tab { min-height: 36px; padding: 6px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--tr-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .tr-tab[aria-selected="true"] { color: var(--tr-text); border-bottom-color: var(--tr-accent); }
 .tr-tab:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: -2px; }
+.tr-lns-tabs { margin-bottom: 4px; }
+.tr-grp-row { grid-template-columns: minmax(110px, max-content) minmax(0, 1fr) max-content max-content; }
+.tr-grp-members, .tr-grp-in { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.tr-grp-chip { height: 20px; padding: 0 8px; font: inherit; font-size: 11px; border: 1px solid transparent; background: var(--tr-accent-weak); color: var(--tr-accent); cursor: pointer; }
+.tr-grp-chip:hover { border-color: var(--tr-accent); }
+.tr-grp-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; }
+.tr-grp-pickhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tr-grp-pickhead .tr-input { flex: 0 1 220px; min-width: 0; }
+.tr-grp-pickhead [role="status"] { margin-left: auto; color: var(--tr-muted); font-size: 12.5px; }
+.tr-grp-pickgroup { display: flex; flex-direction: column; gap: 6px; }
+.tr-grp-pickgroup-head { padding-left: 13px; align-items: center; }
+.tr-grp-pickgroup-head .tr-inline-check { gap: 12px; }
+.tr-grp-pick { display: grid; grid-template-columns: 20px minmax(110px, max-content) minmax(0, 1fr) max-content; align-items: center; gap: 2px 12px; padding: 7px 12px; background: var(--tr-bg); cursor: pointer; font-size: 13.5px; }
+.tr-grp-pick:hover { background: var(--tr-bg-2); }
+.tr-grp-pick .tr-check { margin: 0; accent-color: var(--tr-accent); }
+.tr-grp-item--on .tr-grp-pick { background: var(--tr-accent-weak); }
+.tr-grp-pick .tr-lns-origin { justify-self: start; }
+.tr-grp-pick-note { grid-column: 2 / -1; font-size: 12px; color: var(--tr-muted); }
+.tr-grp-note { margin: 0; padding: 8px 12px; border-radius: var(--tr-radius); background: var(--tr-accent-weak); color: var(--tr-accent); font-size: 12.5px; }
+.tr-grp-note--warn { background: var(--tr-warn-bg); color: var(--tr-warn); border: 1px solid var(--tr-warn); }
+.tr-grp-select { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.tr-grp-select .tr-select { max-width: 300px; }
 .tr-lns-prompt { width: 100%; max-height: 420px; margin: 0; padding: 10px 12px; overflow: auto; border: 1px solid var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tr-lns-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; font-size: 13px; }
 .tr-lns-diff h4 { margin-bottom: 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tr-muted); }
@@ -404,6 +427,10 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
   .tr-picker-item { grid-template-columns: 62px minmax(0, 1fr); }
   .tr-picker-aside { grid-column: 2; white-space: normal; }
   .tr-lns-row { grid-template-columns: 36px minmax(0, 1fr) max-content; }
+  .tr-grp-row { grid-template-columns: minmax(0, 1fr) max-content; }
+  .tr-grp-row .tr-lns-meta, .tr-grp-row .tr-lns-state { grid-column: 1 / -1; }
+  .tr-grp-pick { grid-template-columns: 20px minmax(0, 1fr); }
+  .tr-grp-pick .tr-lns-source, .tr-grp-pick .tr-lns-origin { grid-column: 2; }
   .tr-match { grid-template-columns: 20px minmax(0, 1fr); }
   .tr-match-name { grid-column: 2; }
   .tr-lns-meta { grid-row: 2; grid-column: 2 / -1; }

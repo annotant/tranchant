@@ -470,11 +470,13 @@ export async function removeUserLens(
 /**
  * The lenses in force: the project's, then the global ones, then the
  * recipe's; under each name, the first that is on runs. A lens whose
- * lens.json cannot be read runs not, and says why.
- * @param {{ project: string, recipe: LensSpec[], disabled: Set<string>, models: Record<string, string> }} given
+ * lens.json cannot be read runs not, and says why. With `members`, a
+ * group's lenses: a lens is on when it is one of them, whatever its switch
+ * (its spec then says `offInSettings` when that is off).
+ * @param {{ project: string, recipe: LensSpec[], disabled: Set<string>, models: Record<string, string>, members?: { scope: string, name: string }[] }} given
  * @returns {Promise<Candidate[]>}
  */
-export async function lensSet({ project, recipe, disabled, models }) {
+export async function lensSet({ project, recipe, disabled, models, members }) {
   const added = [
     ...(await listUserLenses('local', project)),
     ...(await listUserLenses('global', project)),
@@ -519,6 +521,14 @@ export async function lensSet({ project, recipe, disabled, models }) {
       spec: { ...lens, ...(models[lens.name] && { model: models[lens.name] }) },
     })),
   ]
+  if (members) {
+    const inGroup = new Set(members.map((one) => `${one.scope}:${one.name}`))
+    for (const one of all) {
+      const on = inGroup.has(`${one.scope}:${one.name}`)
+      if (on && !one.on && one.spec) one.spec = { ...one.spec, offInSettings: true }
+      one.on = on
+    }
+  }
   const taken = new Set()
   for (const one of all) {
     if (!one.on || !one.spec || taken.has(one.name)) continue
