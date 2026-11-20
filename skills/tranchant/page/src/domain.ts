@@ -27,7 +27,12 @@ interface Refusal {
 export interface LensRow {
   name: string
   source: string
-  state: 'resolving' | 'ready' | 'failed'
+  /** `idle`: not built, a waiting review's lens that does not run (off, or no changed file in its paths). */
+  state: 'resolving' | 'ready' | 'failed' | 'idle'
+  /** In a review waiting to start: the changed files it reads. */
+  files?: number
+  /** In a review waiting to start: off in the settings. */
+  off?: true
   /** With `ready`: against the project's previous review. */
   change?: 'unchanged' | 'updated' | 'new'
   version?: string
@@ -40,10 +45,28 @@ export interface LensRow {
   cleaning?: 'running' | 'again' | 'failed' | 'held'
 }
 
+/** The page's choices on a review waiting to start: by lens name, on or off for this review. */
+export interface StartChoices {
+  lenses: Record<string, boolean>
+  /** Start saves them as Settings › Lenses does. */
+  remember: boolean
+}
+
 /** The Lenses step's progress: lenses.json. */
 export interface LensesProgress {
-  state: 'resolving' | 'ready' | 'refused'
+  /** `waiting`: built, the review waits for Start the review. */
+  state: 'resolving' | 'ready' | 'refused' | 'waiting'
   lenses: LensRow[]
+  /** While it waits: why (the settings' Start the review by itself, or --no-start). */
+  wait?: 'setting' | 'flag'
+  /** Its own recipe (--recipe): no lens added, none turned off, nothing to save. */
+  own?: true
+  /** The change's files. */
+  changed?: number
+  /** The choices of the last Start or Build the lenses again. */
+  choices?: StartChoices
+  /** Why the plan could not be made again (the settings or the recipe unreadable): the last one stands. */
+  problem?: string
 }
 
 /** The seven topics, in the order the page lists them within a bucket. */

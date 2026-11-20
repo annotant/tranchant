@@ -18,13 +18,25 @@
 // cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
 // them again, and prints CLEAN for each cleaning the hooks start an agent on;
 // it pushes `settings` when the file, a lens or a cleaning changes. It serves
-// the Lenses step's progress (lenses.json) with the review.
+// the Lenses step's progress (lenses.json) with the review, and prints START
+// or BUILD when the page starts a review waiting to start, or builds its
+// lenses again, the page's choices in choices.json.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync, watch } from 'node:fs'
-import { lstat, mkdir, readdir, readFile, realpath, stat } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -1239,6 +1251,52 @@ async function handle(req, res) {
     })
   }
 
+  if (
+    req.method === 'POST' &&
+    (url.pathname === '/api/review/start' || url.pathname === '/api/review/build')
+  ) {
+    const input = await readJson(req)
+    const choices = choicesOf(input)
+    if (!choices)
+      return send(res, 400, {
+        error:
+          'lenses (by name, true or false) and remember (true or false) are required',
+      })
+    const [now, step] = await Promise.all([
+      store.readReview().catch(() => undefined),
+      readLensesStep(),
+    ])
+    if (now?.status !== 'preparing' || step?.state !== 'waiting')
+      return send(res, 409, { error: 'the review does not wait to start' })
+    // The last Start or Build not taken up yet: lenses.json has not moved since.
+    const stamp = await lensesStamp()
+    if (asked !== undefined && asked === stamp)
+      return send(res, 409, { error: 'the lenses are being built again: wait for them' })
+    const starting = url.pathname === '/api/review/start'
+    if (starting && choices.remember && step.own)
+      return send(res, 409, {
+        error: "a run's own recipe (--recipe) has nothing to save",
+      })
+    // Saved as Settings › Lenses saves them, before the start makes the plan again from the settings.
+    if (starting && choices.remember) {
+      const saved = await rememberChoices(choices.lenses, step.lenses)
+      if (saved) return send(res, 409, { error: saved })
+    }
+    const file = path.join(dir, 'choices.json')
+    // Whole or not at all: lenses.mjs may be reading it.
+    const temp = `${file}.${process.pid}.tmp`
+    try {
+      await writeFile(temp, `${JSON.stringify(choices, null, 2)}\n`)
+      await rename(temp, file)
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw error
+    }
+    asked = stamp
+    print(`${starting ? 'START' : 'BUILD'} ${review.id}`)
+    return send(res, 200, { ok: true })
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     const input = await readJson(req)
     if (typeof input?.id !== 'string' || !ID.test(input.id)) {
@@ -1251,6 +1309,83 @@ async function handle(req, res) {
   }
 
   return send(res, 404, { error: 'not found' })
+}
+
+const LENS_NAME = /^[\w-]{1,40}$/
+
+/** lenses.json's size and time when the last Start or Build was printed. @type {string | undefined} */
+let asked
+
+/** lenses.json's size and time, or '' while there is none. */
+const lensesStamp = () =>
+  stat(path.join(dir, 'lenses.json')).then(
+    (one) => `${one.size} ${one.mtimeMs}`,
+    () => '',
+  )
+
+/**
+ * The page's choices on a review waiting to start: by lens name, on or off
+ * for this review; whether Start saves them. Undefined when unsound.
+ * @param {any} input
+ * @returns {{ lenses: Record<string, boolean>, remember: boolean } | undefined}
+ */
+function choicesOf(input) {
+  const lenses = input?.lenses
+  if (!lenses || typeof lenses !== 'object' || Array.isArray(lenses)) return undefined
+  if (typeof input.remember !== 'boolean') return undefined
+  const entries = Object.entries(lenses)
+  if (
+    entries.length > 200 ||
+    !entries.every(([name, on]) => LENS_NAME.test(name) && typeof on === 'boolean')
+  )
+    return undefined
+  return { lenses: Object.fromEntries(entries), remember: input.remember }
+}
+
+/**
+ * The choices saved as Settings › Lenses saves them: a recipe's lens in the
+ * settings' `disabledLenses`, an added one in its `lens.json`. Answers why
+ * they could not be, else undefined.
+ * @param {Record<string, boolean>} lenses
+ * @param {{ name: string, scope?: 'global' | 'local' }[]} rows The Lenses step's rows: which lens a name is.
+ */
+async function rememberChoices(lenses, rows) {
+  const scopes = new Map(rows.map((row) => [row.name, row.scope]))
+  const named = Object.entries(lenses).filter(([name]) => scopes.has(name))
+  const recipe = named.filter(([name]) => !scopes.get(name))
+  const turn = settingsWriting.then(async () => {
+    // Checked before anything is written: a choice saved in part is said nowhere.
+    const { settings, problem } = await loadSettings()
+    if (problem && recipe.length) return `the settings cannot be saved: ${problem}`
+    try {
+      for (const [name, on] of named) {
+        const scope = scopes.get(name)
+        if (scope) await updateUserLens(lensRoot, scope, name, { on })
+      }
+      if (recipe.length) {
+        const off = new Set(settings.disabledLenses ?? [])
+        for (const [name, on] of recipe) {
+          if (on) off.delete(name)
+          else off.add(name)
+        }
+        await writeSettings({ ...settings, disabledLenses: [...off] })
+        watchFolders()
+        settingsChanged()
+      }
+    } catch (error) {
+      if (error instanceof LensFileRefusal || error instanceof SettingsRefusal)
+        return error.message
+      const code = errorCode(error)
+      // The person's own files: the cause may be theirs to mend (rights, disk).
+      console.error(`tranchant server: Remember these choices: ${oneLine(String(error))}`)
+      return `the choices could not all be saved (${typeof code === 'string' ? code : 'error'}): check Settings › Lenses`
+    }
+    return undefined
+  })
+  settingsWriting = turn.catch(() => undefined)
+  const answer = await turn
+  void lensesChanged()
+  return answer
 }
 
 /** The settings writes, one after the other: two pages saving at once never cross. @type {Promise<unknown>} */

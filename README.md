@@ -168,7 +168,11 @@ run script.
 ```
 
 `/tranchant review` takes `--recipe <file>` to use your own lenses instead of
-the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)).
+the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)),
+and `--no-start` to build the lenses and wait: the page shows what will run, a
+switch on each lens for this review, and **Start the review** (Settings' **Start
+the review by itself**, on by default, does the same for every review when off;
+`--start` overrides it for one run).
 A lens whose globs the change does not touch is skipped. Three review agents
 run at a time (the Settings say how many); nothing is written in the reviewed working tree (a merge
 request's head is fetched when the checkout lacks it). On a branch, `glab`

@@ -56,7 +56,7 @@ const plural = (count: number, one: string, many: string) =>
   `${count} ${count === 1 ? one : many}`
 
 /** Past this many lenses that run, the page warns of their cost: no cap, a warning. */
-const MANY_LENSES = 12
+export const MANY_LENSES = 12
 
 /** Each lens that runs is one reviewer agent: said past MANY_LENSES. */
 function ManyLenses({ count, adding }: { count: number; adding?: boolean }) {

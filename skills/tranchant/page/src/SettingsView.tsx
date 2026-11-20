@@ -62,6 +62,7 @@ const KEYS: readonly SettingKey[] = [
   'maxFixAgents',
   'maxReviewAgents',
   'recipe',
+  'startReview',
   'disabledLenses',
   'lensModels',
   'postWith',
@@ -79,6 +80,7 @@ const LABELS: Record<SettingKey, string> = {
   maxFixAgents: 'Fix agents at a time',
   maxReviewAgents: 'Review agents at a time',
   recipe: 'Default recipe',
+  startReview: 'Start the review by itself',
   disabledLenses: 'Lenses',
   lensModels: "Lenses' models",
   postWith: 'Posts with',
@@ -96,6 +98,8 @@ const HELP: Record<SettingKey, string> = {
   maxReviewAgents: 'Reviewers, verifiers and discussions together.',
   recipe:
     "A file in the recipe's shape, used when a run names none. --recipe on a run still wins.",
+  startReview:
+    'Off, /tranchant review builds the lenses, then waits: you check what runs, turn lenses off for this review, and start it. --no-start or --start on a run wins, for that run only.',
   disabledLenses:
     'One reviewer agent per lens: the recipe’s, and those you add for this project or for every project.',
   lensModels: 'By lens of the recipe, its reviewer’s model.',
@@ -113,6 +117,7 @@ function defaultText(key: SettingKey, defaults: SettingsValues, lenses: number):
     return choices.find(([value]) => value === defaults[key])?.[1] ?? defaults[key]
   }
   if (key === 'disabledLenses') return lenses ? `all ${lenses}` : 'all'
+  if (key === 'startReview') return defaults.startReview ? 'On' : 'Off'
   if (key === 'lensModels') return 'the reviewers’'
   if (key === 'recipe') return "the plugin's"
   if (key === 'fixModel' || key === 'reviewModel' || key === 'verifyModel')
@@ -284,6 +289,33 @@ export function SettingsView({
       </div>,
     )
 
+  const onOff = (key: 'startReview') =>
+    row(
+      key,
+      <div className="tr-segment" role="group" aria-labelledby={`tr-setting-${key}`}>
+        {(
+          [
+            [true, 'On'],
+            [false, 'Off'],
+          ] as const
+        ).map(([value, label]) => {
+          const pressed = values[key] === value
+          return (
+            <button
+              key={label}
+              type="button"
+              className={`tr-btn tr-btn--small ${pressed ? 'tr-btn--primary' : ''}`}
+              aria-pressed={pressed}
+              disabled={frozen || !!locked[key]}
+              onClick={() => set(key, value)}
+            >
+              {label}
+            </button>
+          )
+        })}
+      </div>,
+    )
+
   const text = (key: TextKey, placeholder: string, list?: string) =>
     row(
       key,
@@ -380,6 +412,7 @@ export function SettingsView({
       <section className="tr-section" aria-labelledby="tr-settings-review">
         <h3 id="tr-settings-review">Review</h3>
         {text('recipe', PLUGIN_RECIPE)}
+        {onOff('startReview')}
         <div className="tr-setting">
           <div>
             <div className="tr-setting-label" id="tr-setting-lenses">

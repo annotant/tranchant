@@ -3,6 +3,7 @@ import type {
   DecisionInput,
   DecisionsResult,
   ReviewPayload,
+  StartChoices,
   Step,
   Tracker,
 } from './domain'
@@ -179,6 +180,13 @@ export const postDiscuss = (id: string, text: string, change = false) =>
   request<unknown>(DISCUSS, {
     method: 'POST',
     body: JSON.stringify({ id, text, ...(change && { change: true }) }),
+  })
+
+/** Start the review that waits, with the page's choices; or (`build`) build its lenses again, waiting still. */
+export const postStart = (choices: StartChoices, build = false) =>
+  request<{ ok: true }>(`/api/review/${build ? 'build' : 'start'}`, {
+    method: 'POST',
+    body: JSON.stringify(choices),
   })
 
 export const postStop = (id: string) =>

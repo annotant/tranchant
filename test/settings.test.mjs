@@ -38,6 +38,7 @@ test('validateSettings keeps the keys set, drops null ones, and refuses the rest
       recipe: ' ~/recipes/mine.json ',
       disabledLenses: ['tests', 'tests', 'security'],
       postWith: 'gh',
+      startReview: false,
     }),
     {
       theme: 'dark',
@@ -45,6 +46,7 @@ test('validateSettings keeps the keys set, drops null ones, and refuses the rest
       recipe: '~/recipes/mine.json',
       disabledLenses: ['tests', 'security'],
       postWith: 'gh',
+      startReview: false,
     },
   )
   assert.deepEqual(validateSettings({}), {})
@@ -73,6 +75,7 @@ test('validateSettings keeps the keys set, drops null ones, and refuses the rest
   refused({ disabledLenses: 'tests' }, /^disabledLenses: lens names/)
   refused({ disabledLenses: ['a b'] }, /^disabledLenses: lens names/)
   refused({ postWith: 'curl' }, 'postWith: one of auto, glab, gh')
+  refused({ startReview: 'off' }, 'startReview: true or false')
   refused({ colour: 'red' }, 'colour: not a setting')
 })
 

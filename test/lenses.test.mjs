@@ -4,7 +4,7 @@
 // review, refusing the review when a source cannot be resolved; prepare.mjs
 // reads the project's recipe at BASE.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import {
@@ -140,6 +140,7 @@ async function review(cwd, args = []) {
   return {
     ...ran,
     dir,
+    planFile: plan,
     plan: JSON.parse(await readFile(plan, 'utf8')),
     envelope: JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8')),
     progress: JSON.parse(await readFile(path.join(dir, 'lenses.json'), 'utf8')),
@@ -577,4 +578,221 @@ test("lenses.mjs --abandon refuses a review still preparing, said as the step's"
   const envelope = JSON.parse(await readFile(path.join(folder, 'review.json'), 'utf8'))
   assert.equal(envelope.status, 'refused')
   assert.match(envelope.refusal.fix, /run \/tranchant review again/)
+})
+
+/** The user's settings file, as the tests write it; undefined removes it. */
+async function settings(/** @type {object | undefined} */ content) {
+  const file = path.join(configDir, 'tranchant', 'settings.json')
+  if (content === undefined) return rm(file, { force: true })
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, JSON.stringify({ version: 1, ...content }))
+}
+
+/**
+ * lenses.mjs again on a review waiting to start, with the page's choices
+ * (choices.json) when given: what it printed, the review and lenses.json.
+ * @param {{ dir: string, planFile: string }} waiting
+ * @param {string} mode
+ * @param {object} [choices]
+ */
+async function rerun(waiting, mode, choices) {
+  if (choices)
+    await writeFile(path.join(waiting.dir, 'choices.json'), JSON.stringify(choices))
+  const ran = await run(
+    process.execPath,
+    [LENSES, '--review', waiting.dir, '--plan', waiting.planFile, mode],
+    { env: env() },
+  )
+  return {
+    ...ran,
+    envelope: JSON.parse(await readFile(path.join(waiting.dir, 'review.json'), 'utf8')),
+    progress: JSON.parse(await readFile(path.join(waiting.dir, 'lenses.json'), 'utf8')),
+    lenses: ran.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('LENS '))
+      .map((line) => JSON.parse(line.slice('LENS '.length)).name),
+  }
+}
+
+const rowsOf = (/** @type {any} */ progress) =>
+  progress.lenses.map((/** @type {any} */ row) => [
+    row.name,
+    row.state,
+    row.files,
+    row.off ?? false,
+  ])
+
+test('--no-start builds the lenses and starts no reviewer; Start runs the lenses the page turned on', async (t) => {
+  const { dir } = await repository(t)
+  const recipe = await recipeFile(
+    t,
+    {
+      lenses: [
+        { name: 'js', prompt: 'js.md', paths: ['src/**'] },
+        { name: 'css', prompt: 'css.md', paths: ['**/*.css'] },
+        { name: 'all', prompt: 'all.md' },
+      ],
+    },
+    {
+      'js.md': 'The JavaScript.\n',
+      'css.md': 'The styles.\n',
+      'all.md': 'Everything.\n',
+    },
+  )
+  await settings({ recipe, disabledLenses: ['all'] })
+  try {
+    const waiting = await review(dir, ['--no-start'])
+    assert.equal(waiting.code, 0, waiting.stdout + waiting.stderr)
+    assert.equal(waiting.stdout.trim(), 'WAITING')
+    assert.deepEqual(waiting.lenses, [])
+    assert.equal(waiting.envelope.status, 'preparing')
+    assert.equal(waiting.plan.wait, 'flag')
+    assert.equal(waiting.progress.state, 'waiting')
+    assert.equal(waiting.progress.wait, 'flag')
+    assert.equal(waiting.progress.changed, 1)
+    // The lens that runs is built; one off in the settings, or reading no changed file, is not.
+    assert.deepEqual(rowsOf(waiting.progress), [
+      ['js', 'ready', 1, false],
+      ['css', 'idle', 0, false],
+      ['all', 'idle', 1, true],
+    ])
+    // Building again keeps it waiting, and changes nothing in the settings.
+    const rebuilt = await rerun(waiting, '--replan')
+    assert.equal(rebuilt.stdout.trim(), 'WAITING')
+    assert.equal(rebuilt.envelope.status, 'preparing')
+    // Start with the page's choices: js off, all on, for this review only.
+    const started = await rerun(waiting, '--start', {
+      lenses: { js: false, all: true },
+      remember: false,
+    })
+    assert.equal(started.code, 0, started.stdout + started.stderr)
+    assert.deepEqual(started.lenses, ['all'])
+    assert.equal(started.envelope.status, 'reviewing')
+    assert.deepEqual(
+      started.envelope.lenses.map((/** @type {any} */ lens) => lens.name),
+      ['all'],
+    )
+    assert.equal(started.progress.state, 'ready')
+    assert.deepEqual(
+      started.progress.lenses.map((/** @type {any} */ row) => row.name),
+      ['all'],
+    )
+    assert.equal(started.progress.wait, undefined)
+    const stored = JSON.parse(
+      await readFile(path.join(configDir, 'tranchant', 'settings.json'), 'utf8'),
+    )
+    assert.deepEqual(stored.disabledLenses, ['all'])
+  } finally {
+    await settings(undefined)
+  }
+})
+
+test('the setting waits unless --start; Build the lenses again follows the settings as they stand', async (t) => {
+  const { dir } = await repository(t)
+  const recipe = await recipeFile(
+    t,
+    {
+      lenses: [
+        { name: 'js', prompt: 'js.md', paths: ['src/**'] },
+        { name: 'all', prompt: 'all.md' },
+      ],
+    },
+    { 'js.md': 'The JavaScript.\n', 'all.md': 'Everything.\n' },
+  )
+  await settings({ recipe, startReview: false })
+  try {
+    const forced = await review(dir, ['--start'])
+    assert.equal(forced.code, 0, forced.stdout + forced.stderr)
+    assert.equal(forced.plan.wait, undefined)
+    assert.deepEqual(
+      forced.lenses.map((lens) => lens.name),
+      ['js', 'all'],
+    )
+    const waiting = await review(dir)
+    assert.equal(waiting.stdout.trim(), 'WAITING')
+    assert.equal(waiting.progress.wait, 'setting')
+    assert.deepEqual(rowsOf(waiting.progress), [
+      ['js', 'ready', 1, false],
+      ['all', 'ready', 1, false],
+    ])
+    // Turned off in Settings › Lenses meanwhile: built again, it is off, and Start leaves it out.
+    await settings({ recipe, startReview: false, disabledLenses: ['all'] })
+    const rebuilt = await rerun(waiting, '--replan')
+    assert.equal(rebuilt.stdout.trim(), 'WAITING')
+    assert.deepEqual(rowsOf(rebuilt.progress), [
+      ['js', 'ready', 1, false],
+      ['all', 'idle', 1, true],
+    ])
+    // Settings it cannot read: the last plan stands, said, never the defaults.
+    await writeFile(path.join(configDir, 'tranchant', 'settings.json'), '{ not json')
+    const unread = await rerun(waiting, '--replan')
+    assert.equal(unread.stdout.trim(), 'WAITING')
+    assert.match(unread.progress.problem, /the settings cannot be read/)
+    assert.deepEqual(rowsOf(unread.progress), rowsOf(rebuilt.progress))
+    const notStarted = await rerun(waiting, '--start')
+    assert.equal(notStarted.stdout.trim(), 'WAITING')
+    assert.equal(notStarted.envelope.status, 'preparing')
+    await settings({ recipe, startReview: false, disabledLenses: ['all'] })
+    // Every lens turned off on the page: nothing to start, it waits.
+    const none = await rerun(waiting, '--start', {
+      lenses: { js: false },
+      remember: false,
+    })
+    assert.equal(none.stdout.trim(), 'WAITING')
+    assert.match(none.stderr, /no lens is on/)
+    const started = await rerun(waiting, '--start', { lenses: {}, remember: false })
+    assert.deepEqual(started.lenses, ['js'])
+    // Both flags at once: refused.
+    const both = await run(process.execPath, [PREPARE, '--start', '--no-start'], {
+      cwd: dir,
+      env: env(),
+    })
+    assert.equal(both.code, 2)
+    assert.match(both.stdout, /^REVIEW_REFUSED give --start or --no-start, not both/)
+  } finally {
+    await settings(undefined)
+  }
+})
+
+test('a lens that cannot be built refuses no waiting review: turned off, the review starts', async (t) => {
+  const { dir } = await repository(t)
+  const recipe = await recipeFile(
+    t,
+    {
+      lenses: [
+        { name: 'js', prompt: 'js.md', paths: ['src/**'] },
+        { name: 'gone', prompt: 'gone.md' },
+      ],
+    },
+    { 'js.md': 'The JavaScript.\n' },
+  )
+  const waiting = await review(dir, ['--recipe', recipe, '--no-start'])
+  assert.equal(waiting.code, 0, waiting.stdout + waiting.stderr)
+  assert.equal(waiting.stdout.trim(), 'WAITING')
+  assert.equal(waiting.envelope.status, 'preparing')
+  assert.equal(waiting.progress.own, true)
+  assert.deepEqual(
+    waiting.progress.lenses.map((/** @type {any} */ row) => [row.name, row.state]),
+    [
+      ['js', 'ready'],
+      ['gone', 'failed'],
+    ],
+  )
+  assert.ok(waiting.progress.lenses[1].reason)
+  // Started with it on: still waiting, the page's choices kept for its switches.
+  const refused = await rerun(waiting, '--start', { lenses: {}, remember: false })
+  assert.equal(refused.code, 0, refused.stdout + refused.stderr)
+  assert.equal(refused.stdout.trim(), 'WAITING')
+  assert.equal(refused.envelope.status, 'preparing')
+  assert.deepEqual(refused.progress.choices, { lenses: {}, remember: false })
+  // Turned off on the page: the review starts without it.
+  const started = await rerun(waiting, '--start', {
+    lenses: { gone: false },
+    remember: false,
+  })
+  assert.deepEqual(started.lenses, ['js'])
+  assert.equal(started.envelope.status, 'reviewing')
+  // A review that does not wait cannot be started.
+  const done = await rerun(waiting, '--start')
+  assert.equal(done.code, 2)
 })
