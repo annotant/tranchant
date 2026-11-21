@@ -1106,7 +1106,7 @@ async function handle(req, res) {
       await Promise.all([
         store.readAll(),
         store.runs(),
-        readReviewAgents(dir, undefined, { since: SERVED_SINCE }),
+        readReviewAgents(dir, undefined, { since: SESSION_SINCE }),
         readDiscussions(dir),
         currentHead(),
         readLensesStep(),
@@ -1579,7 +1579,7 @@ async function handle(req, res) {
     const input = await readJson(req)
     if (input?.reset !== undefined && typeof input.reset !== 'boolean')
       return send(res, 400, { error: 'reset is true or false' })
-    // Stop and reset, with a fix, an answer or a stuck agent under way: refused whole, the review still runs.
+    // Stop and reset that a reset would refuse (resetRefusal): refused whole, the review still runs.
     const refused = input?.reset === true ? await resetRefusal() : undefined
     if (refused) return send(res, refused.status, { error: refused.error })
     return controlReview(res, async () => {
@@ -1632,13 +1632,17 @@ let asked
 let resetAsked
 const RESET_WAIT_MS = 30_000
 
-/** When this server started: an agent noted stuck before it ended with the session that ran it. */
-const SERVED_SINCE = Date.now()
+/**
+ * When the Claude Code session that runs this server first served a review
+ * (the hooks say; a server started by hand, now): an agent noted stuck
+ * before it ended with the session that ran it.
+ */
+const SESSION_SINCE = Number(process.env.TRANCHANT_SESSION_SINCE) || Date.now()
 
 /**
  * Why a reset is refused now: a finding under way (409), a review agent the
  * hooks could not stop in this session (409; a discussing agent belongs to
- * its finding), or a discussion it cannot read (500, its reason).
+ * its finding), or a discussion it cannot read (500, its error code).
  * @returns {Promise<{ status: number, error: string } | undefined>}
  */
 async function resetRefusal() {
@@ -1646,13 +1650,16 @@ async function resetRefusal() {
   try {
     busy = await store.underWay()
   } catch (error) {
-    return {
-      status: 500,
-      error: `reset refused: ${error instanceof Error ? error.message : String(error)}`,
-    }
+    // Its path stays in the server's log, as any internal error's.
+    console.error(
+      `tranchant server: reset: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    const code =
+      error instanceof Error && 'code' in error ? ` (${String(error.code)})` : ''
+    return { status: 500, error: `reset refused: a discussion cannot be read${code}` }
   }
   if (busy.length) return { status: 409, error: `reset refused: ${busyText(busy)}` }
-  const stuck = (await readReviewAgents(dir, undefined, { since: SERVED_SINCE })).filter(
+  const stuck = (await readReviewAgents(dir, undefined, { since: SESSION_SINCE })).filter(
     (one) => one.stuck && !one.name.startsWith('ds-'),
   )
   if (stuck.length)

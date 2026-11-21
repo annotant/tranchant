@@ -485,10 +485,15 @@ An agent the hooks' TaskStop does not end runs on: a toast says so, its run
 file gets a note `Could not be stopped: runs until its turn ends`
 (`stuck: true` in `/api/review`, shown running), Pause now does not queue it
 again, it keeps its place, and Reset is refused (409, and by the hooks) until
-its `end` step. A note older than the server's session counts for nothing:
-the agent ended with the session that ran it.
+its `end` step. A note older than the Claude Code session that runs the
+server (the hooks pass when it first served a review,
+`TRANCHANT_SESSION_SINCE`) counts for nothing: the agent ended with the
+session that ran it. An agent that ends on its own while it is stopped
+ended its work: its `end` says `Ended`, and Pause now does not queue it
+again.
 
-`/tranchant stop` still ends everything, a paused review's agents included.
+`/tranchant stop` still ends everything it can, a paused review's agents
+included, and says which agents TaskStop left running.
 
 ## The run files
 

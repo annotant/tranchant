@@ -803,7 +803,8 @@ export default function App() {
         onControl={review.lenses ? control : undefined}
         underWay={underWay}
         stuck={(payload?.reviewers ?? [])
-          .filter((agent) => agent.stuck)
+          // As the server's resetRefusal: a discussing agent belongs to its finding.
+          .filter((agent) => agent.stuck && !agent.name.startsWith('ds-'))
           .map((agent) => agent.name)}
         findings={review?.findings ?? []}
         verify={review?.verify === true}

@@ -1243,10 +1243,15 @@ test('a review agent the hooks could not stop shows running on a stopped review,
         verify: true,
         lenses: LENS_RECORDS,
         stopped: { at: '2026-11-20T10:00:00Z' },
-        findings: [],
+        findings: [FINDINGS[0]!],
       },
+      records: { [FINDINGS[0]!.id]: record('working') },
     }),
-    reviewers: [{ name: 'rv-bugs', running: true, stuck: true, steps: [] }],
+    reviewers: [
+      { name: 'rv-bugs', running: true, stuck: true, steps: [] },
+      // A discussing agent belongs to its finding: it holds no reset up.
+      { name: 'ds-f-09', running: true, stuck: true, steps: [] },
+    ],
   })
   const agents = screen.getByRole('region', { name: 'Review agents' })
   const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
@@ -1258,7 +1263,7 @@ test('a review agent the hooks could not stop shows running on a stopped review,
       .disabled,
   ).toBe(true)
   expect(agents.textContent).toContain(
-    'Reset is refused until it ends: rv-bugs, still running: Tranchant could not stop it.',
+    `Reset is refused until they end: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way; rv-bugs, still running: Tranchant could not stop it.`,
   )
 })
 

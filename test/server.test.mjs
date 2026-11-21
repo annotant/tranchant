@@ -2856,6 +2856,57 @@ test("the review's controls write its pause or stop, then print the hooks' lines
 /** One step's line in a run file. */
 const line = (/** @type {object} */ step) => `${JSON.stringify(step)}\n`
 
+test('Stop and reset is refused whole for a stuck review agent; a discussing one, or a discussion unread, says why', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'reviewing',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const control = (/** @type {string} */ name, /** @type {unknown} */ body = {}) =>
+    fetch(`${server.base}/api/review/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  const stuckSteps =
+    line({ at: Date.now(), kind: 'start', label: 'Reviewing', state: 'done' }) +
+    line({
+      at: Date.now(),
+      kind: 'note',
+      label: 'Could not be stopped: runs until its turn ends',
+      state: 'failed',
+    })
+  // A discussing agent belongs to its finding: it refuses nothing.
+  await writeFile(path.join(reviewers, 'ds-f-05.jsonl'), stuckSteps)
+  await writeFile(path.join(reviewers, 'rv-bugs.jsonl'), stuckSteps)
+  const refused = await control('halt', { reset: true })
+  assert.equal(refused.status, 409)
+  const { error } = await json(refused)
+  assert.match(error, /rv-bugs still running/)
+  assert.doesNotMatch(error, /ds-f-05/)
+  const store = createStore(imported.dir)
+  assert.equal((await store.readReview()).stopped, undefined)
+  await rm(path.join(reviewers, 'rv-bugs.jsonl'))
+  // A discussion it cannot read: 500, its code, never its path.
+  await mkdir(path.join(imported.dir, 'discussions', 'f-01.json'), { recursive: true })
+  const unread = await control('halt', { reset: true })
+  assert.equal(unread.status, 500)
+  const said = (await json(unread)).error
+  assert.match(said, /a discussion cannot be read \(EISDIR\)/)
+  assert.doesNotMatch(said, /discussions/)
+  await rm(path.join(imported.dir, 'discussions'), { recursive: true })
+  assert.equal((await control('halt', { reset: true })).status, 200)
+})
+
 test('Reset on a review stopped prints RESET, then waits for it before asking again', async (t) => {
   const imported = await importReview(t, 'ours', stateDir, { verify: true })
   const file = path.join(imported.dir, 'review.json')

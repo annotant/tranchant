@@ -181,8 +181,8 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
  * One review agent, the summary agent (`sm-summary`), a lens's reviewer
  * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until the `end` after its last `start`.
  * `interrupted`: Pause now ended it, and it runs again from the start on Resume.
- * `stuck`: running, though the hooks' TaskStop did not end it, since `since`: a reset is refused until its end.
- * A note older than the server's session is not: the agent ended with the session that ran it.
+ * `stuck`: running, though the hooks' TaskStop did not end it: a reset is refused until its end.
+ * A note older than the `since` option is not: the agent ended with the session that ran it.
  * @typedef {{ name: string, running: boolean, stuck?: true, outcome?: 'done' | 'failed' | 'interrupted', steps: Step[] }} ReviewAgent
  */
 
@@ -196,7 +196,7 @@ const NOT_STOPPED = 'Could not be stopped: runs until its turn ends'
  * The review agents of the review, in the order they started.
  * @param {string} dir The review folder.
  * @param {number} [limit] The last steps of each.
- * @param {{ since?: number }} [options] `since`: when this session's server started, in ms.
+ * @param {{ since?: number }} [options] `since`: when the Claude Code session that runs the server first served a review, in ms.
  * @returns {Promise<ReviewAgent[]>}
  */
 export async function readReviewAgents(dir, limit = PROGRESS_SHOWN, { since = 0 } = {}) {

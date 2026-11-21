@@ -161,6 +161,8 @@ declare module 'claude-code' {
       handed: Record<string, string>
       /** The reviews `/tranchant review` runs, by review folder, until they complete. */
       reviewRuns: Record<string, ReviewRun>
+      /** When this session first served a review, in ms: a stuck agent noted before ended with an earlier session. */
+      sessionSince: number
       /** By `<name>@<review folder>`: the review agents started, running or ended. */
       reviewAgents: Record<string, ReviewAgent>
       /** By review folder, the findings whose question waits for a free agent, in order. */

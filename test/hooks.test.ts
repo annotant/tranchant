@@ -224,7 +224,10 @@ function world(
   const resets: string[][] = []
   const commented: { argv: string[]; cwd?: string }[] = []
   const opened: string[][] = []
-  on('process.run', (_$, e) => {
+  // Held, an agent's start note is written only once released: hook.mjs slow to start.
+  let notesHeld: Promise<void> | undefined
+  let releaseNotes: () => void = ignore
+  on('process.run', async (_$, e) => {
     if (e.argv[1]?.endsWith('/scripts/comments.mjs')) {
       commented.push({ argv: e.argv.slice(2), cwd: e.init?.cwd })
       return ok(
@@ -327,6 +330,7 @@ function world(
       return ok('')
     }
     if (e.argv[2] === 'note') {
+      if (e.init?.stdin?.includes('"kind":"start"')) await notesHeld
       notes.push({ argv: e.argv.slice(3), stdin: e.init?.stdin ?? '' })
       return ok('')
     }
@@ -338,9 +342,17 @@ function world(
     return ok('')
   })
   const stopped: string[] = []
-  on('tool.call', (_$, e) => {
+  // The agents whose loop ended: the list says completed, and TaskStop errs on them.
+  const ended = new Set(gone)
+  // Held, a TaskStop answers only once released.
+  let stopsHeld: Promise<void> | undefined
+  let releaseStops: () => void = ignore
+  on('tool.call', async (_$, e) => {
     if (e.tool !== 'TaskStop') return { result: 'ok' }
+    await stopsHeld
     if (stopRefused.includes(e.task_id ?? '')) return { deny: 'the task is busy' }
+    if (ended.has(e.task_id ?? ''))
+      return { deny: `no task running with ID ${e.task_id}` }
     stopped.push(e.task_id ?? '')
     return { result: 'ok' }
   })
@@ -364,9 +376,7 @@ function world(
       name: agent.name,
       type: agent.type,
       description: '',
-      status: gone.includes(`a${index + 1}`)
-        ? ('completed' as const)
-        : ('running' as const),
+      status: ended.has(`a${index + 1}`) ? ('completed' as const) : ('running' as const),
     })),
   }))
   // Held, a spawn answers only once released: an agent slow to start.
@@ -439,6 +449,24 @@ function world(
     servers,
     serverEnvs,
     print,
+    /** Agent `id`'s loop ended on its own: as Claude Code's list and TaskStop then see it. */
+    finish: (id: string) => ended.add(id),
+    holdStops: () => {
+      stopsHeld = new Promise<void>((done) => (releaseStops = done))
+    },
+    releaseStops: async () => {
+      stopsHeld = undefined
+      releaseStops()
+      await clock.settle()
+    },
+    holdNotes: () => {
+      notesHeld = new Promise<void>((done) => (releaseNotes = done))
+    },
+    releaseNotes: async () => {
+      notesHeld = undefined
+      releaseNotes()
+      await clock.settle()
+    },
     holdSpawns: () => {
       held = new Promise<void>((done) => (release = done))
     },
@@ -532,7 +560,11 @@ test('opening a review file imports it, serves it and opens the page', async ($,
       DIR,
     ],
   ])
-  expect(w.serverEnvs).toEqual([{ TRANCHANT_HOOKS: '1' }])
+  // The session's start, kept across reloads: a stuck agent of an earlier session ended with it.
+  expect(w.serverEnvs.map((env) => Object.keys(env ?? {}))).toEqual([
+    ['TRANCHANT_HOOKS', 'TRANCHANT_SESSION_SINCE'],
+  ])
+  expect(Number(w.serverEnvs[0]?.TRANCHANT_SESSION_SINCE)).toBeGreaterThan(0)
   expect(w.browsed).toEqual(['open http://127.0.0.1:4599'])
   expect(result).toMatch(
     /^Tranchant serves Classification overview at http:\/\/127\.0\.0\.1:4599\./,
@@ -1797,13 +1829,65 @@ test('an agent TaskStop does not end runs on: said, not queued again, and Reset 
   await w.exit(0)
 })
 
-test('a TaskStop refused on an agent that ended meanwhile counts as stopped', async ($, on) => {
-  const w = world(on, { stopRefused: ['a2'], gone: ['a2'] })
+test('an agent that ended on its own while Pause now stopped it finished its work: not queued again', async ($, on) => {
+  const w = world(on, { gone: ['a2'] })
   await review($, w)
   await w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
   expect(w.toasts.some((toast) => toast.includes('could not stop'))).toBe(false)
+  const ends = w.notes.filter(
+    (one) => one.argv[1] === 'rv-bugs' && one.stdin.includes('"kind":"end"'),
+  )
+  expect(ends).toHaveLength(1)
+  expect(ends[0]?.stdin).toMatch(/"label":"Ended","state":"done"/)
   await w.print('RESUME rev-1')
-  expect(w.spawned.slice(3).map((one) => one.type)).toContain('tranchant:rv-bugs-rev-1')
+  expect(w.spawned.slice(3).map((one) => one.type)).toEqual([
+    'tranchant:sm-summary-rev-1',
+    'tranchant:rv-style-rev-1',
+  ])
+  await w.exit(0)
+})
+
+test('a turn that ends while Pause now waits on its TaskStop ends the agent once, its work done', async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  w.holdStops()
+  const paused = w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
+  await w.clock.settle()
+  w.finish('a1')
+  await $.turn.complete(turnEnded('a1', 'Done.'))
+  await w.releaseStops()
+  await paused
+  const ends = w.notes.filter(
+    (one) => one.argv[1] === 'sm-summary' && one.stdin.includes('"kind":"end"'),
+  )
+  expect(ends).toHaveLength(1)
+  expect(ends[0]?.stdin).toMatch(/"label":"Ended"/)
+  // The summary is written: Resume never runs it again.
+  await w.print('RESUME rev-1')
+  expect(w.spawned.slice(3).map((one) => one.type)).not.toContain(
+    'tranchant:sm-summary-rev-1',
+  )
+  await w.exit(0)
+})
+
+test('a turn that ends before its agent is recorded still ends it', async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  await w.print('LANDED bugs-1')
+  w.holdNotes()
+  // a1 ends: its place goes to bugs-1's verifier, a4, whose start note is held.
+  const freed = $.turn.complete(turnEnded('a1', 'Done.'))
+  await w.clock.settle()
+  expect(w.spawned.map((one) => one.type).at(-1)).toBe('tranchant:vf-bugs-1-rev-1')
+  const verified = $.turn.complete(turnEnded('a4', 'Confirmed.'))
+  await w.clock.settle()
+  await w.releaseNotes()
+  await Promise.all([freed, verified])
+  await w.clock.settle()
+  const ends = w.notes.filter(
+    (one) => one.argv[1] === 'vf-bugs-1' && one.stdin.includes('"kind":"end"'),
+  )
+  expect(ends).toHaveLength(1)
   await w.exit(0)
 })
 
