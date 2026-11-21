@@ -14,7 +14,7 @@
 // extracts that reviewer anew, the last extract beside it.
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { open, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { insideOf, insideRefusal, lensNameOf, nameOfSource } from './inside.mjs'
 import { AUTO_MODEL, LensRefusal, buildLens } from './lens.mjs'
@@ -375,13 +375,23 @@ async function start(project, fields, extract) {
  * @param {string} dir
  */
 async function readOutput(dir) {
+  let text
+  try {
+    // One handle, sized then read: one the agent wrote past any report's size would hold the server.
+    const handle = await open(path.join(dir, 'report.json'), 'r')
+    try {
+      if ((await handle.stat()).size <= MAX_REPORT) text = await handle.readFile('utf8')
+    } finally {
+      await handle.close()
+    }
+  } catch (error) {
+    return refuse(`the cleaning agent wrote no report that reads: ${message(error)}`)
+  }
+  if (text === undefined)
+    return refuse(`report.json is larger than ${MAX_REPORT / 1024 / 1024} MiB`)
   let raw
   try {
-    const file = path.join(dir, 'report.json')
-    // Read whole: one the agent wrote past any report's size would hold the server.
-    if ((await stat(file)).size > MAX_REPORT)
-      return refuse(`report.json is larger than ${MAX_REPORT / 1024 / 1024} MiB`)
-    raw = JSON.parse(await readFile(file, 'utf8'))
+    raw = JSON.parse(text)
   } catch (error) {
     return refuse(`the cleaning agent wrote no report that reads: ${message(error)}`)
   }
