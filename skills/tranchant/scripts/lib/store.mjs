@@ -181,7 +181,7 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
  * One review agent, the summary agent (`sm-summary`), a lens's reviewer
  * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until the `end` after its last `start`.
  * `interrupted`: Pause now ended it, and it runs again from the start on Resume.
- * `stuck`: running, though the hooks' TaskStop did not end it: a reset is refused until its end.
+ * `stuck`: running, though the hooks' TaskStop did not end it: a reset is refused until its end (never for a discussing agent, `ds-<id>`, which belongs to its finding).
  * A note older than the `since` option is not: the agent ended with the session that ran it.
  * @typedef {{ name: string, running: boolean, stuck?: true, outcome?: 'done' | 'failed' | 'interrupted', steps: Step[] }} ReviewAgent
  */

@@ -1642,7 +1642,7 @@ const SESSION_SINCE = Number(process.env.TRANCHANT_SESSION_SINCE) || Date.now()
 /**
  * Why a reset is refused now: a finding under way (409), a review agent the
  * hooks could not stop in this session (409; a discussing agent belongs to
- * its finding), or a discussion it cannot read (500, its error code).
+ * its finding), or review files it cannot read (500, the error's code; its path in the log).
  * @returns {Promise<{ status: number, error: string } | undefined>}
  */
 async function resetRefusal() {
@@ -1656,7 +1656,10 @@ async function resetRefusal() {
     )
     const code =
       error instanceof Error && 'code' in error ? ` (${String(error.code)})` : ''
-    return { status: 500, error: `reset refused: a discussion cannot be read${code}` }
+    return {
+      status: 500,
+      error: `reset refused: the review's files cannot be read${code}`,
+    }
   }
   if (busy.length) return { status: 409, error: `reset refused: ${busyText(busy)}` }
   const stuck = (await readReviewAgents(dir, undefined, { since: SESSION_SINCE })).filter(

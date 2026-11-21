@@ -2856,6 +2856,47 @@ test("the review's controls write its pause or stop, then print the hooks' lines
 /** One step's line in a run file. */
 const line = (/** @type {object} */ step) => `${JSON.stringify(step)}\n`
 
+test('a stuck agent noted before this server, in its session, still refuses Reset', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'complete',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+      stopped: { at: '2026-11-20T10:00:00.000Z' },
+    }),
+  )
+  const noted = Date.now()
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  await writeFile(
+    path.join(reviewers, 'rv-bugs.jsonl'),
+    line({ at: noted, kind: 'start', label: 'Reviewing', state: 'done' }) +
+      line({
+        at: noted,
+        kind: 'note',
+        label: 'Could not be stopped: runs until its turn ends',
+        state: 'failed',
+      }),
+  )
+  // Started again in the same session (a reload, /tranchant stop then open): the agent runs on.
+  const server = await startServer(t, {
+    dir: imported.dir,
+    env: { TRANCHANT_SESSION_SINCE: String(noted - 1000) },
+  })
+  const shown = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(shown.reviewers[0].stuck, true)
+  const refused = await fetch(`${server.base}/api/review/reset`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert.equal(refused.status, 409)
+})
+
 test('Stop and reset is refused whole for a stuck review agent; a discussing one, or a discussion unread, says why', async (t) => {
   const imported = await importReview(t, 'ours', stateDir, { verify: true })
   const file = path.join(imported.dir, 'review.json')
@@ -2901,7 +2942,7 @@ test('Stop and reset is refused whole for a stuck review agent; a discussing one
   const unread = await control('halt', { reset: true })
   assert.equal(unread.status, 500)
   const said = (await json(unread)).error
-  assert.match(said, /a discussion cannot be read \(EISDIR\)/)
+  assert.match(said, /the review's files cannot be read \(EISDIR\)/)
   assert.doesNotMatch(said, /discussions/)
   await rm(path.join(imported.dir, 'discussions'), { recursive: true })
   assert.equal((await control('halt', { reset: true })).status, 200)

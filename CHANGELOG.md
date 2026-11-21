@@ -21,7 +21,8 @@ released to the `stable` branch.
   start the review**. A fix, a post, an issue or a discussion under way goes
   on through Pause and Stop; Reset is refused until it ends. An agent the hooks
   fail to stop (TaskStop) is said, keeps showing running, and Reset is
-  refused until it ends.
+  refused until it ends (a discussing agent's aside: it belongs to its
+  finding).
 - **A lens's model on Auto-detect: its source's, else the session's.** A
   lens's **Model** select starts with **Auto-detect**, the default of a lens
   you add: the model its agent's, skill's or command's frontmatter names

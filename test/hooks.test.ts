@@ -560,7 +560,7 @@ test('opening a review file imports it, serves it and opens the page', async ($,
       DIR,
     ],
   ])
-  // The session's start, kept across reloads: a stuck agent of an earlier session ended with it.
+  // When the session first served a review, kept across reloads: a stuck agent of an earlier session ended with it.
   expect(w.serverEnvs.map((env) => Object.keys(env ?? {}))).toEqual([
     ['TRANCHANT_HOOKS', 'TRANCHANT_SESSION_SINCE'],
   ])
@@ -983,10 +983,14 @@ test('a server that stops after it started says so', async ($, on) => {
   expect(w.toasts.at(-1)).toBe(
     `Tranchant stopped serving Classification overview: the server exited (code 1). /tranchant ${DIR} starts it again.`,
   )
-  // Not served any more: the command starts a new server.
+  // Not served any more: the command starts a new server, in the same session.
+  await new Promise((done) => setTimeout(done, 5))
   const again = $.command.run(command(DIR))
   await w.clock.settle()
   expect(w.servers).toHaveLength(2)
+  expect(w.serverEnvs[1]?.TRANCHANT_SESSION_SINCE).toBe(
+    w.serverEnvs[0]?.TRANCHANT_SESSION_SINCE,
+  )
   await w.print(READY)
   await again
   await w.exit(0)
@@ -1888,6 +1892,55 @@ test('a turn that ends before its agent is recorded still ends it', async ($, on
     (one) => one.argv[1] === 'vf-bugs-1' && one.stdin.includes('"kind":"end"'),
   )
   expect(ends).toHaveLength(1)
+  expect(ends[0]?.stdin).toMatch(/"label":"Ended","state":"done"/)
+  expect(w.toasts).toContainEqual('vf-bugs-1: Confirmed.')
+  await w.exit(0)
+})
+
+test('a turn that ends while a TaskStop that fails is under way ends the agent: never stuck', async ($, on) => {
+  const w = world(on, { stopRefused: ['a1'] })
+  await review($, w)
+  w.holdStops()
+  const paused = w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
+  await w.clock.settle()
+  await $.turn.complete(turnEnded('a1', 'Done.'))
+  await w.releaseStops()
+  await paused
+  expect(w.notes.some((one) => one.stdin.includes('Could not be stopped'))).toBe(false)
+  const ends = w.notes.filter(
+    (one) => one.argv[1] === 'sm-summary' && one.stdin.includes('"kind":"end"'),
+  )
+  expect(ends).toHaveLength(1)
+  expect(ends[0]?.stdin).toMatch(/"label":"Ended","state":"done"/)
+  await w.exit(0)
+})
+
+test('Pause now on an agent being started that ends on its own: its work done, not queued again', async ($, on) => {
+  const w = world(on)
+  w.holdSpawns()
+  const answer = $.command.run(command('review'))
+  await w.print(READY)
+  await w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
+  w.finish('a1')
+  await w.releaseSpawns()
+  await answer
+  expect(w.notes.at(-1)?.stdin).toMatch(/"label":"Ended","state":"done"/)
+  await w.print('RESUME rev-1')
+  expect(
+    w.spawned.filter((one) => one.type === 'tranchant:sm-summary-rev-1'),
+  ).toHaveLength(1)
+  await w.exit(0)
+})
+
+test('/tranchant stop starts no agent for a question asked again, its agent ended meanwhile', async ($, on) => {
+  const w = world(on, { gone: ['a1'] })
+  await open($, w)
+  await w.print('DISCUSS f-01', 'DISCUSS f-01')
+  expect(w.spawned).toHaveLength(1)
+  await $.command.run(command('stop'))
+  await w.clock.settle()
+  expect(w.spawned).toHaveLength(1)
+  expect(w.replies).toContainEqual(['f-01', '--review', DIR, '--ended'])
   await w.exit(0)
 })
 
