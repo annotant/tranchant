@@ -392,7 +392,8 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-picker-body--files { max-height: 360px; }
 .tr-picker-group { display: flex; flex-direction: column; }
 .tr-picker-group + .tr-picker-group { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--tr-border); }
-.tr-picker-group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 12px; font-size: 12.5px; }
+/* Sticky past the body's 6px padding, flush with its top: each group's head (a plugin, a kind) stays in view over its rows. */
+.tr-picker-group-head { position: sticky; top: -6px; z-index: 1; box-shadow: 0 1px 0 var(--tr-border); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 12px; background: var(--tr-bg); font-size: 12.5px; }
 .tr-picker-group-head strong { font-size: 13px; }
 .tr-picker-item { display: grid; grid-template-columns: 62px minmax(0, 1fr) minmax(0, max-content); align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 4px 12px; border: 0; background: none; color: var(--tr-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .tr-picker-item:hover:not(:disabled) { background: var(--tr-bg-2); }
@@ -511,6 +512,11 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-summary-body ul { margin: 0; padding-left: 20px; }
 .tr-summary-line { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-weight: 600; color: var(--tr-muted); font-size: 13px; }
 .tr-summary > summary > span { margin-left: 8px; }
+/* The native marker sits flush against the text once open: a chevron of our own, rotated when open. */
+.tr-summary > summary, .tr-related > summary { list-style: none; }
+.tr-summary > summary::-webkit-details-marker, .tr-related > summary::-webkit-details-marker { display: none; }
+.tr-summary > summary::before, .tr-related > summary::before { content: ''; display: inline-block; margin-right: 7px; border-left: 5px solid currentColor; border-block: 4px solid transparent; vertical-align: 1px; transition: transform 0.15s ease; }
+.tr-summary[open] > summary::before, .tr-related[open] > summary::before { transform: rotate(90deg); }
 .tr-summary-hint { font-weight: 400; }
 .tr-summary-ready { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 999px; background: var(--tr-accent-weak); color: var(--tr-accent); font-size: 11.5px; }
 .tr-shimmer { display: flex; gap: 6px; flex: 1; max-width: 360px; }
@@ -518,7 +524,10 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 @keyframes tr-shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 .tr-summary--landed { animation: tr-land 2.4s ease-out; }
 @keyframes tr-land { from { background: var(--tr-accent-weak); } to { background: transparent; } }
-@media (prefers-reduced-motion: reduce) { .tr-shimmer i, .tr-summary--landed { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .tr-shimmer i, .tr-summary--landed { animation: none; }
+  .tr-summary > summary::before, .tr-related > summary::before { transition: none; }
+}
 .tr-summary-body .tr-praise { align-self: start; padding: 10px 12px; border-radius: var(--tr-radius); background: var(--tr-auto-bg); }
 .tr-praise h3 { display: flex; align-items: center; gap: 6px; color: var(--tr-auto); }
 .tr-summary-body .tr-praise ul { list-style: none; padding-left: 0; }
@@ -551,6 +560,7 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-master svg { fill: none; stroke: currentColor; stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
 .tr-master[aria-checked="true"], .tr-master[aria-checked="mixed"] { background: var(--tr-accent); border-color: var(--tr-accent); }
 .tr-master:disabled, .tr-pick:disabled { cursor: default; opacity: 0.45; }
+.tr-master:disabled + .tr-selection { color: var(--tr-muted); }
 .tr-master:focus-visible, .tr-pick:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: 2px; }
 .tr-selection { min-width: 24ch; font-weight: 600; font-variant-numeric: tabular-nums; }
 .tr-picks { display: inline-flex; flex-wrap: wrap; gap: 6px; }
@@ -598,6 +608,7 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-list { flex: 1; overflow: auto; margin: 0; padding: 0; list-style: none; outline: none; }
 .tr-list:focus-visible { box-shadow: inset 0 0 0 2px var(--tr-accent); }
 .tr-keys { padding: 6px 12px; font-size: 11.5px; border-top: 1px solid var(--tr-border); }
+.tr-keys > span { white-space: nowrap; }
 .tr-bucket { list-style: none; }
 .tr-bucket-title { display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px; font-size: 13px; }
 .tr-bucket-dot { width: 9px; height: 9px; border-radius: 50%; }
@@ -610,6 +621,9 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px 6px 10px; border-left: 3px solid transparent; }
 .tr-item--focused { background: var(--tr-bg-2); border-left-color: var(--tr-accent); }
 .tr-item--open { background: var(--tr-accent-weak); }
+.tr-item:not(.tr-item--open, .tr-item--focused):hover { background: var(--tr-bg-2); }
+/* Tinted like the open row, these would vanish into it. */
+.tr-item--open .tr-chip--to-do, .tr-marker--open .tr-chip--to-do, .tr-file-item--reading .tr-file-meta .tr-count { background: var(--tr-bg); }
 .tr-check { margin: 4px 0 0; }
 .tr-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
 .tr-item-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -645,6 +659,7 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-marker { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-left: 3px solid transparent; border-radius: var(--tr-radius); }
 .tr-marker--focused { background: var(--tr-bg-2); border-left-color: var(--tr-accent); }
 .tr-marker--open { background: var(--tr-accent-weak); }
+.tr-marker:not(.tr-marker--open, .tr-marker--focused):hover { background: var(--tr-bg-2); }
 .tr-marker .tr-check { margin: 0; }
 .tr-marker-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; font: 13px/1.4 var(--tr-font); }
 .tr-marker-title { font-weight: 500; }

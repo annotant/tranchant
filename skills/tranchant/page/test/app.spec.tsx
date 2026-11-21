@@ -607,7 +607,9 @@ test('a review opened before its findings shows an empty state, then the first o
   expect(
     screen.getByText('The review is running: findings appear here as they land.'),
   ).toBeDefined()
-  expect(screen.getByText('Waiting for the first finding…')).toBeDefined()
+  expect(screen.getByText('Waiting for the first finding…').className).toContain(
+    'tr-empty',
+  )
   expect(screen.queryAllByRole('option')).toHaveLength(0)
   expect(
     screen.getByRole('status', { name: 'Review in progress' }).textContent,
@@ -1336,4 +1338,32 @@ test('a finding with a discussion is marked with its count, in the list and in t
   expect(
     screen.getAllByRole('img', { name: '2 messages in its discussion' }),
   ).not.toHaveLength(0)
+})
+
+const hints = () =>
+  [...document.querySelectorAll('.tr-keys > span')].map((hint) => hint.textContent)
+
+test('the keyboard hints wrap between two keys, never inside one', async () => {
+  await renderApp()
+  expect(hints()).toEqual([
+    'j/k move',
+    'Enter open',
+    'x select',
+    'f fix',
+    'd drop',
+    's skip',
+  ])
+})
+
+test('a review that can post hints p, between f and d', async () => {
+  await renderApp(payload({ review: { mr: mergeRequest() } }))
+  expect(hints()).toEqual([
+    'j/k move',
+    'Enter open',
+    'x select',
+    'f fix',
+    'p post',
+    'd drop',
+    's skip',
+  ])
 })
