@@ -2218,8 +2218,23 @@ const crashOf = (stderr: string) =>
     .map((line) => line.trim())
     .find((line) => /^\w*Error\b/.test(line)) ?? stderr.trim()
 
-/** After a reload, the review agents at work get their hooks back. */
+/**
+ * After a reload, the review agents at work get their hooks back. A stop the
+ * reload cut short is over: its flag goes, and a turn's end it kept ends the agent.
+ */
 async function registerReviewAgentsAgain($: $) {
+  const cut = Object.entries(await read($, reviewAgents)).filter(
+    ([, one]) => one.stopping,
+  )
+  for (const [key, one] of cut) {
+    await update($, reviewAgents, (all) => {
+      const now = all[key]
+      if (!now || now.agent !== one.agent) return all
+      const { stopping: _stopping, turnEnded: _turnEnded, ...rest } = now
+      return { ...all, [key]: rest }
+    })
+    if (one.turnEnded) await endReviewAgent($, key, one, 'ended', 'Ended')
+  }
   for (const one of Object.values(await read($, reviewAgents))) {
     if (!one.running) continue
     const review = await loadReview($, one.review).catch(() => undefined)
