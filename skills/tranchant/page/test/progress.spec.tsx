@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { ReviewAgent, Step } from '../src/domain'
-import { gistOf, lensOf, OTHER, progressOf } from '../src/progress'
+import { gistOf, lensOf, OTHER, phaseOf, progressOf } from '../src/progress'
 
 const step = (fields: Partial<Step>): Step => ({
   at: 1,
@@ -209,4 +209,39 @@ test('the summary agent is no lens: it counts as an agent, summarizing the chang
     { name: 'rv-bugs', who: 'bugs', step: 'Starting' },
   ])
   expect([progress.done, progress.total]).toEqual([0, 2])
+})
+
+test('a review stopped, paused, pausing, running or done, from its pause, its stop and its agents', () => {
+  const at = '2026-11-20T10:00:00Z'
+  const busy = [{ running: true }]
+  const idle = [{ running: false }]
+  expect(phaseOf({ status: 'reviewing', stopped: { at } }, busy)).toBe('stopped')
+  expect(phaseOf({ status: 'complete', stopped: { at } }, idle)).toBe('stopped')
+  expect(phaseOf({ status: 'reviewing', paused: { at } }, busy)).toBe('pausing')
+  expect(phaseOf({ status: 'reviewing', paused: { at } }, idle)).toBe('paused')
+  expect(phaseOf({ status: 'reviewing' }, busy)).toBe('running')
+  expect(phaseOf({ status: 'complete' }, idle)).toBe('done')
+})
+
+test('the lenses not started show queued; an interrupted one is neither done nor stopped', () => {
+  const interrupted: ReviewAgent = {
+    name: 'rv-tests',
+    running: false,
+    outcome: 'interrupted',
+    steps: [step({ kind: 'end', label: 'Interrupted', state: 'failed' })],
+  }
+  const progress = progressOf([ended('rv-bugs'), interrupted], [], '', [
+    'bugs',
+    'tests',
+    'docs',
+  ])
+  expect(progress.lenses).toEqual([
+    { lens: 'bugs', state: 'done', findings: 0 },
+    { lens: 'tests', state: 'interrupted', findings: 0 },
+    { lens: 'docs', state: 'queued', findings: 0 },
+  ])
+  expect(progress.done).toBe(1)
+  expect(progress.total).toBe(3)
+  expect(progress.stopped).toEqual([])
+  expect(progress.reports[1]?.verdict).toBe('interrupted · runs again on Resume')
 })

@@ -1198,6 +1198,38 @@ test('a review opened before its findings grows as they land, then completes', a
   }
 })
 
+test('a finding that lands again under its id after a reset prints LANDED again', async (t) => {
+  const { findings: landing } = await fixture('ours')
+  const imported = await importReview(t, 'ours', stateDir, {
+    id: 'live-reset-1',
+    status: 'reviewing',
+    verify: true,
+    findings: [landing[1]],
+  })
+  const file = path.join(imported.dir, 'review.json')
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...JSON.parse(await readFile(file, 'utf8')),
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  assert.equal(await server.nextLine('LANDED', 0), `LANDED ${landing[1].id}`)
+  const store = createStore(imported.dir)
+  await store.halt()
+  await store.reset()
+  await store.prepared([{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }])
+  const seen = server.output().length
+  const added = await run(
+    process.execPath,
+    [path.join(SCRIPTS, 'add.mjs'), '--review', imported.dir],
+    { input: JSON.stringify(landing[1]) },
+  )
+  assert.equal(added.stdout, `ADDED ${landing[1].id}\n`, added.stderr)
+  assert.equal(await server.nextLine('LANDED', seen), `LANDED ${landing[1].id}`)
+})
+
 test('a verified review prints LANDED once per finding, and serves its review agents', async (t) => {
   const { findings: landing } = await fixture('ours')
   const imported = await importReview(t, 'ours', stateDir, {
@@ -2784,4 +2816,233 @@ test("/api/lens/group/* makes, renames and deletes a project's groups; a lens re
   assert.deepEqual(deleted.settings.groups.list, [])
   assert.equal(deleted.settings.groups.default, undefined)
   assert.equal((await send('lens/group/remove', { name: 'B' })).status, 409)
+})
+
+test("the review's controls write its pause or stop, then print the hooks' lines", async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'reviewing',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const id = imported.review.id
+  /** @param {string} name @param {unknown} [body] */
+  const control = (name, body = {}) =>
+    fetch(`${server.base}/api/review/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  let printed = server.output().length
+  const paused = await control('pause')
+  assert.equal(paused.status, 200)
+  assert.equal(typeof (await json(paused)).review.paused.at, 'string')
+  assert.equal(await server.nextLine('PAUSE ', printed), `PAUSE ${id}`)
+  printed = server.output().length
+  assert.equal((await control('pause', { now: true })).status, 200)
+  assert.equal(await server.nextLine('PAUSE_NOW ', printed), `PAUSE_NOW ${id}`)
+  assert.equal((await control('pause', { now: 'yes' })).status, 400)
+  printed = server.output().length
+  assert.equal((await control('resume')).status, 200)
+  assert.equal(await server.nextLine('RESUME ', printed), `RESUME ${id}`)
+  const again = await control('resume')
+  assert.equal(again.status, 409)
+  assert.match((await json(again)).error, /not paused/)
+  // Nothing to reset before a stop.
+  assert.equal((await control('reset')).status, 409)
+
+  // Stop and reset with a fix under way: refused whole, the review still runs.
+  const store = createStore(imported.dir)
+  await store.decide('f-01', { action: 'fix' })
+  const waiting = await control('halt', { reset: true })
+  assert.equal(waiting.status, 409)
+  assert.match((await json(waiting)).error, /f-01 still under way/)
+  assert.equal((await store.readReview()).stopped, undefined)
+  // Stop alone goes through: the fix runs on.
+  printed = server.output().length
+  assert.equal((await control('halt', { reset: false })).status, 200)
+  assert.equal(await server.nextLine('HALT ', printed), `HALT ${id}`)
+  const refusedReset = await control('reset')
+  assert.equal(refusedReset.status, 409)
+  assert.match((await json(refusedReset)).error, /f-01 still under way/)
+  await store.stop('f-01')
+
+  printed = server.output().length
+  assert.equal((await control('reset')).status, 200)
+  assert.equal(await server.nextLine('RESET ', printed), `RESET ${id}`)
+  const twice = await control('reset')
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /being reset/)
+  assert.equal((await control('halt')).status, 409)
+  const shown = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(typeof shown.review.stopped.at, 'string')
+})
+
+/** One step's line in a run file. */
+const line = (/** @type {object} */ step) => `${JSON.stringify(step)}\n`
+
+test('a stuck agent noted before this server, in its session, still refuses Reset', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'complete',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+      stopped: { at: '2026-11-20T10:00:00.000Z' },
+    }),
+  )
+  const noted = Date.now()
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  await writeFile(
+    path.join(reviewers, 'rv-bugs.jsonl'),
+    line({ at: noted, kind: 'start', label: 'Reviewing', state: 'done' }) +
+      line({
+        at: noted,
+        kind: 'note',
+        label: 'Could not be stopped: runs until its turn ends',
+        state: 'failed',
+      }),
+  )
+  // Started again in the same session (a reload, /tranchant stop then open): the agent runs on.
+  const server = await startServer(t, {
+    dir: imported.dir,
+    env: { TRANCHANT_SESSION_SINCE: String(noted - 1000) },
+  })
+  const shown = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(shown.reviewers[0].stuck, true)
+  const refused = await fetch(`${server.base}/api/review/reset`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert.equal(refused.status, 409)
+})
+
+test('Stop and reset is refused whole for a stuck review agent; a discussing one, or a discussion unread, says why', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'reviewing',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const control = (/** @type {string} */ name, /** @type {unknown} */ body = {}) =>
+    fetch(`${server.base}/api/review/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  const stuckSteps =
+    line({ at: Date.now(), kind: 'start', label: 'Reviewing', state: 'done' }) +
+    line({
+      at: Date.now(),
+      kind: 'note',
+      label: 'Could not be stopped: runs until its turn ends',
+      state: 'failed',
+    })
+  // A discussing agent belongs to its finding: it refuses nothing.
+  await writeFile(path.join(reviewers, 'ds-f-05.jsonl'), stuckSteps)
+  await writeFile(path.join(reviewers, 'rv-bugs.jsonl'), stuckSteps)
+  const refused = await control('halt', { reset: true })
+  assert.equal(refused.status, 409)
+  const { error } = await json(refused)
+  assert.match(error, /rv-bugs still running/)
+  assert.doesNotMatch(error, /ds-f-05/)
+  const store = createStore(imported.dir)
+  assert.equal((await store.readReview()).stopped, undefined)
+  await rm(path.join(reviewers, 'rv-bugs.jsonl'))
+  // A discussion it cannot read: 500, its code, never its path.
+  await mkdir(path.join(imported.dir, 'discussions', 'f-01.json'), { recursive: true })
+  const unread = await control('halt', { reset: true })
+  assert.equal(unread.status, 500)
+  const said = (await json(unread)).error
+  assert.match(said, /the review's files cannot be read \(EISDIR\)/)
+  assert.doesNotMatch(said, /discussions/)
+  await rm(path.join(imported.dir, 'discussions'), { recursive: true })
+  assert.equal((await control('halt', { reset: true })).status, 200)
+})
+
+test('Reset on a review stopped prints RESET, then waits for it before asking again', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'complete',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+      stopped: { at: '2026-11-20T10:00:00.000Z' },
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const reset = () =>
+    fetch(`${server.base}/api/review/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+  // A fix under way: Reset is refused until it ends.
+  const store = createStore(imported.dir)
+  await store.decide('f-02', { action: 'fix' })
+  const waiting = await reset()
+  assert.equal(waiting.status, 409)
+  assert.match((await json(waiting)).error, /f-02 still under way/)
+  await store.stop('f-02')
+  // A review agent TaskStop did not end: Reset is refused until its end step.
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  const runFile = path.join(reviewers, 'rv-bugs.jsonl')
+  await writeFile(
+    runFile,
+    line({ at: 1, kind: 'start', label: 'Reviewing: bugs', state: 'done' }) +
+      line({
+        at: 2,
+        kind: 'note',
+        label: 'Could not be stopped: runs until its turn ends',
+        state: 'failed',
+      }),
+  )
+  // Noted before this server's session: the agent ended with the session that ran it.
+  assert.equal(
+    (await json(await fetch(`${server.base}/api/review`))).reviewers[0].stuck,
+    undefined,
+  )
+  await writeFile(
+    runFile,
+    `${await readFile(runFile, 'utf8')}${line({ at: Date.now(), kind: 'note', label: 'Could not be stopped: runs until its turn ends', state: 'failed' })}`,
+  )
+  assert.equal(
+    (await json(await fetch(`${server.base}/api/review`))).reviewers[0].stuck,
+    true,
+  )
+  const stuck = await reset()
+  assert.equal(stuck.status, 409)
+  assert.match((await json(stuck)).error, /rv-bugs still running/)
+  await writeFile(
+    runFile,
+    `${await readFile(runFile, 'utf8')}${line({ at: 3, kind: 'end', label: 'Ended', state: 'done' })}`,
+  )
+  const printed = server.output().length
+  assert.equal((await reset()).status, 200)
+  assert.equal(await server.nextLine('RESET ', printed), `RESET ${imported.review.id}`)
+  assert.equal((await reset()).status, 409)
 })

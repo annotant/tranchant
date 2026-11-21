@@ -37,7 +37,8 @@ export type Lens = {
  */
 export type ReviewJob =
   | { kind: 'summarizer' }
-  | { kind: 'reviewer'; lens: Lens }
+  /** `again`: queued again after Pause now, its findings so far landed. */
+  | { kind: 'reviewer'; lens: Lens; again?: true }
   | { kind: 'verifier'; id: string }
   | { kind: 'discusser'; id: string }
 
@@ -57,6 +58,8 @@ export type ReviewRun = {
   ready?: { plan: string }
   /** The page's Start or Build the lenses again at work: its plan, until lenses.mjs ends. */
   starting?: { plan: string }
+  /** The page's Pause: no agent of the queue starts until Resume, and the review does not complete. */
+  paused?: true
 }
 
 /**
@@ -78,6 +81,12 @@ export type ReviewAgent = {
   model?: string
   /** A reviewer's: the model its lens asks for, registered again after a reload. */
   lensModel?: string
+  /** What started it: queued again from the start when Pause now ends it. */
+  job?: ReviewJob
+  /** TaskStop under way: still running, in its place, until the stop reads what came meanwhile. */
+  stopping?: true
+  /** While `stopping`: its turn's end came, so the stop ends it as finished. */
+  turnEnded?: true
 }
 
 /**
@@ -156,6 +165,8 @@ declare module 'claude-code' {
       handed: Record<string, string>
       /** The reviews `/tranchant review` runs, by review folder, until they complete. */
       reviewRuns: Record<string, ReviewRun>
+      /** When this session first served a review, in ms: a stuck agent noted before ended with an earlier session. */
+      sessionSince: number
       /** By `<name>@<review folder>`: the review agents started, running or ended. */
       reviewAgents: Record<string, ReviewAgent>
       /** By review folder, the findings whose question waits for a free agent, in order. */

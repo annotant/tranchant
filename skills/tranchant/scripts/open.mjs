@@ -11,7 +11,8 @@
 // `verified` are the hooks' alone: dropped, unless `--verify`, which
 // `/tranchant review` passes for the envelope prepare.mjs wrote, keeps
 // `verify`; any other file with the status `preparing` or `refused` is
-// refused, and `lenses` and `refusal`, lenses.mjs's, are dropped from all.
+// refused, and `lenses` and `refusal`, lenses.mjs's, and `paused` and
+// `stopped`, the page's, are dropped from all.
 // `--refresh`, which `/tranchant comments` passes, takes an id
 // imported already as the same PR/MR imported again: its envelope replaced,
 // its findings new or changed written, its decisions kept. Any refusal prints
@@ -79,6 +80,8 @@ const {
   verify: _claimed,
   lenses: _lenses,
   refusal: _refusal,
+  paused: _paused,
+  stopped: _stopped,
   ...parsed
 } = parse(file, text)
 const ours = process.argv.includes('--verify')

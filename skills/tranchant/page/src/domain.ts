@@ -67,8 +67,8 @@ export interface LensesProgress {
   /** `waiting`: built, the review waits for Start the review. */
   state: 'resolving' | 'ready' | 'refused' | 'waiting'
   lenses: LensRow[]
-  /** While it waits: why (the settings' Start the review by itself, or --no-start). */
-  wait?: 'setting' | 'flag'
+  /** While it waits: why (the settings' Start the review by itself, --no-start, or Reset the review). */
+  wait?: 'setting' | 'flag' | 'reset'
   /** Its own recipe (--recipe): no lens added, none turned off, nothing to save. */
   own?: true
   /** The change's files. */
@@ -220,6 +220,10 @@ export interface Review {
   sources?: { codeReview?: number; reviewPr?: number; both?: number }
   /** Findings land unverified and a verifier confirms each: `/tranchant review` sets it. */
   verify?: boolean
+  /** The page's Pause: no agent of the review's queue starts; `now` once Pause now ended those at work. */
+  paused?: { at: string; now?: true }
+  /** The page's Stop the review: no Resume, only Reset the review. */
+  stopped?: { at: string }
   findings: Finding[]
 }
 
@@ -359,7 +363,10 @@ export interface Step {
 export interface ReviewAgent {
   name: string
   running: boolean
-  outcome?: 'done' | 'failed'
+  /** `interrupted`: Pause now ended it; it runs again from the start on Resume. */
+  outcome?: 'done' | 'failed' | 'interrupted'
+  /** Running, though the hooks could not stop it (TaskStop): Reset is refused until its end. */
+  stuck?: true
   /** Its last 50 steps. */
   steps: Step[]
 }
@@ -793,6 +800,23 @@ export const discussable = (state: State, finding?: Pick<Finding, 'thread'>) =>
 /** The reviewer's last message waits for the agent's answer, or for the change it asked for. */
 export const isWaiting = (discussion: Discussion | undefined) =>
   discussion?.messages.at(-1)?.by === 'reviewer'
+
+// As lib/store.mjs's `underWay`: a fix, a post or an issue holds the finding.
+const UNDER_WAY = new Set<State>(['queued', 'working', 'asking'])
+
+/** The findings that refuse a reset (lib/store.mjs's `underWay`): held, or a question awaiting its answer. */
+export const underWayIds = (
+  review: Pick<Review, 'findings'>,
+  records: Records,
+  discussions: Record<string, Discussion> | undefined,
+) =>
+  review.findings
+    .map((one) => one.id)
+    .filter(
+      (id) =>
+        UNDER_WAY.has(stateOf(records, id)) ||
+        (isWaiting(discussions?.[id]) && !waitsForChange(discussions?.[id])),
+    )
 
 /** The reviewer's last message waits for the change it asked for. */
 export const waitsForChange = (discussion: Discussion | undefined) =>

@@ -468,10 +468,15 @@ export function ReadyCenter({
             : 'Ready to start the review'}
         </h2>
         <p className="tr-muted">
-          {step.wait === 'flag'
-            ? 'This run was opened with --no-start'
-            : 'Start the review by itself is off in Settings'}
-          : the lenses are built, and no reviewer runs until you start it.{' '}
+          {step.wait === 'reset'
+            ? 'The review was reset: its findings are gone'
+            : step.wait === 'flag'
+              ? 'This run was opened with --no-start'
+              : 'Start the review by itself is off in Settings'}
+          {step.wait === 'reset' ? ', the lenses' : ': the lenses'} are built, and no
+          reviewer runs until you start it.{' '}
+          {step.wait === 'reset' &&
+            'A fix made before the reset stays on the working tree, where the reviewers read the files. '}
           {hasGroups
             ? 'Pick the group this change needs, or turn off a lens for this review.'
             : 'Turn off the lenses this change does not need.'}

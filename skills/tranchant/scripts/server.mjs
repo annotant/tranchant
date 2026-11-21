@@ -53,7 +53,13 @@ import {
   findReview,
   lockRoot,
 } from './lib/project.mjs'
-import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
+import {
+  envelopeOf,
+  oneLine,
+  postBlocker,
+  replyPending,
+  statusOf,
+} from './lib/format.mjs'
 import { readDiscussions, say, syncChange, waitsForAnswer } from './lib/discussion.mjs'
 import {
   CleaningRefusal,
@@ -109,6 +115,7 @@ import {
   MAX_ISSUE_TITLE,
   StoreRefusal,
   WRITE_KINDS,
+  busyText,
   createStore,
   readProgress,
   readReviewAgents,
@@ -1099,7 +1106,7 @@ async function handle(req, res) {
       await Promise.all([
         store.readAll(),
         store.runs(),
-        readReviewAgents(dir),
+        readReviewAgents(dir, undefined, { since: SESSION_SINCE }),
         readDiscussions(dir),
         currentHead(),
         readLensesStep(),
@@ -1549,6 +1556,55 @@ async function handle(req, res) {
     return send(res, 200, { ok: true })
   }
 
+  // The review's own controls: its fixes, discussions and posts go on through each, and a reset is refused until they end.
+  if (req.method === 'POST' && url.pathname === '/api/review/pause') {
+    const input = await readJson(req)
+    if (input?.now !== undefined && typeof input.now !== 'boolean')
+      return send(res, 400, { error: 'now is true or false' })
+    const now = input?.now === true
+    return controlReview(res, async () => {
+      await store.pause(now)
+      print(`${now ? 'PAUSE_NOW' : 'PAUSE'} ${review.id}`)
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/review/resume') {
+    return controlReview(res, async () => {
+      await store.resume()
+      print(`RESUME ${review.id}`)
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/review/halt') {
+    const input = await readJson(req)
+    if (input?.reset !== undefined && typeof input.reset !== 'boolean')
+      return send(res, 400, { error: 'reset is true or false' })
+    // Stop and reset that a reset would refuse (resetRefusal): refused whole, the review still runs.
+    const refused = input?.reset === true ? await resetRefusal() : undefined
+    if (refused) return send(res, refused.status, { error: refused.error })
+    return controlReview(res, async () => {
+      const stopped = await store.halt()
+      print(`HALT ${review.id}`)
+      // The hooks read their lines in turn: the reset waits for the agents to end.
+      if (input?.reset === true) askReset(stopped.at)
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/review/reset') {
+    const latest = await store.readReview()
+    if (!latest.stopped)
+      return send(res, 409, { error: 'only a stopped review is reset' })
+    if (
+      resetAsked?.at === latest.stopped.at &&
+      Date.now() - resetAsked.since < RESET_WAIT_MS
+    )
+      return send(res, 409, { error: 'the review is being reset: wait for it' })
+    const refused = await resetRefusal()
+    if (refused) return send(res, refused.status, { error: refused.error })
+    askReset(latest.stopped.at)
+    return send(res, 200, { ok: true })
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     const input = await readJson(req)
     if (typeof input?.id !== 'string' || !ID.test(input.id)) {
@@ -1567,6 +1623,77 @@ const LENS_NAME = /^[\w-]{1,40}$/
 
 /** lenses.json's size and time when the last Start or Build was printed. @type {string | undefined} */
 let asked
+
+/**
+ * The stop whose RESET was printed, and when: a second Reset of it is refused
+ * (409) for a while, then taken, as the hooks' reset may have failed.
+ * @type {{ at: string, since: number } | undefined}
+ */
+let resetAsked
+const RESET_WAIT_MS = 30_000
+
+/**
+ * When the Claude Code session that runs this server first served a review
+ * (the hooks say; a server started by hand, now): an agent noted stuck
+ * before it ended with the session that ran it.
+ */
+const SESSION_SINCE = Number(process.env.TRANCHANT_SESSION_SINCE) || Date.now()
+
+/**
+ * Why a reset is refused now: a finding under way (409), a review agent the
+ * hooks could not stop in this session (409; a discussing agent belongs to
+ * its finding), or review files it cannot read (500, the error's code; its path in the log).
+ * @returns {Promise<{ status: number, error: string } | undefined>}
+ */
+async function resetRefusal() {
+  let busy
+  try {
+    busy = await store.underWay()
+  } catch (error) {
+    // Its path stays in the server's log, as any internal error's.
+    console.error(
+      `tranchant server: reset: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    const code =
+      error instanceof Error && 'code' in error ? ` (${String(error.code)})` : ''
+    return {
+      status: 500,
+      error: `reset refused: the review's files cannot be read${code}`,
+    }
+  }
+  if (busy.length) return { status: 409, error: `reset refused: ${busyText(busy)}` }
+  const stuck = (await readReviewAgents(dir, undefined, { since: SESSION_SINCE })).filter(
+    (one) => one.stuck && !one.name.startsWith('ds-'),
+  )
+  if (stuck.length)
+    return {
+      status: 409,
+      error: `reset refused: ${stuck.map((one) => one.name).join(', ')} still running, TaskStop did not end ${stuck.length > 1 ? 'them' : 'it'}`,
+    }
+  return undefined
+}
+
+/** RESET for the stop at `at`. @param {string} at */
+function askReset(at) {
+  resetAsked = { at, since: Date.now() }
+  print(`RESET ${review.id}`)
+}
+
+/**
+ * Pause, Resume or Stop: `act` writes the review, then prints the hooks'
+ * line; a move the review's state refuses answers 409, with why.
+ * @param {http.ServerResponse} res
+ * @param {() => Promise<void>} act
+ */
+async function controlReview(res, act) {
+  try {
+    await act()
+  } catch (error) {
+    if (!(error instanceof StoreRefusal)) throw error
+    return send(res, 409, { error: error.message })
+  }
+  return send(res, 200, { review: envelopeOf(await store.readReview()) })
+}
 
 /** lenses.json's size and time, or '' while there is none. */
 const lensesStamp = () =>
@@ -1940,7 +2067,10 @@ async function changes() {
   ]
   fingerprints.clear()
   for (const [id, mark] of next) fingerprints.set(id, mark)
-  const status = latest ? statusOf(latest) : statusSeen
+  // A pause or a stop changes the progress panel: part of the status the page is told about.
+  const status = latest
+    ? JSON.stringify([statusOf(latest), latest.paused ?? null, latest.stopped ?? null])
+    : statusSeen
   const agents = []
   for (const name of (await readdir(agentsDir).catch(() => [])).toSorted((a, b) =>
     a.localeCompare(b),
@@ -1981,7 +2111,12 @@ const landed = new Set()
  * @param {import('./lib/format.mjs').Review | undefined} latest
  */
 function announceLanded(latest) {
-  if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing') return
+  // A finding gone (removed, or a reset) lands again under its id: said again.
+  if (latest)
+    for (const id of landed)
+      if (!latest.findings.some((finding) => finding.id === id)) landed.delete(id)
+  if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing' || latest.stopped)
+    return
   for (const finding of latest.findings) {
     if (finding.verified === true || landed.has(finding.id)) continue
     landed.add(finding.id)

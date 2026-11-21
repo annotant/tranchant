@@ -205,6 +205,20 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-progress-bar { flex: 0 1 200px; height: 6px; border-radius: 3px; background: var(--tr-bg-3); overflow: hidden; }
 .tr-progress-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--tr-accent); }
 .tr-progress-toggle { margin-left: auto; font-size: 13px; }
+.tr-rp-controls { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.tr-rp-controls .tr-progress-toggle { margin-left: 8px; }
+.tr-rp-controls .tr-btn svg { margin-right: 6px; }
+.tr-rp-icon { flex: none; color: var(--tr-warn); }
+.tr-rp-icon--stop { color: var(--tr-danger); }
+.tr-rp--paused { background: var(--tr-warn-bg); }
+.tr-rp--paused .tr-progress-bar > span { background: var(--tr-warn); }
+.tr-rp--stopped .tr-progress-bar > span { background: var(--tr-danger); }
+.tr-rp-note { font-size: 11px; font-weight: 500; opacity: 0.8; }
+.tr-rp-confirm { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border: 1px solid var(--tr-danger); border-radius: var(--tr-radius); background: var(--tr-danger-bg); }
+.tr-rp-confirm p { margin: 0; font-size: 13px; max-width: 110ch; }
+.tr-rp-confirm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.tr-rp-confirm-actions .tr-muted { font-size: 12.5px; }
+.tr-rp-body { margin: 0; font-size: 12.5px; }
 .tr-progress-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: start; gap: 8px 16px; }
 .tr-progress-label { padding-top: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tr-muted); }
 .tr-lenses { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -214,6 +228,7 @@ a.tr-theme-toggle { text-decoration: none; }
 .tr-lens--done .tr-lens-icon { color: var(--tr-auto); }
 .tr-lens--running { border-color: var(--tr-accent); background: var(--tr-accent-weak); color: var(--tr-accent); }
 .tr-lens--failed { border-color: var(--tr-danger); background: var(--tr-danger-bg); color: var(--tr-danger); }
+.tr-lens--queued, .tr-lens--interrupted { color: var(--tr-muted); border-style: dashed; }
 .tr-lens .tr-spinner { width: 9px; height: 9px; border-width: 1.5px; }
 .tr-lens-count { min-width: 14px; padding: 0 5px; border-radius: 8px; background: var(--tr-bg-3); color: var(--tr-muted); font-size: 11px; font-weight: 600; text-align: center; }
 .tr-lens-rows { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border: 1px solid var(--tr-border); border-radius: 8px; overflow: hidden; }

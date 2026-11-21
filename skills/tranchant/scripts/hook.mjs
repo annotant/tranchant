@@ -39,7 +39,7 @@ import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { syncChange } from './lib/discussion.mjs'
 import { withFileLock } from './lib/filelock.mjs'
-import { currentRun, parseDecisions } from './lib/format.mjs'
+import { currentRun, parseDecisions, statusOf } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
 import { SETTINGS_FILE, loadSettings } from './lib/settings.mjs'
 import { createStore, historyPath, progressPath, reviewAgentPath } from './lib/store.mjs'
@@ -466,6 +466,17 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
   const scripts = path.dirname(new URL(import.meta.url).pathname)
   const table = path.join(locksDir(lockRoot), 'table.json')
 
+  /** The review's status; undefined when review.json cannot be read. */
+  async function statusNow() {
+    try {
+      return statusOf(
+        JSON.parse(await readFile(path.join(review, 'review.json'), 'utf8')),
+      )
+    } catch {
+      return undefined
+    }
+  }
+
   /**
    * The decisions of a review; undefined when they cannot be read.
    * @param {string} [where] Another review's folder.
@@ -561,6 +572,8 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
   async function record(steps) {
     if (reviewer) {
       if (!steps.length) return
+      // Back to `preparing` (a reset): a review agent's late steps are dropped.
+      if ((await statusNow()) === 'preparing') return
       const file = reviewAgentPath(review, finding)
       await mkdir(path.dirname(file), { recursive: true })
       await appendFile(
