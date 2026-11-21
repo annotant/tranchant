@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type DiffState,
   postAnswer,
@@ -726,8 +726,20 @@ export default function App() {
   const current = ordered.find((finding) => finding.id === openId)
   const keys = (
     <p className="tr-keys tr-muted">
-      j/k move · Enter open · x select · f fix · {canPost(review) ? 'p post · ' : ''}d
-      drop · s skip
+      {[
+        'j/k move',
+        'Enter open',
+        'x select',
+        'f fix',
+        ...(canPost(review) ? ['p post'] : []),
+        'd drop',
+        's skip',
+      ].map((key, index) => (
+        <Fragment key={key}>
+          {index > 0 && ' · '}
+          <span>{key}</span>
+        </Fragment>
+      ))}
     </p>
   )
   const viewToggle = (
@@ -776,7 +788,7 @@ export default function App() {
       onDiscuss={discuss}
     />
   ) : (
-    <p className="tr-muted">
+    <p className="tr-empty tr-muted">
       {reviewing ? 'Waiting for the first finding…' : 'No finding.'}
     </p>
   )

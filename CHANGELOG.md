@@ -170,6 +170,15 @@ released to the `stable` branch.
   recipe's whole `prompt` written before this must say so.
 - A review agent's Bash command with a comment (`#`) is refused: the
   shell drops the words after it, which the hooks would still have read.
+- **Small polish of the page.** The findings' rows and the diff's markers
+  light up on hover; the open finding's *To do* chip, and the file being
+  read's finding count, keep their background on the highlighted row; a
+  truncated title shows whole on hover; the Summary and Related toggles get
+  one chevron, the same open and closed; the keyboard hints wrap between
+  two keys, never inside one; *Waiting for the first finding…* gets the
+  list's padding; *Select among 0 findings* is greyed with its checkbox;
+  in Add a lens's picker, each plugin's (or kind's) head stays at the top
+  of the list while its rows scroll.
 
 ### Removed
 

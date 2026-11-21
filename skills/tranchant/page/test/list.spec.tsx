@@ -24,3 +24,20 @@ test('a row names the lens that found its finding; one no lens found shows no ch
   expect(screen.getAllByRole('option')).toHaveLength(2)
   expect(document.querySelectorAll('.tr-chip--lens')).toHaveLength(1)
 })
+
+test('a row’s title, cut by an ellipsis when long, shows whole on hover', () => {
+  const [first] = FINDINGS
+  render(
+    <FindingList
+      groups={groupFindings([first!])}
+      records={{}}
+      cursor={undefined}
+      openId={undefined}
+      selected={new Set()}
+      onOpen={() => {}}
+      onToggle={() => {}}
+    />,
+  )
+  const row = document.getElementById(`tr-option-${first!.id}`)!
+  expect(row.querySelector('.tr-item-title')?.getAttribute('title')).toBe(first!.title)
+})
