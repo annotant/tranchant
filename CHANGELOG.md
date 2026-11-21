@@ -9,6 +9,21 @@ released to the `stable` branch.
 
 ### Added
 
+- **A skill or command added as a lens is analysed into one lens, or the
+  reviewers it starts.** A whole review process (a team's skill that
+  launches its reviewers in prose, a command whose agents are written in
+  it) is no longer a failed cleaning: its card reads "code-review starts 9
+  reviewers: pick the lenses to make", one checkbox each, its name
+  editable, one that is a lens already locked, and **Add the checked ones**
+  cleans each into a lens of its own. A reviewer is the agent's or skill's
+  file it starts, found in the source's own plugin and marketplace even
+  when that plugin is not installed, or instructions written in the source
+  itself: that lens records its source and the reviewer's name, and is
+  extracted again when the source changes. The agent's paths are data: a
+  file is offered only under the source's plugin or marketplace, or the
+  agents, skills and commands of the project's `.claude` and `~/.claude`;
+  any other is listed with why. A command can become a lens, and one whose
+  read finds no agent offers **Ask an agent to look**.
 - **Pause, stop and reset a review.** The progress panel of a
   `/tranchant review` gets **Pause**: no new agent starts, those at work
   finish (*Pausing*), and **Pause now** ends them, each running again from
