@@ -3,7 +3,8 @@
 // the agents and skills it names that resolve beside it (its plugin's root,
 // or the folder its `commands`, `agents` or `skills` folder lies in), in the
 // project's .claude or the user's, and the plugin:name it writes out. Each
-// can become a lens; the source never does.
+// can become a lens; the source never does. Where the read finds none, the
+// cleaning agent reads the source (lib/reviewers.mjs checks what it finds).
 import os from 'node:os'
 import path from 'node:path'
 import { statSync } from 'node:fs'
@@ -37,7 +38,7 @@ const MAX_NAMED = 40
 const MAX_ENTRIES = 500
 
 /** A stem made a lens name: letters, digits, - and _, 40 at most; `lens` when nothing is left. */
-const lensNameOf = (/** @type {string} */ stem) =>
+export const lensNameOf = (/** @type {string} */ stem) =>
   stem
     .replace(/[^\w-]+/g, '-')
     .replace(/^-+|-+$/g, '')
@@ -281,7 +282,14 @@ async function startedBy({ text, file, home, plugin, project, label: labelFile }
     /** @type {Kind} */ kind,
   ) => {
     const key = path.resolve(one)
-    if (at === -1 || kind === 'command' || key === path.resolve(file)) return
+    // A file of the source's own name is a copy of it (~/.claude/skills/<its name>), never its reviewer.
+    if (
+      at === -1 ||
+      kind === 'command' ||
+      key === path.resolve(file) ||
+      nameOfFile(one) === nameOfFile(file)
+    )
+      return
     const known = found.get(key)
     if (!known || at < known.at) found.set(key, { at, source, file: one, kind })
   }
@@ -392,8 +400,8 @@ export async function insideFile(project, given) {
 }
 
 /**
- * Why a source cannot be cleaned into one lens, for what is inside it; the
- * reviewers to add instead, by name.
+ * Why a source cannot be cleaned into one lens, for the reviewers found
+ * inside it: those to add instead, by name.
  * @param {Inside} inside
  */
 export function insideRefusal(inside) {
@@ -401,10 +409,8 @@ export function insideRefusal(inside) {
   const sources = inside.starts.map((one) => one.name)
   const what =
     inside.kind === 'command'
-      ? `${inside.label} is a command, never a lens itself`
+      ? `${inside.label} is a command that starts other reviewers`
       : `${inside.label} starts other agents and holds no review of its own`
   const count = sources.length + (inside.more ?? 0)
-  return sources.length
-    ? `${what}: add the ${count === 1 ? 'reviewer' : `${count} reviewers`} it starts instead (${sources.join(', ')}${inside.more ? `, and ${inside.more} more` : ''}), at once from Settings › Lenses`
-    : `${what}, and it names no agent Tranchant finds: they are written in it, or are a plugin's not installed or turned off`
+  return `${what}: add the ${count === 1 ? 'reviewer' : `${count} reviewers`} it starts instead (${sources.join(', ')}${inside.more ? `, and ${inside.more} more` : ''}), at once from Settings › Lenses`
 }

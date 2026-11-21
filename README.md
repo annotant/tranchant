@@ -114,8 +114,12 @@ skills, agents and commands, and a file browser limited to the project,
 (`.claude/agents/*-review.md`) adds every file it matches, listed first to
 check and rename, one cleaning agent each. A command
 (`pr-review-toolkit:review-pr`), or an agent that starts agents it names, is
-never a lens itself: Tranchant reads it, with no agent, and lists the agents
-it starts to add instead, under it among a glob's matches. A cleaning agent
+read first with no agent: Tranchant lists the agents it starts to add
+instead, under it among a glob's matches. Where that read finds none (a
+skill that starts its reviewers in prose, a plugin not installed, agents
+written in the command itself), the cleaning agent decides: one review
+becomes one lens; a whole process lists the reviewers it starts, files or
+instructions written inline, one checkbox each. A cleaning agent
 reads it once and writes the lens Tranchant runs, its review kept and its
 orchestration, output format, posting and questions left out, with
 added instructions (the files it takes, its topics, its buckets) the user can

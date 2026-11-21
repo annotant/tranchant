@@ -2422,7 +2422,7 @@ test('/api/lens/inside lists the agents a command starts, those being added said
   assert.equal(whole.status, 409)
   assert.match(
     (await json(whole)).error,
-    /is a command, never a lens itself: add the 2 reviewers it starts instead \(code-review, test-review\)/,
+    /is a command that starts other reviewers: add the 2 reviewers it starts instead \(code-review, test-review\)/,
   )
   const added = await importing({
     scope: 'local',
@@ -2434,6 +2434,31 @@ test('/api/lens/inside lists the agents a command starts, those being added said
   assert.deepEqual(again.starts[0].already, [
     { scope: 'local', name: 'code-review', adding: true },
   ])
+
+  // A command whose read finds none: its name, and its cleaning agent looks when asked.
+  const alone = '.claude/commands/full-review.md'
+  await writeFile(
+    path.join(dotClaude, 'commands', 'full-review.md'),
+    'Read the change for missing null checks.\n',
+  )
+  assert.deepEqual(await json(await inside(alone)), {
+    inside: { kind: 'command', label: alone, starts: [] },
+    name: 'full-review',
+  })
+  const asked = await importing({ scope: 'local', source: alone })
+  assert.equal(asked.status, 200)
+  const { cleaning } = await json(asked)
+  // Its reviewers are picked once its agent found a process: not before.
+  const reviewers = (/** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/lens/reviewers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  assert.equal((await reviewers({ picks: [] })).status, 400)
+  const early = await reviewers({ id: cleaning, picks: [{ index: 0 }] })
+  assert.equal(early.status, 409)
+  assert.match((await json(early)).error, /lists no reviewers to add/)
 })
 
 test("/api/lens/catalog lists the plugins' skills, agents and commands, a turned-off one said, the project's and the user's .claude, names only", async (t) => {

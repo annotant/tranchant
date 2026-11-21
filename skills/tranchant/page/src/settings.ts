@@ -131,7 +131,20 @@ interface LensSet {
   lenses: LensEntry[]
 }
 
-/** A lens's cleaning: being cleaned, cleaned and waiting to be added, or failed. */
+/** The lenses made from a reviewer already, and those being added from it. */
+type Already = { scope: 'local' | 'global'; name: string; adding?: true }[]
+
+/**
+ * One reviewer a whole process starts: a file, as Add a lens takes it;
+ * instructions written inline in the process; or a path its agent gave
+ * that Tranchant refuses, with why.
+ */
+type ProcessReviewer =
+  | { name: string; kind: 'file'; source: string; already?: Already }
+  | { name: string; kind: 'inline'; already?: Already }
+  | { name: string; kind: 'refused'; file: string; reason: string }
+
+/** A lens's cleaning: being cleaned, cleaned and waiting to be added, a process to pick from, or failed. */
 export interface CleaningEntry {
   id: string
   createdAt: string
@@ -141,14 +154,21 @@ export interface CleaningEntry {
   again: boolean
   source: string
   version?: string
-  state: 'cleaning' | 'ready' | 'failed'
+  /** A reviewer written inline in the source, by name: the lens is that one alone. */
+  reviewer?: string
+  /** `process`: a whole review process, its reviewers to pick the lenses of. */
+  state: 'cleaning' | 'ready' | 'process' | 'failed'
   /** With `cleaning`: no agent reads it yet, it waits for a free one. */
   waiting?: boolean
   /** The glob it was matched by, when it came with others. */
   from?: string
   reason?: string
-  /** A whole process's reviewers, to add one by one. */
-  instead?: string[]
+  /** With `process`: how it routes its review, in its agent's words. */
+  process?: string
+  /** With `process`: the reviewers it starts, each to make a lens of. */
+  reviewers?: ProcessReviewer[]
+  /** With `process`: those past the most listed. */
+  more?: number
   /** With `ready`: what the agent found, and the lens's domain. */
   report?: {
     paths: string[]

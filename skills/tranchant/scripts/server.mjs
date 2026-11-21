@@ -17,7 +17,8 @@
 // recipe's and those the user added (lib/userlens.mjs), and the lenses being
 // cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
 // them again, lists a glob's matches (lib/glob.mjs) and the reviewers a
-// command, or an agent that starts others, holds (lib/inside.mjs); lists
+// command, or an agent that starts others, holds (lib/inside.mjs); makes
+// the lenses picked of those a cleaning agent found a process starts; lists
 // what the source's picker offers, names only (lib/picker.mjs); imports
 // several at once, and prints CLEAN for each cleaning the hooks start an
 // agent on; /api/lens/group/* creates, changes and deletes the project's
@@ -64,6 +65,7 @@ import { readDiscussions, say, syncChange, waitsForAnswer } from './lib/discussi
 import {
   CleaningRefusal,
   addCleaned,
+  addReviewers,
   cleanAgain,
   cleaningsDir,
   createCleaning,
@@ -407,7 +409,7 @@ function trackerOnce(values) {
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
-  const [described, cleanings, groups] = await Promise.all([
+  const [described, listed, groups] = await Promise.all([
     describeLenses({ project: lensRoot, base: review.base, values }),
     listCleanings(lensRoot).catch((error) => {
       console.error(`tranchant server: cleanings unreadable: ${oneLine(String(error))}`)
@@ -415,6 +417,7 @@ async function settingsPayload() {
     }),
     readGroups(lensRoot),
   ])
+  const cleanings = withProcessAlready(listed, [...described.lenses, ...adding(listed)])
   return {
     path: SETTINGS_FILE,
     settings,
@@ -464,6 +467,49 @@ async function lensChange(res, change) {
   return send(res, 200, { ...done, ...(settings && { settings }) })
 }
 
+/**
+ * The cleanings that add a lens: a failed one adds nothing, its file free to
+ * add again, nor a process, whose reviewers are the lenses.
+ * @param {Awaited<ReturnType<typeof listCleanings>>} cleanings
+ */
+const adding = (cleanings) =>
+  cleanings
+    .filter((one) => !one.again && one.state !== 'failed' && one.state !== 'process')
+    .map((one) => ({ ...one, adding: true }))
+
+/**
+ * A process's reviewers, each with the lenses made from it already: a file
+ * by its path, an inline one by its source and its name.
+ * @param {Awaited<ReturnType<typeof listCleanings>>} cleanings
+ * @param {Parameters<typeof withAlready>[2]} known
+ */
+function withProcessAlready(cleanings, known) {
+  return cleanings.map((one) => {
+    if (!one.reviewers) return one
+    const offered = one.reviewers.flatMap((reviewer, i) =>
+      reviewer.kind === 'refused'
+        ? []
+        : [
+            {
+              i,
+              source: reviewer.kind === 'file' ? reviewer.source : one.source,
+              name: reviewer.name,
+              ...(reviewer.kind === 'inline' && { reviewer: reviewer.name }),
+            },
+          ],
+    )
+    const marked = withAlready(lensRoot, offered, known)
+    const already = new Map(offered.map((match, at) => [match.i, marked[at]?.already]))
+    return {
+      ...one,
+      reviewers: one.reviewers.map((reviewer, i) => {
+        const lenses = already.get(i)
+        return lenses ? { ...reviewer, already: lenses } : reviewer
+      }),
+    }
+  })
+}
+
 /** The lenses added and those being added, by source: what a glob's matches are held against. */
 async function knownLenses() {
   const { values } = await loadSettings()
@@ -471,13 +517,7 @@ async function knownLenses() {
     describeLenses({ project: lensRoot, base: review.base, values }),
     listCleanings(lensRoot).catch(() => []),
   ])
-  return [
-    ...described.lenses,
-    // A failed one adds nothing: its file is free to add again.
-    ...cleanings
-      .filter((one) => !one.again && one.state !== 'failed')
-      .map((one) => ({ ...one, adding: true })),
-  ]
+  return [...described.lenses, ...adding(cleanings)]
 }
 
 /**
@@ -1333,7 +1373,9 @@ async function handle(req, res) {
     // Shown in Name before the cleaning: the name it gets when none is typed.
     if (!inside)
       return send(res, 200, { inside: null, name: nameOfSource(source, lensRoot) })
-    if (!inside.starts.length) return send(res, 200, { inside })
+    // None found by its read: its agent may look, at the person's asking, and make one lens of it.
+    if (!inside.starts.length)
+      return send(res, 200, { inside, name: nameOfSource(source, lensRoot) })
     const [marked] = withAlready(
       lensRoot,
       [{ source: inside.label, name: '', starts: inside.starts }],
@@ -1411,6 +1453,23 @@ async function handle(req, res) {
       })
       print(`CLEAN ${made.record.id}`)
       return { cleaning: made.record.id }
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/reviewers') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id))
+      return send(res, 400, { error: 'id is required' })
+    const scope = input.scope === undefined ? undefined : String(input.scope)
+    return lensChange(res, async () => {
+      const { made, refused } = await addReviewers(lensRoot, input.id, input.picks, scope)
+      if (!made.length)
+        throw new CleaningRefusal(
+          refused.map((one) => `${one.source}: ${one.reason}`).join('; ') ||
+            'no lens to add',
+        )
+      for (const one of made) print(`CLEAN ${one.record.id}`)
+      return { cleanings: made.map((one) => one.record.id), refused }
     })
   }
 

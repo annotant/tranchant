@@ -20,6 +20,7 @@ import { expandHome } from './settings.mjs'
  * @typedef {object} Match
  * @property {string} source
  * @property {string} name
+ * @property {string} [reviewer] A reviewer written inline in `source`, by name: a lens of its own, apart from its source's.
  * @property {string} [notReviewer]
  * @property {import('./inside.mjs').Kind} [kind]
  * @property {Already[]} [already] The lenses, and the lenses being added, made from this same file.
@@ -175,14 +176,18 @@ export async function matchSources(project, pattern) {
 
 /**
  * One source as a file: a path from the project, `~/` or absolute, a skill's
- * folder and its SKILL.md alike; a plugin's name as it is.
+ * folder and its SKILL.md alike; a plugin's name as it is. A reviewer
+ * written inline in it is a key of its own.
  * @param {string} project
  * @param {string} label
+ * @param {string} [reviewer]
  */
-function fileKey(project, label) {
+function fileKey(project, label, reviewer) {
   const trimmed = label.trim()
-  if (/^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/.test(trimmed)) return trimmed
-  return path.resolve(project, expandHome(trimmed)).replace(/[/\\]SKILL\.md$/i, '')
+  const file = /^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/.test(trimmed)
+    ? trimmed
+    : path.resolve(project, expandHome(trimmed)).replace(/[/\\]SKILL\.md$/i, '')
+  return reviewer ? `${file}\0${reviewer}` : file
 }
 
 /**
@@ -191,7 +196,7 @@ function fileKey(project, label) {
  * were added one by one under other names.
  * @param {string} project
  * @param {Match[]} matches
- * @param {{ source: string, scope: string, name: string, adding?: boolean }[]} known
+ * @param {{ source: string, scope: string, name: string, adding?: boolean, reviewer?: string }[]} known
  * @returns {Match[]}
  */
 export function withAlready(project, matches, known) {
@@ -199,7 +204,7 @@ export function withAlready(project, matches, known) {
   const byFile = new Map()
   for (const one of known) {
     if (one.scope !== 'local' && one.scope !== 'global') continue
-    const key = fileKey(project, one.source)
+    const key = fileKey(project, one.source, one.reviewer)
     byFile.set(key, [
       ...(byFile.get(key) ?? []),
       {
@@ -211,7 +216,7 @@ export function withAlready(project, matches, known) {
   }
   /** @returns {Match} */
   const mark = (/** @type {Match} */ match) => {
-    const already = byFile.get(fileKey(project, match.source))
+    const already = byFile.get(fileKey(project, match.source, match.reviewer))
     const marked = already ? { ...match, already } : match
     return match.starts ? { ...marked, starts: match.starts.map(mark) } : marked
   }

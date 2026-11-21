@@ -56,7 +56,9 @@ pattern, read how annotant does it.
   `lib/userlens.mjs` owns the lenses the user adds (global and local, in
   `~/.config/tranchant/`) and the set they make with the recipe's;
   `lib/groups.mjs` the project's groups of lenses (`--group`);
-  `lib/cleaning.mjs` owns their cleanings, `lib/glob.mjs` the files a
+  `lib/cleaning.mjs` owns their cleanings, `lib/reviewers.mjs` the
+  reviewers a cleaning agent found a whole process starts, checked;
+  `lib/glob.mjs` the files a
   glob typed as a source matches, `lib/inside.mjs` the reviewers a command,
   or a source that starts agents, holds; `lib/picker.mjs` what Add a lens's
   picker lists (the plugins', the `.claude` folders', a folder of the

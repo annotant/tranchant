@@ -2689,6 +2689,8 @@ type Prepared = {
   folder: string
   version?: string
   rules?: string
+  reviewer?: string
+  extract?: string
   lens: string
   report: string
 }
@@ -2784,6 +2786,8 @@ async function spawnCleaner($: $, made: Prepared) {
         `PROJECT=${made.project}`,
         `NAME=${made.name}`,
         ...(made.rules ? [`RULES=${made.rules}`] : []),
+        ...(made.reviewer ? [`REVIEWER=${made.reviewer}`] : []),
+        ...(made.extract ? [`EXTRACT=${made.extract}`] : []),
         `LENS=${made.lens}`,
         `REPORT=${made.report}`,
       ].join('\n'),
@@ -2973,6 +2977,7 @@ async function cleanDone($: $, agent: string, answer: string) {
     : lines.some((line) => line.startsWith('CLEANED '))
       ? undefined
       : short(ran.stderr.trim() || `clean.mjs exited ${ran.exitCode}`, 200)
+  const wholeProcess = lines.some((line) => line.startsWith('CLEANED process '))
   const waiting = await reviewWaitingOn($, found.dir)
   // A review's own cleanings show in its Lenses step: no toast of their own, the reason kept.
   if (waiting && why !== undefined) await debug($, `cleaning ${found.lens}: ${why}`)
@@ -2981,7 +2986,9 @@ async function cleanDone($: $, agent: string, answer: string) {
       $.ui.toast(
         found.again
           ? `Tranchant cleaned the lens ${found.lens} again: the next review runs it.`
-          : `Tranchant cleaned the lens ${found.lens}${said ? ` (${said})` : ''}: check it in Settings › Lenses, then Add this lens.`,
+          : wholeProcess
+            ? `Tranchant read ${short(found.source, 80)}: a whole review process. Pick the lenses to make of the reviewers it starts in Settings › Lenses.`
+            : `Tranchant cleaned the lens ${found.lens}${said ? ` (${said})` : ''}: check it in Settings › Lenses, then Add this lens.`,
       )
     else
       $.ui.toast(`Tranchant could not clean the lens ${found.lens}: ${short(why, 200)}`)

@@ -46,6 +46,7 @@ import { kindOfPath } from './inside.mjs'
  * @typedef {object} UserLens
  * @property {string} name
  * @property {string} source A plugin's skill or agent (`plugin:name`), or a path.
+ * @property {string} [reviewer] A reviewer written inline in the source, by name: the lens is that one alone.
  * @property {boolean} on
  * @property {string[]} paths Empty for an `otherwise` lens.
  * @property {true} [otherwise]
@@ -64,6 +65,7 @@ const MAX_LIST = 20
 const MAX_TEXT = 500
 const MAX_PATHS = 40
 const MAX_SOURCE = 1024
+const MAX_REVIEWER = 100
 
 /** A lens file, or a change to it, this Tranchant refuses, and why. */
 export class LensFileRefusal extends Error {}
@@ -211,6 +213,11 @@ export function checkUserLens(raw) {
   if (typeof raw.name !== 'string' || !LENS_NAME.test(raw.name))
     refuse('name: letters, digits, - and _ only')
   if (!isSourceText(raw.source)) refuse('source: a skill or agent by name, or a path')
+  if (
+    raw.reviewer !== undefined &&
+    !(isSourceText(raw.reviewer) && raw.reviewer.length <= MAX_REVIEWER)
+  )
+    refuse(`reviewer: a name on one line, ${MAX_REVIEWER} characters at most`)
   if (typeof raw.on !== 'boolean') refuse('on: true or false')
   if (typeof raw.rules !== 'string' || raw.rules.length > MAX_RULES)
     refuse(`rules: a text of ${MAX_RULES / 1024} KiB at most`)
@@ -238,6 +245,7 @@ export function checkUserLens(raw) {
   return {
     name: raw.name,
     source: raw.source,
+    ...(raw.reviewer !== undefined && { reviewer: raw.reviewer }),
     on: raw.on,
     paths: spec.paths,
     ...(spec.otherwise && { otherwise: true }),
@@ -614,6 +622,7 @@ export async function describeLenses({ project, base, values }) {
         ...(spec?.topics && { topics: spec.topics }),
         ...(spec?.model && { model: spec.model }),
         ...(lens && {
+          ...(lens.reviewer && { reviewer: lens.reviewer }),
           rules: lens.rules,
           ...(lens.rulesEdited && { rulesEdited: true }),
           cleaned: lens.cleaned,

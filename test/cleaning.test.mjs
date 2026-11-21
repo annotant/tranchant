@@ -5,7 +5,7 @@
 // a lens whose source changed and runs its new version, or its last one.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { before, test } from 'node:test'
 import { SCRIPTS, run, tempDir } from './helpers.mjs'
@@ -266,7 +266,7 @@ test("the cleaning agent's hook lets it write its two files only, and read", asy
   assert.match(none.stdout, /started without its files/)
 })
 
-test('a cleaning that wrote nothing, or found a whole process, fails, and says what to add instead', async (t) => {
+test('a cleaning that wrote nothing, or found no review, fails, and says why', async (t) => {
   const { dir } = await repository(t)
   const empty = cleaningOf(
     await clean(dir, ['--prepare', '.claude/agents/money-review.md', '--to', 'local']),
@@ -284,18 +284,9 @@ test('a cleaning that wrote nothing, or found a whole process, fails, and says w
       'whole',
     ]),
   )
-  await writeFile(
-    wholeProcess.report,
-    JSON.stringify({
-      refused: 'it starts two reviewers',
-      instead: ['team:abac', 'team:api'],
-    }),
-  )
+  await writeFile(wholeProcess.report, JSON.stringify({ refused: 'it is a guide' }))
   const refused = await clean(dir, ['--check', wholeProcess.dir])
-  assert.match(
-    refused.stdout,
-    /^CLEAN_FAILED the source holds no single review: it starts two reviewers/m,
-  )
+  assert.match(refused.stdout, /^CLEAN_FAILED the source holds no review: it is a guide/m)
   const listed = JSON.parse(
     await lib(
       `console.log(JSON.stringify(await cleaning.listCleanings(${JSON.stringify(dir)})))`,
@@ -303,7 +294,6 @@ test('a cleaning that wrote nothing, or found a whole process, fails, and says w
   )
   const whole = listed.find((/** @type {any} */ one) => one.name === 'whole')
   assert.equal(whole.state, 'failed')
-  assert.deepEqual(whole.instead, ['team:abac', 'team:api'])
 })
 
 test('an added lens lives outside the repository, local to its project or global, and runs beside the recipe', async (t) => {
@@ -1371,7 +1361,7 @@ test("a plugin's command holds the agents it starts, in the order it names them:
   assert.equal(refused.code, 2)
   assert.match(
     refused.stdout,
-    /^CLEAN_REFUSED team:review-pr is a command, never a lens itself: add the 5 reviewers it starts instead \(code-reviewer, pr-test-analyzer, /m,
+    /^CLEAN_REFUSED team:review-pr is a command that starts other reviewers: add the 5 reviewers it starts instead \(code-reviewer, pr-test-analyzer, /m,
   )
 
   const batch = JSON.parse(
@@ -1460,17 +1450,24 @@ test("a glob's command lists the agents it starts, the project's and a plugin's;
   )
   assert.deepEqual(marked[1].starts[1].already, [{ scope: 'local', name: 'cents' }])
 
-  // A command with no agent of its own is no lens either.
-  const none = await clean(dir, [
-    '--prepare',
-    '.claude/commands/full-review.md',
-    '--to',
-    'local',
-  ])
-  assert.match(
-    none.stdout,
-    /^CLEAN_REFUSED \.claude\/commands\/full-review\.md is a command, never a lens itself, and it names no agent Tranchant finds: they are written in it, or are a plugin's not installed or turned off$/m,
+  // A command whose read finds no agent goes to its cleaning agent: a single review becomes one lens.
+  const none = cleaningOf(
+    await clean(dir, ['--prepare', '.claude/commands/full-review.md', '--to', 'local']),
   )
+  await agentWrites(none)
+  assert.match(
+    (await clean(dir, ['--check', none.dir])).stdout,
+    /^CLEANED ready local full-review$/m,
+  )
+  await lib(
+    `await cleaning.addCleaned(${JSON.stringify(dir)}, ${JSON.stringify(none.id)}, {})`,
+  )
+  const lens = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await userlens.readUserLens(userlens.lensDir('local', ${JSON.stringify(dir)}, 'full-review'))))`,
+    ),
+  )
+  assert.equal(lens.source, '.claude/commands/full-review.md')
   // An agent that starts others, naming none that resolves, is cleaned: its agent decides.
   await writeFile(
     path.join(claude, 'agents', 'pr-review.md'),
@@ -1528,5 +1525,269 @@ test('a file is a command or an agent from the folder right above it, never one 
   assert.match(
     refused.stdout,
     /add the 13 reviewers it starts instead \(check-1, .*check-12, and 1 more\)/,
+  )
+})
+
+/**
+ * A team's marketplace whose plugin has no manifest of its own (`strict:
+ * false`): its review skill at the plugin's root, beside `agents/`, naming
+ * its nine reviewers as `workflow:<agent>`, a plugin not installed.
+ * @param {import('node:test').TestContext} t
+ */
+async function teamMarketplace(t) {
+  const root = await tempDir(t, 'tranchant-market-')
+  await mkdir(path.join(root, '.claude-plugin'), { recursive: true })
+  await writeFile(
+    path.join(root, '.claude-plugin', 'marketplace.json'),
+    JSON.stringify({
+      name: 'team',
+      plugins: [{ name: 'workflow', source: './plugins/workflow', strict: false }],
+    }),
+  )
+  const plugin = path.join(root, 'plugins', 'workflow')
+  await mkdir(path.join(plugin, 'agents'), { recursive: true })
+  await mkdir(path.join(plugin, 'code-review'), { recursive: true })
+  const agents = Array.from({ length: 9 }, (_, i) => `code-reviewer-${i + 1}`)
+  for (const name of agents)
+    await writeFile(path.join(plugin, 'agents', `${name}.md`), `Review for ${name}.\n`)
+  const skill = path.join(plugin, 'code-review')
+  await writeFile(
+    path.join(skill, 'SKILL.md'),
+    [
+      '---',
+      'name: code-review',
+      '---',
+      '',
+      'Launch all nine reviewers in parallel, then merge their reports:',
+      ...agents.map((name) => `- workflow:${name}`),
+      'Then a performance pass: a general-purpose agent told to look for N+1 queries.',
+      '',
+    ].join('\n'),
+  )
+  return { root, plugin, skill, agents }
+}
+
+test('a skill that is a whole process lists the reviewers its agent found, each file under its plugin, one inline; the checked ones become lenses, the inline one cleaned again with its name', async (t) => {
+  const { dir } = await repository(t)
+  const { root, plugin, skill, agents } = await teamMarketplace(t)
+  // A copy of the skill under the user's skills, of the same name: never its reviewer.
+  const copy = path.join(claudeDir, 'skills', 'code-review')
+  await mkdir(copy, { recursive: true })
+  await writeFile(path.join(copy, 'SKILL.md'), 'A copy.\n')
+  t.after(() => rm(copy, { recursive: true, force: true }))
+  const outside = await tempDir(t, 'tranchant-outside-')
+  await writeFile(path.join(outside, 'secrets.md'), 'Not a reviewer of this plugin.\n')
+
+  // Its read with no agent finds none: the plugin is not installed, and it has every tool.
+  assert.equal(
+    (
+      await lib(
+        `console.log(JSON.stringify(await inside.insideOf(${JSON.stringify(dir)}, ${JSON.stringify(skill)}) ?? null))`,
+      )
+    ).trim(),
+    'null',
+  )
+  const made = cleaningOf(await clean(dir, ['--prepare', skill, '--to', 'local']))
+  await writeFile(
+    made.report,
+    JSON.stringify({
+      process: 'It launches nine reviewers in parallel and merges their reports.',
+      reviewers: [
+        ...agents.map((name) => ({
+          name,
+          file: path.join(plugin, 'agents', `${name}.md`),
+        })),
+        { name: 'perf', inline: 'Look for N+1 queries in the change.' },
+        { name: 'itself', file: path.join(skill, 'SKILL.md') },
+        { name: 'copy', file: copy },
+        { name: 'secrets', file: path.join(outside, 'secrets.md') },
+        { name: 'script', file: path.join(root, '.claude-plugin', 'marketplace.json') },
+      ],
+    }),
+  )
+  assert.match(
+    (await clean(dir, ['--check', made.dir])).stdout,
+    /^CLEANED process local code-review$/m,
+  )
+  const listed = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await cleaning.listCleanings(${JSON.stringify(dir)})))`,
+    ),
+  )
+  const card = listed.find((/** @type {any} */ one) => one.id === made.id)
+  assert.equal(card.state, 'process')
+  assert.equal(
+    card.process,
+    'It launches nine reviewers in parallel and merges their reports.',
+  )
+  const real = await realpath(plugin)
+  assert.deepEqual(
+    card.reviewers.map((/** @type {any} */ one) =>
+      one.kind === 'file'
+        ? [one.kind, one.name, one.source]
+        : one.kind === 'inline'
+          ? [one.kind, one.name, one.text]
+          : [one.kind, one.name, one.reason],
+    ),
+    [
+      ...agents.map((name) => ['file', name, path.join(real, 'agents', `${name}.md`)]),
+      // Its instructions stay with the cleaning, for the page a name only.
+      ['inline', 'perf', undefined],
+      [
+        'refused',
+        'secrets',
+        "outside the source's plugin and marketplace, the project's .claude and ~/.claude",
+      ],
+      ['refused', 'script', "neither a Markdown file nor a skill's folder"],
+    ],
+  )
+
+  // A refused path is no reviewer to add; two checked ones, one renamed, are.
+  await assert.rejects(
+    lib(
+      `await cleaning.addReviewers(${JSON.stringify(dir)}, ${JSON.stringify(made.id)}, [{ index: 10 }])`,
+    ),
+    /no reviewer to add at 10/,
+  )
+  const added = JSON.parse(
+    await lib(`const { made, refused } = await cleaning.addReviewers(
+  ${JSON.stringify(dir)},
+  ${JSON.stringify(made.id)},
+  [{ index: 0, name: 'bugs' }, { index: 9 }],
+)
+console.log(JSON.stringify({ made: made.map((one) => cleaning.agentInput(one.dir, one.record)), refused }))`),
+  )
+  assert.deepEqual(added.refused, [])
+  const [file, inline] = added.made
+  assert.equal(file.name, 'bugs')
+  assert.equal(file.source, path.join(real, 'agents', 'code-reviewer-1.md'))
+  assert.equal(file.reviewer, undefined)
+  assert.equal(inline.name, 'perf')
+  assert.equal(inline.source, skill)
+  assert.equal(inline.reviewer, 'perf')
+  assert.equal(
+    await readFile(inline.extract, 'utf8'),
+    'Look for N+1 queries in the change.\n',
+  )
+  // The process adds nothing itself, and is done once its reviewers are added.
+  const after = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await cleaning.listCleanings(${JSON.stringify(dir)})))`,
+    ),
+  )
+  assert.equal(
+    after.some((/** @type {any} */ one) => one.id === made.id),
+    false,
+  )
+
+  // The inline reviewer's lens records its source and its name, outside the repository.
+  await agentWrites(inline, 'An N+1 query on a hot path is a finding.\n')
+  assert.match(
+    (await clean(dir, ['--check', inline.dir])).stdout,
+    /^CLEANED ready local perf$/m,
+  )
+  await lib(
+    `await cleaning.addCleaned(${JSON.stringify(dir)}, ${JSON.stringify(inline.id)}, {})`,
+  )
+  const lens = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await userlens.readUserLens(userlens.lensDir('local', ${JSON.stringify(dir)}, 'perf'))))`,
+    ),
+  )
+  assert.equal(lens.source, skill)
+  assert.equal(lens.reviewer, 'perf')
+
+  // Its source changed: cleaned again, its agent extracts that reviewer anew; a process now fails it.
+  await writeFile(
+    path.join(skill, 'SKILL.md'),
+    'Launch the reviewers; perf looks for N+1 queries and slow loops.\n',
+  )
+  const again = cleaningOf(await clean(dir, ['--again', 'perf', '--scope', 'local']))
+  assert.equal(again.reviewer, 'perf')
+  assert.equal(again.extract, undefined)
+  await writeFile(
+    again.report,
+    JSON.stringify({
+      process: 'perf starts two agents now',
+      reviewers: [{ name: 'loops', inline: 'Slow loops.' }],
+    }),
+  )
+  assert.match(
+    (await clean(dir, ['--check', again.dir])).stdout,
+    /^CLEAN_FAILED the reviewer perf of the source is no single review now: perf starts two agents now$/m,
+  )
+})
+
+test('a process naming only itself fails, nothing to pick; one naming a file not there shows it refused', async (t) => {
+  const { dir } = await repository(t)
+  const { plugin, skill } = await teamMarketplace(t)
+  const answered = async (
+    /** @type {string} */ name,
+    /** @type {unknown[]} */ reviewers,
+  ) => {
+    const made = cleaningOf(
+      await clean(dir, ['--prepare', skill, '--to', 'local', '--name', name]),
+    )
+    await writeFile(
+      made.report,
+      JSON.stringify({ process: 'It routes the review.', reviewers }),
+    )
+    return { made, checked: (await clean(dir, ['--check', made.dir])).stdout }
+  }
+  const itself = await answered('itself', [
+    { name: 'itself', file: skill },
+    { name: 'code-review', inline: 'A copy of its own name.' },
+  ])
+  assert.match(
+    itself.checked,
+    /^CLEAN_FAILED the source starts no reviewer but itself: It routes the review\.$/m,
+  )
+  const gone = await answered('gone', [
+    { name: 'gone', file: path.join(plugin, 'agents', 'gone.md') },
+  ])
+  assert.match(gone.checked, /^CLEANED process local gone$/m)
+  const listed = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await cleaning.listCleanings(${JSON.stringify(dir)})))`,
+    ),
+  )
+  assert.deepEqual(
+    listed.find((/** @type {any} */ one) => one.id === gone.made.id).reviewers,
+    [
+      {
+        name: 'gone',
+        kind: 'refused',
+        file: path.join(plugin, 'agents', 'gone.md'),
+        reason: 'no such file',
+      },
+    ],
+  )
+})
+
+test("a source's read with no agent never lists a file of its own name: a copy of it under ~/.claude", async (t) => {
+  const { dir } = await repository(t)
+  const team = await tempDir(t, 'tranchant-team-')
+  await mkdir(path.join(team, 'agents'), { recursive: true })
+  const lead = path.join(team, 'agents', 'lead.md')
+  await writeFile(
+    lead,
+    '---\nname: lead\ntools: Read, Task\n---\n\nYou are `lead`: start `api-check` and merge.\n',
+  )
+  const user = path.join(claudeDir, 'agents')
+  await mkdir(user, { recursive: true })
+  await writeFile(path.join(user, 'lead.md'), 'A copy of lead.\n')
+  await writeFile(path.join(user, 'api-check.md'), 'Check the API.\n')
+  t.after(async () => {
+    await rm(path.join(user, 'lead.md'), { force: true })
+    await rm(path.join(user, 'api-check.md'), { force: true })
+  })
+  const found = JSON.parse(
+    await lib(
+      `console.log(JSON.stringify(await inside.insideOf(${JSON.stringify(dir)}, ${JSON.stringify(lead)})))`,
+    ),
+  )
+  assert.deepEqual(
+    found.starts.map((/** @type {any} */ one) => one.name),
+    ['api-check'],
   )
 })

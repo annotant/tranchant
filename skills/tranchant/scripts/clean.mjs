@@ -12,10 +12,13 @@
 //   lens's, its source changed; --start: one the page made, which waits no
 //   more from then on. Each prints
 //   `CLEANING <json>`, what the agent is given: `{ id, dir, project, name,
-//   scope, again, source, file, folder, version?, rules?, lens, report }`,
-//   `lens` and `report` the only files it writes.
+//   scope, again, source, file, folder, version?, rules?, reviewer?,
+//   extract?, lens, report }`, `lens` and `report` the only files it writes
+//   (`reviewer`, the one written inline in the source the lens is; `extract`,
+//   what the source's analysis extracted of it).
 // --check: the agent ended: what it wrote checked, `CLEANED <state> <scope>
-//   <name>` (`ready` to add from the page, `added` for a lens cleaned again)
+//   <name>` (`ready` to add from the page, `added` for a lens cleaned again,
+//   `process` for a whole review process, its reviewers to pick on the page)
 //   or `CLEAN_FAILED <reason>`. With --stopped, the agent was stopped or
 //   never started: the cleaning fails, and a lens cleaned again keeps no
 //   failure on its source.

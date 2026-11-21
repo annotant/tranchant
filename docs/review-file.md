@@ -914,9 +914,22 @@ those still waiting when it starts, for a session that ended before them:
    reports), its output format, posting, questions to the user, scripts and
    frontmatter; and `report.json`, the lens's `paths` (or `otherwise`), its
    `topics`, its **added instructions**, what it `removed` and why, what it
-   `added`. A source that is a whole review process is refused in
-   `report.json` (`{ refused, instead }`), naming the reviewers to add one by
-   one. `hook.mjs --cleaner` lets the agent write those two files and run
+   `added`. A source that is a whole review process (a skill, an agent or a
+   command that routes the review to other reviewers, by name or in prose)
+   writes no lens: its `report.json` is `{ process, reviewers }`, each
+   reviewer it starts `{ name, file }` (its agent's or skill's file, a
+   `plugin:name` resolved in the source's own plugin from its marketplace,
+   installed or not) or `{ name, inline }` (instructions written in the
+   source itself). The paths are data: `lib/reviewers.mjs` keeps a file only
+   when it is a regular Markdown file or a skill's folder under the source's
+   plugin or marketplace root, the project's `.claude` or `~/.claude`, and
+   never the source itself nor a file of its name; any other is listed with
+   why. The page lists them to pick, and **Add the checked ones** starts one
+   cleaning each. An inline reviewer's lens records the source and the
+   reviewer's name (`reviewer`), its agent given `REVIEWER` and the
+   extract (`EXTRACT`); cleaned again when the source changes, its agent
+   extracts it anew. A source that holds no review at all is
+   `{ refused }`. `hook.mjs --cleaner` lets the agent write those two files and run
    reading commands only, git none; its hook refuses on any error.
 4. When it ends, `clean.mjs --check` checks what it wrote and builds the
    lens as a review would. The page shows it whole (what was removed and
