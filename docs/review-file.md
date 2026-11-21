@@ -780,7 +780,7 @@ file; the plugin's default is
     },
     {
       "name": "abac",
-      "source": "workflow:code-reviewer-abac", // a plugin's skill or agent, or a path: the lens's domain
+      "source": "workflow:code-reviewer-abac", // a plugin's skill, agent or command, or a path: the lens's domain
       "skills": ["workflow:abac-rules"], // optional: references passed to the lens, never through the Skill tool
       "topics": ["Security & Permissions"], // optional: the topics its findings file under
       "model": "claude-opus-5-5", // optional: its reviewer's model; auto, its source's frontmatter's, else the session's
@@ -873,7 +873,7 @@ as for a recipe's lens.
 ## `/tranchant import`
 
 `/tranchant import [<source>] [--to local | global] [--name <lens>]`
-adds a team's reviewer (a plugin's skill or agent, a file or a folder) as a
+adds a team's reviewer (a plugin's skill, agent or command, a file or a folder) as a
 lens, cleaned first. The name is optional: with no `--name`, the lens is
 named after its source, a file's name without its extension
 (`money-review.md` gives `money-review`), a skill's folder's whole
@@ -906,7 +906,8 @@ those still waiting when it starts, for a session that ended before them:
    chooses.
 3. `clean.mjs --prepare` finds the source, refuses a name already taken in
    that scope, and makes the cleaning's folder,
-   `<state>/<project hash>/cleanings/<id>/`. The cleaning agent
+   `<state>/<project hash>/cleanings/<id>/` (with `extract.md` for one
+   reviewer written inline in its source). The cleaning agent
    (`tranchant:cl-<cleaning>`, [`agents/clean.md`](../agents/clean.md)),
    started by the hooks in the background, reads the source as data and
    writes two files: `lens.md`, the source's review in its own words
@@ -917,14 +918,16 @@ those still waiting when it starts, for a session that ended before them:
    `added`. A source that is a whole review process (a skill, an agent or a
    command that routes the review to other reviewers, by name or in prose)
    writes no lens: its `report.json` is `{ process, reviewers }`, each
-   reviewer it starts `{ name, file }` (its agent's or skill's file, a
-   `plugin:name` resolved in the source's own plugin from its marketplace,
-   installed or not) or `{ name, inline }` (instructions written in the
+   reviewer it starts `{ name, file }` (its agent's or skill's file as an
+   absolute path, a `plugin:name` resolved by the agent in the source's own
+   plugin from its marketplace, installed or not) or `{ name, inline }` (instructions written in the
    source itself). The paths are data: `lib/reviewers.mjs` keeps a file only
    when it is a regular Markdown file or a skill's folder under the source's
-   plugin or marketplace root, the project's `.claude` or `~/.claude`, and
-   never the source itself nor a file of its name; any other is listed with
-   why. The page lists them to pick, and **Add the checked ones** starts one
+   plugin or marketplace root, or the agents, skills and commands of the
+   project's `.claude` and `~/.claude` (and `~/.claude/plugins`), its links
+   followed, a skill's `SKILL.md` too, each segment below its root a plain
+   name; any other is listed with why. The source itself, a file or an
+   inline one of its name, and a file given twice are left out. The page lists them to pick, and **Add the checked ones** starts one
    cleaning each. An inline reviewer's lens records the source and the
    reviewer's name (`reviewer`), its agent given `REVIEWER` and the
    extract (`EXTRACT`); cleaned again when the source changes, its agent

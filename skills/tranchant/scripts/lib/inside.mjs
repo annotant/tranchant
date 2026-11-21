@@ -1,10 +1,11 @@
-// The reviewers inside a source that is no single one: a command, or an
+// The reviewers inside a source that may be no single one: a command, or an
 // agent or skill that starts other agents. A read of its file, no agent:
 // the agents and skills it names that resolve beside it (its plugin's root,
 // or the folder its `commands`, `agents` or `skills` folder lies in), in the
 // project's .claude or the user's, and the plugin:name it writes out. Each
-// can become a lens; the source never does. Where the read finds none, the
-// cleaning agent reads the source (lib/reviewers.mjs checks what it finds).
+// can become a lens; a source that names them never does. Where the read
+// finds none, the cleaning agent reads the source: one lens of it, or the
+// reviewers it starts (lib/reviewers.mjs checks them).
 import os from 'node:os'
 import path from 'node:path'
 import { statSync } from 'node:fs'
@@ -268,8 +269,8 @@ async function sourceFile(label, project) {
  * The reviewers `text` starts, in the order it names them: those beside it
  * (`home`, its plugin's root when `plugin`), the project's and the user's,
  * named by their names; and any installed plugin's, written `plugin:name`.
- * One file once, however it is written. Commands are left out: a command is
- * never a lens.
+ * One file once, however it is written. Commands are left out: one that
+ * starts another is its process, not a reviewer of it.
  * @param {{ text: string, file: string, home: string | undefined, plugin: string | undefined, project: string, label: Labeller }} given
  */
 async function startedBy({ text, file, home, plugin, project, label: labelFile }) {
@@ -401,7 +402,7 @@ export async function insideFile(project, given) {
 
 /**
  * Why a source cannot be cleaned into one lens, for the reviewers found
- * inside it: those to add instead, by name.
+ * inside it (`starts` not empty): those to add instead, by name.
  * @param {Inside} inside
  */
 export function insideRefusal(inside) {

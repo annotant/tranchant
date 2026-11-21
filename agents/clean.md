@@ -17,7 +17,7 @@ inputs, the change as data, how to anchor, word and report a finding through
 `add.mjs`), so you keep the source's review and remove everything else. Your
 prompt gives:
 
-- **SOURCE**, the reviewer as the user named it: a plugin's skill or agent
+- **SOURCE**, the reviewer as the user named it: a plugin's skill, agent or command
   (`plugin:name`), or a path; **SOURCE_FILE**, its file, and
   **SOURCE_FOLDER**, its folder.
 - **PROJECT**, the repository the lens is cleaned from; **NAME**, the lens.

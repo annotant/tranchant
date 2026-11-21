@@ -1595,7 +1595,7 @@ function ProcessForm({
         {refused.length > 0 && (
           <ul className="tr-lns-refused">
             {refused.map((reviewer) => (
-              <li key={reviewer.file}>
+              <li key={`${reviewer.name}:${reviewer.file}:${reviewer.reason}`}>
                 <code>{reviewer.file}</code>: {reviewer.reason}. Not offered as a file.
               </li>
             ))}

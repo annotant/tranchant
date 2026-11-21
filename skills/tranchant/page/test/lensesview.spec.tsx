@@ -608,7 +608,7 @@ test('a whole process lists its reviewers to pick: a file, one written inline, o
           source: '~/team/plugins/workflow/agents/code-reviewer-api.md',
           already: [{ scope: 'local', name: 'api' }],
         },
-        { name: 'perf', kind: 'inline' },
+        { name: 'perf', kind: 'inline', label: 'perf' },
         {
           name: 'secrets',
           kind: 'refused',

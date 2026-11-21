@@ -10,10 +10,11 @@
 // lens cleaned again takes its new version as soon as the cleaning is
 // checked. A reviewer written inline in its source (a command's agent with a
 // prompt of its own) makes a lens that records the source and the reviewer's
-// name: cleaned again, its agent extracts that reviewer anew.
+// name, its extract kept in the lens's folder: cleaned again, its agent
+// extracts that reviewer anew, the last extract beside it.
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readFile, readdir, rm } from 'node:fs/promises'
+import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { insideOf, insideRefusal, lensNameOf, nameOfSource } from './inside.mjs'
 import { AUTO_MODEL, LensRefusal, buildLens } from './lens.mjs'
@@ -56,11 +57,12 @@ import {
  * @property {'cleaning' | 'ready' | 'process' | 'failed' | 'added'} state
  * @property {true} [queued] Made by the page: it waits for a free cleaning agent until the hooks start it.
  * @property {string} [startedAt] When the hooks started its agent.
- * @property {string} [from] The glob it was matched by, when it came with others.
+ * @property {string} [from] The glob, or the process, it came from with others.
  * @property {string} [reason] With `failed`.
  * @property {string} [process] With `process`: how the source routes its review, in the agent's words.
  * @property {Reviewer[]} [reviewers] With `process`: the reviewers it starts, each to make a lens of.
  * @property {number} [more] With `process`: those past the most listed.
+ * @property {number[]} [picked] With `process`: the reviewers made a lens of, by index; it is `added` once all are.
  */
 
 /** A cleaning still `cleaning` this long after its agent started lost it: shown failed. */
@@ -70,6 +72,7 @@ const WAIT_LOST_MS = 3 * 60 * 60 * 1000
 const MAX_DOMAIN = 64 * 1024
 const MAX_RULES = 8 * 1024
 const MAX_PROCESS = 1000
+const MAX_REPORT = 1024 * 1024
 const MAX_REVIEWER = 100
 
 /** A cleaning this Tranchant refuses to start or use, and why. */
@@ -214,18 +217,20 @@ export async function createCleaning({
   const inside = reviewer ? undefined : await insideOf(project, recorded)
   if (inside?.starts.length) throw new CleaningRefusal(insideRefusal(inside))
   const sources = await found({ source: recorded }, project)
-  const made = await start(project, {
-    name: lensName,
-    scope,
-    again: false,
-    source: recorded,
-    ...sources,
-    ...(reviewer && { reviewer }),
-    ...(queued && { queued: /** @type {const} */ (true) }),
-    ...(from && { from }),
-  })
-  if (reviewer && extract?.trim())
-    await writeText(path.join(made.dir, 'extract.md'), `${extract.trim()}\n`)
+  const made = await start(
+    project,
+    {
+      name: lensName,
+      scope,
+      again: false,
+      source: recorded,
+      ...sources,
+      ...(reviewer && { reviewer }),
+      ...(queued && { queued: /** @type {const} */ (true) }),
+      ...(from && { from }),
+    },
+    reviewer ? extract : undefined,
+  )
   return made
 }
 
@@ -318,25 +323,35 @@ export async function cleanAgain({ project, scope, name, queued }) {
     throw error
   }
   const sources = await found(lens, project)
-  const made = await start(project, {
-    name,
-    scope,
-    again: true,
-    source: lens.source,
-    ...sources,
-    ...(lens.reviewer && { reviewer: lens.reviewer }),
-    ...(queued && { queued: /** @type {const} */ (true) }),
-  })
+  // An inline reviewer's last extract: what its agent finds anew in the source changed.
+  const extract = lens.reviewer
+    ? await readFile(path.join(dir, 'extract.md'), 'utf8').catch(() => undefined)
+    : undefined
+  const made = await start(
+    project,
+    {
+      name,
+      scope,
+      again: true,
+      source: lens.source,
+      ...sources,
+      ...(lens.reviewer && { reviewer: lens.reviewer }),
+      ...(queued && { queued: /** @type {const} */ (true) }),
+    },
+    extract,
+  )
   if (lens.rulesEdited) await writeText(path.join(made.dir, 'rules.md'), lens.rules)
   return made
 }
 
 /**
- * Writes a cleaning's record, `cleaning`.
+ * Writes a cleaning's record, `cleaning`; an inline reviewer's extract
+ * first, so a record is never there without it.
  * @param {string} project
  * @param {Omit<Cleaning, 'id' | 'createdAt' | 'project' | 'state'>} fields
+ * @param {string} [extract]
  */
-async function start(project, fields) {
+async function start(project, fields, extract) {
   const id = randomUUID()
   const dir = cleaningDir(project, id)
   /** @type {Cleaning} */
@@ -347,6 +362,8 @@ async function start(project, fields) {
     ...fields,
     state: 'cleaning',
   }
+  if (extract?.trim())
+    await writeText(path.join(dir, 'extract.md'), `${extract.trim()}\n`)
   await writeJson(path.join(dir, 'cleaning.json'), record)
   return { dir, record }
 }
@@ -360,7 +377,11 @@ async function start(project, fields) {
 async function readOutput(dir) {
   let raw
   try {
-    raw = JSON.parse(await readFile(path.join(dir, 'report.json'), 'utf8'))
+    const file = path.join(dir, 'report.json')
+    // Read whole: one the agent wrote past any report's size would hold the server.
+    if ((await stat(file)).size > MAX_REPORT)
+      return refuse(`report.json is larger than ${MAX_REPORT / 1024 / 1024} MiB`)
+    raw = JSON.parse(await readFile(file, 'utf8'))
   } catch (error) {
     return refuse(`the cleaning agent wrote no report that reads: ${message(error)}`)
   }
@@ -443,7 +464,9 @@ export async function checkCleaning(dir, { stopped = false } = {}) {
         refuse(`report.json: ${what}`),
       )
       if (!listed.reviewers.length)
-        refuse(`the source starts no reviewer but itself: ${output.process}`)
+        refuse(
+          `the source is a whole review process, and names no reviewer but itself: ${output.process}`,
+        )
       next = {
         ...record,
         state: 'process',
@@ -582,7 +605,8 @@ export async function addCleaned(project, id, edits = {}) {
     )
   const output = await readOutput(dir)
   if ('refused' in output) throw new CleaningRefusal(output.refused)
-  if ('process' in output) throw new CleaningRefusal(output.process)
+  if ('process' in output)
+    throw new CleaningRefusal(`the source is a whole review process: ${output.process}`)
   const scope = edits.scope ?? record.scope
   if (!isScope(scope)) throw new CleaningRefusal('scope: global or local')
   const name =
@@ -631,6 +655,12 @@ export async function addCleaned(project, id, edits = {}) {
     )
   try {
     await writeUserLens(target, clean, output.domain)
+    // Beside the lens, never in the repository: its cleaning again reads it.
+    const extract = await readFile(path.join(dir, 'extract.md'), 'utf8').catch(
+      () => undefined,
+    )
+    if (record.reviewer && extract)
+      await writeText(path.join(target, 'extract.md'), extract)
   } catch (error) {
     await rm(target, { recursive: true, force: true }).catch(() => undefined)
     if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
@@ -675,7 +705,13 @@ export async function addReviewers(project, id, picks, scope) {
     const name = typeof given === 'string' && given.trim() ? given.trim() : one.name
     return one.kind === 'file'
       ? { source: one.source, name }
-      : { source: record.source, name, reviewer: one.name, extract: one.text }
+      : // Its agent's own words: what a cleaning again looks for in the source.
+        {
+          source: record.source,
+          name,
+          reviewer: one.label ?? one.name,
+          extract: one.text,
+        }
   })
   const made = await createCleanings({
     project,
@@ -683,8 +719,17 @@ export async function addReviewers(project, id, picks, scope) {
     from: record.source,
     sources,
   })
-  if (made.made.length)
-    await writeJson(path.join(dir, 'cleaning.json'), { ...record, state: 'added' })
+  const names = new Set(made.made.map((one) => one.record.name))
+  const added = new Set(record.picked)
+  for (const [at, pick] of picks.entries())
+    if (names.has(sources[at]?.name ?? '')) added.add(Reflect.get(pick, 'index'))
+  const offered = reviewers.flatMap((one, i) => (one.kind === 'refused' ? [] : [i]))
+  // Listed until each reviewer it offers is added: one refused, or left unchecked, can be picked again.
+  const next = offered.every((i) => added.has(i))
+    ? { ...record, state: /** @type {const} */ ('added') }
+    : { ...record, picked: [...added] }
+  // The cleanings are made: they start even when the process cannot record them.
+  await writeJson(path.join(dir, 'cleaning.json'), next).catch(() => undefined)
   return made
 }
 
@@ -724,7 +769,10 @@ export async function listCleanings(project) {
           : 'refused' in output
             ? { state: 'failed', reason: output.refused }
             : 'process' in output
-              ? { state: 'failed', reason: output.process }
+              ? {
+                  state: 'failed',
+                  reason: `the source is a whole review process: ${output.process}`,
+                }
               : { report: output.report, domain: output.domain }
     }
     all.push({
@@ -749,7 +797,9 @@ export async function listCleanings(project) {
         process: record.process,
         // The page checks and names them; an inline one's instructions stay here, for its cleaning.
         reviewers: (record.reviewers ?? []).map((one) =>
-          one.kind === 'inline' ? { name: one.name, kind: one.kind } : one,
+          one.kind === 'inline'
+            ? { name: one.name, kind: one.kind, label: one.label ?? one.name }
+            : one,
         ),
         ...(record.more && { more: record.more }),
       }),

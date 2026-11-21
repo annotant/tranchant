@@ -45,7 +45,7 @@ import { kindOfPath } from './inside.mjs'
  * A lens the user added, as lens.json holds it.
  * @typedef {object} UserLens
  * @property {string} name
- * @property {string} source A plugin's skill or agent (`plugin:name`), or a path.
+ * @property {string} source A plugin's skill, agent or command (`plugin:name`), or a path.
  * @property {string} [reviewer] A reviewer written inline in the source, by name: the lens is that one alone.
  * @property {boolean} on
  * @property {string[]} paths Empty for an `otherwise` lens.
@@ -212,7 +212,8 @@ export function checkUserLens(raw) {
     refuse(`version: ${LENS_VERSION} is the only one read`)
   if (typeof raw.name !== 'string' || !LENS_NAME.test(raw.name))
     refuse('name: letters, digits, - and _ only')
-  if (!isSourceText(raw.source)) refuse('source: a skill or agent by name, or a path')
+  if (!isSourceText(raw.source))
+    refuse('source: a skill, agent or command by name, or a path')
   if (
     raw.reviewer !== undefined &&
     !(isSourceText(raw.reviewer) && raw.reviewer.length <= MAX_REVIEWER)

@@ -135,13 +135,14 @@ interface LensSet {
 type Already = { scope: 'local' | 'global'; name: string; adding?: true }[]
 
 /**
- * One reviewer a whole process starts: a file, as Add a lens takes it;
- * instructions written inline in the process; or a path its agent gave
- * that Tranchant refuses, with why.
+ * One reviewer a whole process starts: a file, as Add a lens takes it; one
+ * written inline in the process (its instructions stay on the server); or
+ * an entry its agent gave that Tranchant refuses, with why. A pick names it
+ * by its index in the whole list, refused ones included.
  */
 type ProcessReviewer =
   | { name: string; kind: 'file'; source: string; already?: Already }
-  | { name: string; kind: 'inline'; already?: Already }
+  | { name: string; kind: 'inline'; label: string; already?: Already }
   | { name: string; kind: 'refused'; file: string; reason: string }
 
 /** A lens's cleaning: being cleaned, cleaned and waiting to be added, a process to pick from, or failed. */
@@ -160,7 +161,7 @@ export interface CleaningEntry {
   state: 'cleaning' | 'ready' | 'process' | 'failed'
   /** With `cleaning`: no agent reads it yet, it waits for a free one. */
   waiting?: boolean
-  /** The glob it was matched by, when it came with others. */
+  /** The glob, or the process, it came from with others. */
   from?: string
   reason?: string
   /** With `process`: how it routes its review, in its agent's words. */

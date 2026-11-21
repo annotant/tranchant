@@ -107,7 +107,7 @@ whose source settles how a library behaves.
 `--recipe <path>` runs your own, in the same shape.
 
 Beside the recipe's lenses, **Settings › Lenses** adds a team's reviewer as
-a lens of its own: a plugin's skill or agent, or a file, typed or picked
+a lens of its own: a plugin's skill, agent or command, or a file, typed or picked
 with **Browse…** (the installed plugins', the project's and `~/.claude`'s
 skills, agents and commands, and a file browser limited to the project,
 `~/.claude/` and the plugins' folders, names only); a glob
@@ -115,7 +115,8 @@ skills, agents and commands, and a file browser limited to the project,
 check and rename, one cleaning agent each. A command
 (`pr-review-toolkit:review-pr`), or an agent that starts agents it names, is
 read first with no agent: Tranchant lists the agents it starts to add
-instead, under it among a glob's matches. Where that read finds none (a
+instead, under it among a glob's matches. Typed whole, where that read finds
+none (a
 skill that starts its reviewers in prose, a plugin not installed, agents
 written in the command itself), the cleaning agent decides: one review
 becomes one lens; a whole process lists the reviewers it starts, files or

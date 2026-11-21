@@ -494,7 +494,10 @@ function withProcessAlready(cleanings, known) {
               i,
               source: reviewer.kind === 'file' ? reviewer.source : one.source,
               name: reviewer.name,
-              ...(reviewer.kind === 'inline' && { reviewer: reviewer.name }),
+              // As its lens records it: its agent's own words.
+              ...(reviewer.kind === 'inline' && {
+                reviewer: reviewer.label ?? reviewer.name,
+              }),
             },
           ],
     )
