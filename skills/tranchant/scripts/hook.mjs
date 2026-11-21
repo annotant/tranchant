@@ -572,8 +572,8 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
   async function record(steps) {
     if (reviewer) {
       if (!steps.length) return
-      // Back to `preparing` (a reset): an ended review agent's late steps are dropped; a discussing agent's still count.
-      if (!finding.startsWith('ds-') && (await statusNow()) === 'preparing') return
+      // Back to `preparing` (a reset): an ended review agent's late steps are dropped.
+      if ((await statusNow()) === 'preparing') return
       const file = reviewAgentPath(review, finding)
       await mkdir(path.dirname(file), { recursive: true })
       await appendFile(

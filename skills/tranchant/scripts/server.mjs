@@ -115,6 +115,7 @@ import {
   MAX_ISSUE_TITLE,
   StoreRefusal,
   WRITE_KINDS,
+  busyText,
   createStore,
   readProgress,
   readReviewAgents,
@@ -1555,7 +1556,7 @@ async function handle(req, res) {
     return send(res, 200, { ok: true })
   }
 
-  // The review's own controls: its fixes, discussions and posts go on through each.
+  // The review's own controls: its fixes, discussions and posts go on through each, and a reset waits for them.
   if (req.method === 'POST' && url.pathname === '/api/review/pause') {
     const input = await readJson(req)
     if (input?.now !== undefined && typeof input.now !== 'boolean')
@@ -1578,6 +1579,9 @@ async function handle(req, res) {
     const input = await readJson(req)
     if (input?.reset !== undefined && typeof input.reset !== 'boolean')
       return send(res, 400, { error: 'reset is true or false' })
+    // Stop and reset, with a fix or an answer under way: refused whole, the review still runs.
+    const busy = input?.reset === true ? await store.underWay() : []
+    if (busy.length) return send(res, 409, { error: `reset refused: ${busyText(busy)}` })
     return controlReview(res, async () => {
       const stopped = await store.halt()
       print(`HALT ${review.id}`)
@@ -1595,6 +1599,8 @@ async function handle(req, res) {
       Date.now() - resetAsked.since < RESET_WAIT_MS
     )
       return send(res, 409, { error: 'the review is being reset: wait for it' })
+    const busy = await store.underWay()
+    if (busy.length) return send(res, 409, { error: `reset refused: ${busyText(busy)}` })
     askReset(latest.stopped.at)
     return send(res, 200, { ok: true })
   }

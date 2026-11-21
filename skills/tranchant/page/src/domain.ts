@@ -799,6 +799,19 @@ export const discussable = (state: State, finding?: Pick<Finding, 'thread'>) =>
 export const isWaiting = (discussion: Discussion | undefined) =>
   discussion?.messages.at(-1)?.by === 'reviewer'
 
+// As lib/store.mjs's `underWay`: a fix, a post or an issue holds the finding.
+const UNDER_WAY = new Set<State>(['queued', 'working', 'asking'])
+
+/** The findings a reset waits for (lib/store.mjs's `underWay`): held, or a question awaiting its answer. */
+export const underWayIds = (
+  review: Pick<Review, 'findings'>,
+  records: Records,
+  discussions: Record<string, Discussion> | undefined,
+) =>
+  review.findings
+    .map((one) => one.id)
+    .filter((id) => UNDER_WAY.has(stateOf(records, id)) || isWaiting(discussions?.[id]))
+
 /** The reviewer's last message waits for the change it asked for. */
 export const waitsForChange = (discussion: Discussion | undefined) =>
   isWaiting(discussion) && !!discussion?.messages.at(-1)?.change

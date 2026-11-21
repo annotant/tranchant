@@ -2826,6 +2826,15 @@ test("the review's controls write its pause or stop, then print the hooks' lines
   // Nothing to reset before a stop.
   assert.equal((await control('reset')).status, 409)
 
+  // Stop and reset with a fix under way: refused whole, the review still runs.
+  const store = createStore(imported.dir)
+  await store.decide('f-01', { action: 'fix' })
+  const waiting = await control('halt', { reset: true })
+  assert.equal(waiting.status, 409)
+  assert.match((await json(waiting)).error, /f-01 still under way/)
+  assert.equal((await store.readReview()).stopped, undefined)
+  await store.stop('f-01')
+
   printed = server.output().length
   assert.equal((await control('halt', { reset: true })).status, 200)
   assert.equal(await server.nextLine('HALT ', printed), `HALT ${id}`)
@@ -2858,6 +2867,13 @@ test('Reset on a review stopped prints RESET, then waits for it before asking ag
       headers: { 'content-type': 'application/json' },
       body: '{}',
     })
+  // A fix under way: Reset waits for it.
+  const store = createStore(imported.dir)
+  await store.decide('f-02', { action: 'fix' })
+  const waiting = await reset()
+  assert.equal(waiting.status, 409)
+  assert.match((await json(waiting)).error, /f-02 still under way/)
+  await store.stop('f-02')
   const printed = server.output().length
   assert.equal((await reset()).status, 200)
   assert.equal(await server.nextLine('RESET ', printed), `RESET ${imported.review.id}`)

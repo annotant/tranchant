@@ -87,6 +87,22 @@ function refuseUnlessRunning(envelope, what) {
     throw new StoreRefusal(`${what} refused: the review is ${statusOf(envelope)}`)
 }
 
+/**
+ * What holds the findings `busy` names, in one line for a refusal.
+ * @param {{ id: string, what: 'fix' | 'answer' }[]} busy
+ */
+export function busyText(busy) {
+  const ids = (/** @type {'fix' | 'answer'} */ what) =>
+    busy.filter((one) => one.what === what).map((one) => one.id)
+  const [held, asked] = [ids('fix'), ids('answer')]
+  return [
+    held.length && `${held.join(', ')} still under way (a fix, a post or an issue)`,
+    asked.length && `${asked.join(', ')} waiting for an answer`,
+  ]
+    .filter(Boolean)
+    .join('; ')
+}
+
 /** The step file of finding `id`'s run in progress. */
 export const progressPath = (/** @type {string} */ dir, /** @type {string} */ id) =>
   path.join(dir, 'runs', `${id}.jsonl`)
@@ -266,6 +282,39 @@ export function createStore(dir) {
    * are still inline, left as they are.
    * @returns {Promise<Review>}
    */
+  /**
+   * The findings of `findings` a fix, a post or an issue holds, or whose
+   * discussion waits for its answer: one it cannot read may, so it counts.
+   * @param {{ id: string }[]} findings
+   * @param {{ findings: Record<string, { state: string }> }} decisions
+   */
+  async function busyIn(findings, decisions) {
+    /** @type {{ id: string, what: 'fix' | 'answer' }[]} */
+    const busy = []
+    for (const { id } of findings) {
+      const state = decisions.findings[id]?.state
+      if (state === 'queued' || state === 'working' || state === 'asking')
+        busy.push({ id, what: 'fix' })
+      else if (await waitsForAnswer(id)) busy.push({ id, what: 'answer' })
+    }
+    return busy
+  }
+
+  /** @param {string} id */
+  async function waitsForAnswer(id) {
+    let text
+    try {
+      text = await readFile(path.join(dir, 'discussions', `${id}.json`), 'utf8')
+    } catch (error) {
+      return errorCode(error) !== 'ENOENT'
+    }
+    try {
+      return JSON.parse(text)?.messages?.at(-1)?.by === 'reviewer'
+    } catch {
+      return true
+    }
+  }
+
   async function readEnvelope() {
     let text
     try {
@@ -795,12 +844,21 @@ export function createStore(dir) {
     },
 
     /**
+     * What a reset of the review would cut short: each finding a fix, a post
+     * or an issue holds (`queued`, `working`, `asking`), or whose discussion
+     * waits for its answer, by id, with what holds it.
+     * @returns {Promise<{ id: string, what: 'fix' | 'answer' }[]>}
+     */
+    async underWay() {
+      return busyIn((await readReview()).findings, await readDecisions())
+    },
+
+    /**
      * Reset a stopped review: back to `preparing`, its summary, its findings,
      * their decisions, runs and discussions, and its review agents' run files
-     * gone. A finding an agent or a script still holds (`queued`, `working`,
-     * `asking`) or whose discussion waits stays, with all of it: what is under
-     * way belongs to the finding, not to the review. Refused unless stopped.
-     * @returns {Promise<{ kept: string[], removed: string[] }>}
+     * all gone. Refused unless stopped, and while anything is under way
+     * (`underWay`): Reset waits for it rather than cut it short.
+     * @returns {Promise<{ removed: string[] }>}
      */
     reset() {
       return withFileLock(reviewFile, async () => {
@@ -809,47 +867,19 @@ export function createStore(dir) {
           throw new StoreRefusal('reset refused: the review is not stopped')
         return exclusive(async () => {
           const decisions = await readDecisions()
-          const discussed = path.join(dir, 'discussions')
-          /** @param {string} id */
-          const waits = async (id) => {
-            let text
-            try {
-              text = await readFile(path.join(discussed, `${id}.json`), 'utf8')
-            } catch (error) {
-              // None is no question; one it cannot read may hold one: kept.
-              return errorCode(error) !== 'ENOENT'
-            }
-            try {
-              return JSON.parse(text)?.messages?.at(-1)?.by === 'reviewer'
-            } catch {
-              return true
-            }
-          }
-          /** @type {string[]} */
-          const kept = []
-          /** @type {string[]} */
-          const removed = []
-          for (const finding of known.findings) {
-            const state = decisions.findings[finding.id]?.state
-            const held = state === 'queued' || state === 'working' || state === 'asking'
-            if (held || (await waits(finding.id))) kept.push(finding.id)
-            else removed.push(finding.id)
-          }
+          const busy = await busyIn(known.findings, decisions)
+          if (busy.length) throw new StoreRefusal(`reset refused: ${busyText(busy)}`)
+          const removed = known.findings.map((one) => one.id)
           for (const id of removed) {
-            delete decisions.findings[id]
             await rm(findingPath(dir, id), { force: true })
             await rm(progressPath(dir, id), { force: true })
             await rm(historyPath(dir, id), { force: true })
-            await rm(path.join(discussed, `${id}.json`), { force: true })
           }
-          await writeDecisions(decisions)
-          // A kept finding's discussing agent may still be at work: its file stays.
+          await rm(path.join(dir, 'discussions'), { recursive: true, force: true })
+          await writeDecisions({ ...decisions, findings: {} })
           const agents = path.join(dir, 'reviewers')
-          for (const name of await readdir(agents).catch(() => [])) {
-            const agent = AGENT_FILE.exec(name)?.[1]
-            if (agent && !(agent.startsWith('ds-') && kept.includes(agent.slice(3))))
-              await rm(path.join(agents, name), { force: true })
-          }
+          for (const name of await readdir(agents).catch(() => []))
+            if (AGENT_FILE.test(name)) await rm(path.join(agents, name), { force: true })
           const envelope = await readEnvelope()
           const {
             stopped: _stopped,
@@ -862,11 +892,9 @@ export function createStore(dir) {
             status: 'preparing',
             summary: '',
             strengths: [],
-            ...(Array.isArray(envelope.findings) && {
-              findings: envelope.findings.filter((one) => kept.includes(one.id)),
-            }),
+            ...(Array.isArray(envelope.findings) && { findings: [] }),
           })
-          return { kept, removed }
+          return { removed }
         })
       })
     },

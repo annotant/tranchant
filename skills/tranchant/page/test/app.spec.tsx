@@ -1175,6 +1175,30 @@ test('a review stopped keeps its findings, marks the rest not covered, and offer
   )
 })
 
+test('Reset waits for a fix under way on a stopped review, and says which', async () => {
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'complete',
+        verify: true,
+        lenses: LENS_RECORDS,
+        stopped: { at: '2026-11-20T10:00:00Z' },
+        findings: [FINDINGS[0]!],
+      },
+      records: { [FINDINGS[0]!.id]: record('working') },
+    }),
+    reviewers: [{ name: 'rv-bugs', running: false, outcome: 'done', steps: [] }],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  const reset = within(agents).getByRole<HTMLButtonElement>('button', {
+    name: 'Reset the review',
+  })
+  expect(reset.disabled).toBe(true)
+  expect(agents.textContent).toContain(
+    `Reset the review waits for ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+  )
+})
+
 test('the header switches the theme through the settings, for every page', async () => {
   const server = await renderApp()
   const header = document.querySelector<HTMLElement>('.tr-header')

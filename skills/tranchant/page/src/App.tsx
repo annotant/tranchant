@@ -24,6 +24,7 @@ import {
   canPost,
   changeRef,
   commentedIds,
+  underWayIds,
   counts,
   type DecisionInput,
   type LensesProgress,
@@ -367,6 +368,10 @@ export default function App() {
   const commented = useMemo(
     () => (review ? commentedIds(review) : new Set<string>()),
     [review],
+  )
+  const underWay = useMemo(
+    () => (review ? underWayIds(review, records, payload?.discussions) : []),
+    [review, records, payload?.discussions],
   )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
   const [diffPane, setDiffPane] = useState<HTMLElement | null>(null)
@@ -795,6 +800,7 @@ export default function App() {
         phase={phase}
         planned={review.lenses?.map((lens) => lens.name) ?? []}
         onControl={review.lenses ? control : undefined}
+        underWay={underWay}
         findings={review?.findings ?? []}
         verify={review?.verify === true}
         project={review?.project ?? ''}

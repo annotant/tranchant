@@ -97,8 +97,11 @@ function world(
     settings,
     env = {},
     commenting = { stdout: `INBOX ${INBOX}\n`, stderr: '' },
+    stopRefused = [],
   }: {
     commenting?: { stdout: string; stderr: string }
+    /** The agents TaskStop does not end: refused, and still running. */
+    stopRefused?: string[]
     spawnRefused?: string
     completeSays?: string
     unreadable?: string
@@ -333,7 +336,9 @@ function world(
   })
   const stopped: string[] = []
   on('tool.call', (_$, e) => {
-    if (e.tool === 'TaskStop') stopped.push(e.task_id ?? '')
+    if (e.tool !== 'TaskStop') return { result: 'ok' }
+    if (stopRefused.includes(e.task_id ?? '')) return { deny: 'the task is busy' }
+    stopped.push(e.task_id ?? '')
     return { result: 'ok' }
   })
   // Claude Code offers the model every agent type no hook keeps from it.
@@ -1750,6 +1755,27 @@ test('Stop the review ends its agents, starts none of its queue and completes it
   await w.print('RESUME rev-1')
   expect(w.spawned).toHaveLength(3)
   expect(w.completed).toHaveLength(1)
+  await w.exit(0)
+})
+
+test('an agent TaskStop does not end runs on: said, not requeued, and Reset waits for it', async ($, on) => {
+  const w = world(on, { stopRefused: ['a2'] })
+  await review($, w)
+  await w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
+  expect(w.stopped).toEqual(['a1', 'a3'])
+  expect(w.toasts).toContainEqual(
+    'Tranchant could not stop rv-bugs (a2): the task is busy. It runs until its turn ends.',
+  )
+  await w.print('HALT rev-1', 'RESET rev-1')
+  expect(w.resets).toEqual([])
+  expect(w.toasts.at(-1)).toBe(
+    'Tranchant did not reset the review: rv-bugs still runs. Reset it again once it ended.',
+  )
+  // Its turn ends: Reset goes through.
+  await $.turn.complete(turnEnded('a2', 'Done.'))
+  await w.clock.settle()
+  await w.print('RESET rev-1')
+  expect(w.resets).toEqual([['--review', DIR]])
   await w.exit(0)
 })
 

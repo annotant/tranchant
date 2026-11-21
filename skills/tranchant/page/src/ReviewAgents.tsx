@@ -296,6 +296,7 @@ export function ReviewAgents({
   lensGroup,
   planned = NO_GROUPS,
   others = NO_GROUPS,
+  underWay = NO_GROUPS,
   onOpen,
   onControl,
 }: {
@@ -312,6 +313,8 @@ export function ReviewAgents({
   verify: boolean
   project: string
   onOpen: (id: string) => void
+  /** The findings a fix, a post, an issue or an answer holds: Reset waits for them. */
+  underWay?: readonly string[]
   /** Pause, Resume, Stop and Reset; absent, the panel offers none. */
   onControl?: ((control: ReviewControl) => Promise<boolean>) | undefined
 }) {
@@ -320,6 +323,9 @@ export function ReviewAgents({
   const [busy, setBusy] = useState(false)
   if (!agents.length && !planned.length) return null
   const progress = progressOf(agents, findings, project, phase === 'done' ? [] : planned)
+  const waitsFor = underWay.length
+    ? `${underWay.length > 3 ? `${underWay.slice(0, 3).join(', ')} and ${underWay.length - 3} more` : underWay.join(', ')}: a fix, a post, an issue or an answer under way`
+    : undefined
   const control = async (which: ReviewControl) => {
     if (!onControl || busy) return
     setBusy(true)
@@ -415,8 +421,12 @@ export function ReviewAgents({
         <button
           type="button"
           className="tr-btn tr-btn--small"
-          disabled={busy}
-          title="Delete the findings and go back to Ready to start, the lenses built"
+          disabled={busy || !!waitsFor}
+          title={
+            waitsFor
+              ? `Waits for ${waitsFor}`
+              : 'Delete the findings and go back to Ready to start, the lenses built'
+          }
           onClick={() => void control('reset')}
         >
           <ResetIcon />
@@ -525,8 +535,12 @@ export function ReviewAgents({
             <button
               type="button"
               className="tr-btn tr-btn--small tr-btn--danger"
-              disabled={busy}
-              title="Delete the findings too, and go back to Ready to start"
+              disabled={busy || !!waitsFor}
+              title={
+                waitsFor
+                  ? `Waits for ${waitsFor}`
+                  : 'Delete the findings too, and go back to Ready to start'
+              }
               onClick={() => void control('haltReset')}
             >
               Stop and reset
@@ -540,8 +554,9 @@ export function ReviewAgents({
               {paused ? 'Keep it paused' : 'Keep it running'}
             </button>
             <span className="tr-muted">
-              A fix under way keeps running, and a fix already made stays on the working
-              tree.
+              {waitsFor
+                ? `Stop and reset waits for ${waitsFor}. A fix already made stays on the working tree.`
+                : 'A fix under way keeps running, and a fix already made stays on the working tree.'}
             </span>
           </div>
         </div>
@@ -561,7 +576,7 @@ export function ReviewAgents({
       {(paused || phase === 'stopped') && (
         <p className="tr-muted tr-rp-body">
           {phase === 'stopped'
-            ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. Reset the review to run it again from Ready to start.`
+            ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. ${waitsFor ? `Reset the review waits for ${waitsFor}.` : 'Reset the review to run it again from Ready to start.'}`
             : `Paused: the ${findingCount} below are yours to settle while no reviewer runs.`}
         </p>
       )}

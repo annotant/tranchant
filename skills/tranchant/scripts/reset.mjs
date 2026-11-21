@@ -2,19 +2,19 @@
 // reset.mjs --review <dir>
 // The page's Reset the review, on a `/tranchant review` stopped, once the
 // hooks ended its agents: the review goes back to `preparing`, its summary,
-// findings, decisions and review agents' run files gone (a finding a fix, a
-// post, an issue or a question still holds stays: lib/store.mjs), and its
-// plan (<state>/inbox/<id>.plan.json) waits to start (`wait: "reset"`), the
-// lenses it ran on unless the page's choices already say. Prints
+// findings, decisions, discussions and review agents' run files all gone, and
+// its plan (<state>/inbox/<id>.plan.json) waits to start (`wait: "reset"`),
+// the lenses it ran on unless the page's choices already say. Prints
 // `RESET <plan file>`: the hooks run `lenses.mjs --check --replan` on it, and
 // the page shows Ready to start the review. `RESET_REFUSED <reason>`, exit 2,
-// nothing removed: not stopped, or no sound plan (a review opened from a file).
+// nothing removed: not stopped, a fix, a post, an issue or an answer still
+// under way, or no sound plan (a review opened from a file).
 import { existsSync } from 'node:fs'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { oneLine } from './lib/format.mjs'
 import { STATE_ROOT, findReview } from './lib/project.mjs'
-import { StoreRefusal, createStore } from './lib/store.mjs'
+import { StoreRefusal, busyText, createStore } from './lib/store.mjs'
 
 /**
  * @param {string} reason
@@ -64,20 +64,26 @@ try {
   }
   if (!plan?.recipe?.file || !Array.isArray(plan.lenses))
     refuse(`the plan ${planFile} has no recipe and lenses`)
+  const busy = await store.underWay()
+  if (busy.length) refuse(busyText(busy))
   // The plan and the choices first: a write that fails then leaves the findings where they are.
   await writeWhole(planFile, { ...plan, wait: 'reset' })
   const choices = path.join(dir, 'choices.json')
   // The page's choices, when it sent some, else the lenses the review ran: on again.
-  if (!existsSync(choices) && review.lenses?.length)
+  const chose = !existsSync(choices) && !!review.lenses?.length
+  if (chose)
     await writeWhole(choices, {
-      lenses: Object.fromEntries(review.lenses.map((lens) => [lens.name, true])),
+      lenses: Object.fromEntries((review.lenses ?? []).map((lens) => [lens.name, true])),
       remember: false,
     })
-  const { kept } = await store.reset()
-  if (kept.length)
-    console.error(
-      `kept ${kept.length} finding(s) still under way: ${kept.slice(0, 5).join(', ')}`,
-    )
+  try {
+    await store.reset()
+  } catch (error) {
+    // A fix started between the check and the reset: the review stays as it was.
+    await writeWhole(planFile, plan)
+    if (chose) await rm(choices, { force: true })
+    throw error
+  }
   console.log(`RESET ${planFile}`)
 } catch (error) {
   if (!(error instanceof StoreRefusal)) throw error

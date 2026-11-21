@@ -98,13 +98,17 @@ test('a review opened from a file, or complete, has no controls', async (t) => {
   await assert.rejects(store.reset(), refused(/not stopped/))
 })
 
-test('reset.mjs: the findings go, those under way stay, and the plan waits to start', async (t) => {
+test('reset.mjs: every finding goes, and the plan waits to start', async (t) => {
   const { dir, plan, store } = await reviewRun(t)
-  await store.decide('f-01', { action: 'fix' })
-  await store.decide('f-02', { action: 'drop' })
+  await store.decide('f-01', { action: 'drop' })
   await mkdir(path.join(dir, 'reviewers'), { recursive: true })
-  for (const name of ['rv-bugs', 'vf-f-03', 'sm-summary', 'ds-f-01', 'ds-f-04'])
+  for (const name of ['rv-bugs', 'vf-f-03', 'sm-summary', 'ds-f-01'])
     await writeFile(path.join(dir, 'reviewers', `${name}.jsonl`), '')
+  await mkdir(path.join(dir, 'discussions'), { recursive: true })
+  await writeFile(
+    path.join(dir, 'discussions', 'f-01.json'),
+    JSON.stringify({ messages: [{ by: 'agent', text: 'Answered.', at: 'x' }] }),
+  )
   await store.halt()
   await store.complete()
 
@@ -113,25 +117,16 @@ test('reset.mjs: the findings go, those under way stay, and the plan waits to st
   })
   assert.equal(ran.code, 0, ran.stdout + ran.stderr)
   assert.equal(ran.stdout.trim(), `RESET ${plan}`)
-  assert.match(ran.stderr, /kept 1 finding\(s\) still under way: f-01/)
 
   const now = await store.readReview()
   assert.equal(now.status, 'preparing')
   assert.equal(now.stopped, undefined)
   assert.equal(now.summary, '')
-  assert.deepEqual(
-    now.findings.map((one) => one.id),
-    ['f-01'],
-  )
-  assert.ok(!existsSync(findingPath(dir, 'f-02')))
-  const { findings } = await store.readDecisions()
-  assert.deepEqual(Object.keys(findings), ['f-01'])
-  assert.equal(findings['f-01']?.state, 'queued')
-  // The kept finding's discussing agent may still answer: its file stays.
-  assert.deepEqual(
-    (await readReviewAgents(dir)).map((one) => one.name),
-    ['ds-f-01'],
-  )
+  assert.deepEqual(now.findings, [])
+  assert.ok(!existsSync(findingPath(dir, 'f-01')))
+  assert.ok(!existsSync(path.join(dir, 'discussions')))
+  assert.deepEqual((await store.readDecisions()).findings, {})
+  assert.deepEqual(await readReviewAgents(dir), [])
   assert.equal(JSON.parse(await readFile(plan, 'utf8')).wait, 'reset')
   // The lenses it ran, on again for Start.
   assert.deepEqual(JSON.parse(await readFile(path.join(dir, 'choices.json'), 'utf8')), {
@@ -179,26 +174,53 @@ test('an agent interrupted then started again runs; its end before says interrup
   assert.equal(again?.outcome, undefined)
 })
 
-test('reset keeps a finding being fixed or asking, with its run; a stale agent adds nothing after it', async (t) => {
-  const { dir, store } = await reviewRun(t)
+test('reset waits for a fix, a post, an issue or an answer under way, and removes nothing', async (t) => {
+  const { dir, plan, store } = await reviewRun(t)
   await store.decide('f-01', { action: 'fix' })
   await store.claim('f-01', { agent: 'a1' })
   await store.decide('f-02', { action: 'fix' })
   await store.claim('f-02', { agent: 'a2' })
   await store.ask('f-02', { text: 'Which one?' })
+  await store.decide('f-03', { action: 'fix' })
+  await mkdir(path.join(dir, 'discussions'), { recursive: true })
+  await writeFile(
+    path.join(dir, 'discussions', 'f-04.json'),
+    JSON.stringify({ messages: [{ by: 'reviewer', text: 'Why?', at: 'x' }] }),
+  )
+  const planBefore = await readFile(plan, 'utf8')
+  await store.halt()
+  assert.deepEqual(await store.underWay(), [
+    { id: 'f-01', what: 'fix' },
+    { id: 'f-02', what: 'fix' },
+    { id: 'f-03', what: 'fix' },
+    { id: 'f-04', what: 'answer' },
+  ])
+  await assert.rejects(
+    store.reset(),
+    refused(
+      /f-01, f-02, f-03 still under way \(a fix, a post or an issue\); f-04 waiting for an answer/,
+    ),
+  )
+  const ran = await run(process.execPath, [RESET, '--review', dir], {
+    env: { TRANCHANT_STATE_DIR: stateDir },
+  })
+  assert.equal(ran.code, 2)
+  assert.match(ran.stdout, /^RESET_REFUSED f-01, f-02, f-03 still under way/)
+  assert.equal((await store.readReview()).findings.length, 5)
+  assert.equal(await readFile(plan, 'utf8'), planBefore)
+  assert.ok(!existsSync(path.join(dir, 'choices.json')))
+})
+
+test('a stale agent adds nothing to a reset review', async (t) => {
+  const { store } = await reviewRun(t)
   const [late] = (await store.readReview()).findings
   await store.halt()
-  const { kept } = await store.reset()
-  assert.deepEqual(kept.toSorted(), ['f-01', 'f-02'])
-  assert.equal((await store.readDecisions()).findings['f-01']?.state, 'working')
-  assert.equal((await store.readDecisions()).findings['f-02']?.state, 'asking')
-  assert.ok(existsSync(path.join(dir, 'decisions.json')))
+  await store.reset()
   // An agent of the run before the reset lands nothing on it.
   await assert.rejects(
     store.addFinding({ ...late, id: 'f-99' }),
     refused(/waits to start/),
   )
-  await assert.rejects(store.verify('f-01'), refused(/waits to start/))
   await assert.rejects(store.summarize({ summary: 'late' }), refused(/preparing/))
 })
 
@@ -211,7 +233,7 @@ test('complete drops a pause that landed as the last agent ended', async (t) => 
   assert.equal(done.paused, undefined)
 })
 
-test("hook.mjs drops a review agent's late steps on a reset review, never a discussing agent's", async (t) => {
+test("hook.mjs drops a review agent's late steps on a reset review", async (t) => {
   const { dir, review } = await reviewRun(t)
   const file = path.join(dir, 'review.json')
   await writeFile(
@@ -237,6 +259,4 @@ test("hook.mjs drops a review agent's late steps on a reset review, never a disc
     )
   assert.equal((await note('rv-bugs')).code, 0)
   assert.ok(!existsSync(path.join(dir, 'reviewers', 'rv-bugs.jsonl')))
-  assert.equal((await note('ds-f-01')).code, 0)
-  assert.ok(existsSync(path.join(dir, 'reviewers', 'ds-f-01.jsonl')))
 })

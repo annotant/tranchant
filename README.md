@@ -189,8 +189,9 @@ the review by itself**, on by default, does the same for every review when off;
 While it runs, the page's progress panel has **Pause** (no new agent starts;
 **Pause now** ends those at work, which run again on **Resume**) and **Stop
 the review** (confirmed inline; no Resume, the findings stay to settle), then
-**Reset the review**, back to **Start the review** with the same lenses: none
-of them touches a fix, a discussion or a post under way.
+**Reset the review**, back to **Start the review** with the same lenses and
+no finding left. Pause and Stop never touch a fix, a discussion or a post
+under way; Reset waits for them to end.
 A lens whose globs the change does not touch is skipped. Three review agents
 run at a time (the Settings say how many); nothing is written in the reviewed working tree (a merge
 request's head is fetched when the checkout lacks it). On a branch, `glab`
