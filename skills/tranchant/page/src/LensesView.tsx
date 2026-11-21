@@ -12,10 +12,13 @@ import {
   InsideMatches,
   MAX_BATCH,
   InsideUnread,
+  MatchList,
+  MatchesHead,
   ReadingSource,
   isGlob,
   nameProblem,
   noteRows,
+  shortName,
   useGlob,
   useInside,
   usePick,
@@ -510,9 +513,11 @@ export function LensesView({
           {cleanings.length > 0 && (
             <BeingAdded
               cleanings={cleanings}
+              lenses={lensSet.lenses}
               frozen={frozen}
               cap={values.maxReviewAgents}
               onLens={onLens}
+              onRefused={setRefused}
             />
           )}
           {left && (
@@ -970,14 +975,18 @@ function addsOne(lenses: LensEntry[], scope: Added, name: string) {
  */
 function BeingAdded({
   cleanings,
+  lenses,
   frozen,
   cap,
   onLens,
+  onRefused,
 }: {
   cleanings: CleaningEntry[]
+  lenses: LensEntry[]
   frozen: boolean
   cap: number
   onLens: Props['onLens']
+  onRefused: (refused: { source: string; reason: string }[]) => void
 }) {
   const [details, setDetails] = useState(false)
   const many = cleanings.length > 1
@@ -1024,9 +1033,11 @@ function BeingAdded({
             <CleaningCard
               key={one.id}
               one={one}
+              lenses={lenses}
               frozen={frozen}
               cap={cap}
               onLens={onLens}
+              onRefused={onRefused}
             />
           ))}
         </ul>
@@ -1037,11 +1048,12 @@ function BeingAdded({
 
 /** The batch being added, in a line: its glob, then how many stand where. */
 function batchLine(cleanings: CleaningEntry[]) {
-  const counts = { ready: 0, cleaning: 0, waiting: 0, failed: 0 }
+  const counts = { ready: 0, process: 0, cleaning: 0, waiting: 0, failed: 0 }
   for (const one of cleanings)
     counts[one.state === 'cleaning' && one.waiting ? 'waiting' : one.state] += 1
   const parts = [
     counts.ready && `${counts.ready} to check`,
+    counts.process && `${counts.process} to pick from`,
     counts.cleaning && `${counts.cleaning} cleaning`,
     counts.waiting && `${counts.waiting} waiting`,
     counts.failed && `${counts.failed} failed`,
@@ -1094,7 +1106,9 @@ function AddLens({
     !glob && insideLook.state === 'done'
       ? (insideLook.answer.inside ?? undefined)
       : undefined
-  const many = glob || Boolean(inside)
+  // Its read found none: one source, whose cleaning agent looks.
+  const empty = inside !== undefined && !inside.starts.length
+  const many = glob || (inside !== undefined && !empty)
   const entries = glob
     ? globLook.state === 'done'
       ? globLook.answer.matches
@@ -1105,8 +1119,8 @@ function AddLens({
   const checked = rows.filter((row) => row.checked)
   const blocked = checked.some((row) => row.note?.name)
   const derived =
-    !glob && insideLook.state === 'done' && !insideLook.answer.inside
-      ? insideLook.answer.name
+    !glob && insideLook.state === 'done' && (!insideLook.answer.inside || empty)
+      ? (insideLook.answer.name ?? '')
       : ''
   const shownName = name ?? derived
   // Emptied, the name is the source's again, as the server gives it.
@@ -1158,7 +1172,7 @@ function AddLens({
         help={
           picked
             ? pickedHelp(picked)
-            : "A reviewer: a plugin's skill, agent or command, or a path to one or to a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. Browse lists what is installed and the files Tranchant may list. A command is never a lens itself, nor an agent that starts the agents it names: Tranchant lists them, and each one can become a lens. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out."
+            : "A reviewer: a plugin's skill, agent or command, or a path to one or to a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. Browse lists what is installed and the files Tranchant may list. A source that starts the agents it names lists them, and each one can become a lens. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out; a whole review process, it lists the reviewers it starts, for you to pick."
         }
       >
         <div className="tr-source-row">
@@ -1286,13 +1300,15 @@ function AddLens({
           className="tr-btn tr-btn--primary"
           disabled={frozen || busy || !typed || !ready}
         >
-          {!many
-            ? 'Import and clean'
-            : checked.length === 1
-              ? 'Add the lens'
-              : checked.length
-                ? `Add the ${checked.length} lenses`
-                : 'Add the lenses'}
+          {empty
+            ? 'Ask an agent to look'
+            : !many
+              ? 'Import and clean'
+              : checked.length === 1
+                ? 'Add the lens'
+                : checked.length
+                  ? `Add the ${checked.length} lenses`
+                  : 'Add the lenses'}
         </button>
         <button type="button" className="tr-btn" onClick={onCancel}>
           Cancel
@@ -1385,18 +1401,22 @@ function Changes({ removed, added }: { removed: Cleaning['removed']; added: stri
 
 type Cleaning = NonNullable<CleaningEntry['report']>
 
-/** A lens being added: its cleaning at work, its result to check and add, or why it failed. */
+/** A lens being added: its cleaning at work, its result to check and add, a process's reviewers to pick, or why it failed. */
 function CleaningCard({
   one,
+  lenses,
   frozen,
   cap,
   onLens,
+  onRefused,
 }: {
   one: CleaningEntry
+  lenses: LensEntry[]
   frozen: boolean
   /** The cleaning agents at a time, which a waiting one says. */
   cap: number
   onLens: Props['onLens']
+  onRefused: (refused: { source: string; reason: string }[]) => void
 }) {
   const waiting = one.state === 'cleaning' && one.waiting === true
   const report = one.report
@@ -1425,6 +1445,7 @@ function CleaningCard({
         <span className="tr-lns-meta">
           <code className="tr-lns-source">
             {one.source}
+            {one.reviewer && ` › ${one.reviewer}`}
             {one.version && ` ${one.version}`}
           </code>
           <span className="tr-lns-facts">
@@ -1440,7 +1461,9 @@ function CleaningCard({
               ? 'the cleaning agent reads it…'
               : one.state === 'ready'
                 ? 'cleaned: check it, then add it'
-                : 'cleaning failed'}
+                : one.state === 'process'
+                  ? 'a whole process: pick its lenses'
+                  : 'cleaning failed'}
         </span>
       </div>
       {waiting && (
@@ -1451,20 +1474,20 @@ function CleaningCard({
       {one.state === 'failed' && (
         <div className="tr-lns-edit">
           <p className="tr-recipe-problem">{one.reason}</p>
-          {one.instead?.length ? (
-            <p className="tr-field-help">
-              Add one of the reviewers it starts instead:{' '}
-              {one.instead.map((source, i) => (
-                <span key={source}>
-                  {i > 0 && ', '}
-                  <code>{source}</code>
-                </span>
-              ))}
-              .
-            </p>
-          ) : null}
           <div className="tr-lns-foot">{discard}</div>
         </div>
+      )}
+      {one.state === 'process' && (
+        <ProcessForm
+          one={one}
+          lenses={lenses}
+          frozen={frozen}
+          labelledBy={id}
+          onLens={onLens}
+          onRefused={onRefused}
+        >
+          {discard}
+        </ProcessForm>
       )}
       {one.state === 'ready' && report && (
         <ReadyForm one={one} report={report} frozen={frozen} onLens={onLens}>
@@ -1472,6 +1495,130 @@ function CleaningCard({
         </ReadyForm>
       )}
     </li>
+  )
+}
+
+/**
+ * A whole process's reviewers, as its cleaning agent found them: one
+ * checkbox each, its name editable, one that is a lens already locked; a
+ * path Tranchant refuses said with why. Add the checked ones starts one
+ * cleaning each, as if each had been added on its own.
+ */
+function ProcessForm({
+  one,
+  lenses,
+  frozen,
+  labelledBy,
+  onLens,
+  onRefused,
+  children,
+}: {
+  one: CleaningEntry
+  lenses: LensEntry[]
+  frozen: boolean
+  labelledBy: string
+  onLens: Props['onLens']
+  onRefused: (refused: { source: string; reason: string }[]) => void
+  children: React.ReactNode
+}) {
+  const reviewers = one.reviewers ?? []
+  // Keyed as a match is, by source: an inline one is written in the process's own.
+  const offered = reviewers.flatMap((reviewer, index) =>
+    reviewer.kind === 'refused'
+      ? []
+      : [
+          {
+            index,
+            match: {
+              source:
+                reviewer.kind === 'file'
+                  ? reviewer.source
+                  : `${one.source} › ${reviewer.name}`,
+              name: reviewer.name,
+              ...(reviewer.already && { already: reviewer.already }),
+            },
+          },
+        ],
+  )
+  const pick = usePick(
+    offered.map((entry) => entry.match),
+    `process:${one.id}`,
+  )
+  const rows = noteRows(pick.rows, one.scope, lenses)
+  const checked = rows.filter((row) => row.checked)
+  const blocked = checked.some((row) => row.note?.name)
+  const refused = reviewers.flatMap((reviewer) =>
+    reviewer.kind === 'refused' ? [reviewer] : [],
+  )
+  const count = reviewers.length + (one.more ?? 0)
+  const [busy, setBusy] = useState(false)
+  return (
+    <form
+      className="tr-lns-edit"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!checked.length || blocked) return
+        setBusy(true)
+        const indexOf = new Map(offered.map((entry) => [entry.match.source, entry.index]))
+        void onLens('reviewers', {
+          id: one.id,
+          picks: checked.map((row) => ({
+            index: indexOf.get(row.source),
+            name: row.name.trim(),
+          })),
+        })
+          .then((done) => onRefused(done.refused ?? []))
+          .catch(() => undefined)
+          .finally(() => setBusy(false))
+      }}
+    >
+      {one.process && <p className="tr-field-help">{one.process}</p>}
+      <div className="tr-matches">
+        <MatchesHead
+          title={`${shortName(one.source)} starts ${count === 1 ? '1 reviewer' : `${count} reviewers`}: pick the lenses to make`}
+          checked={checked.length}
+          frozen={frozen}
+          onCheckAll={pick.checkAll}
+          onCheckNone={pick.checkNone}
+        />
+        {offered.length > 0 && (
+          <MatchList
+            label={labelledBy}
+            rows={rows}
+            slots={pick.slots}
+            frozen={frozen}
+            onToggle={pick.toggle}
+            onSetChecked={pick.setChecked}
+            onRename={pick.rename}
+          />
+        )}
+        {refused.length > 0 && (
+          <ul className="tr-lns-refused">
+            {refused.map((reviewer) => (
+              <li key={`${reviewer.name}:${reviewer.file}:${reviewer.reason}`}>
+                <code>{reviewer.file}</code>: {reviewer.reason}. Not offered as a file.
+              </li>
+            ))}
+          </ul>
+        )}
+        <span className="tr-field-help">
+          {one.more ? `${one.more} more it starts, left out. ` : ''}
+          Each checked one is cleaned into a lens of its own; {shortName(one.source)}{' '}
+          itself is none. One written in it stays tied to it: cleaned again when it
+          changes.
+        </span>
+      </div>
+      <div className="tr-lns-foot">
+        <button
+          type="submit"
+          className="tr-btn tr-btn--primary"
+          disabled={frozen || busy || !checked.length || blocked}
+        >
+          Add the checked ones
+        </button>
+        {children}
+      </div>
+    </form>
   )
 }
 

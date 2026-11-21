@@ -434,7 +434,7 @@ test('each source that cannot be resolved refuses the review, with its reason, a
     ],
     [
       { name: 'a', source: 'workflow:code-reviewer-none' },
-      /the plugin workflow has no skill or agent named code-reviewer-none/,
+      /the plugin workflow has no skill, agent or command named code-reviewer-none/,
       /edit the recipe/,
     ],
     [

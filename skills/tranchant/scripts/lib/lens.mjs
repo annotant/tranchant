@@ -1,7 +1,7 @@
 // A recipe's lenses, from the recipe in force to the prompt each reviewer
 // runs: which recipe applies (a run's, the local one, the project's at BASE,
 // the settings', the plugin's), what it says, where each lens's source lies
-// (a plugin's skill or agent, a path, a lens of Tranchant's own), and the
+// (a plugin's skill, agent or command, a path, a lens of Tranchant's own), and the
 // prompt built from it. The build is the same bytes for the same sources,
 // skills and contract, and is stored once under <state>/lenses/<sha256>.md.
 // Described in docs/review-file.md and docs/settings.md.
@@ -44,7 +44,7 @@ const MAX_RECIPE_BYTES = 1024 * 1024
 // No segment starts with a dot: `..` would walk out of the plugin's folder.
 const PLUGIN_NAME = /^[\w-][\w.-]*(?::[\w-][\w.-]*)+$/
 
-/** Whether `label` names a skill or agent (`plugin:name`), not a path. */
+/** Whether `label` names a skill, agent or command (`plugin:name`), not a path. */
 export const isPluginName = (/** @type {string} */ label) => PLUGIN_NAME.test(label)
 const MODEL = /^[\w.:-]{1,80}$/
 /** A lens's model that asks for its source's model, else the session's. */
@@ -91,7 +91,7 @@ export class LensRefusal extends Error {
  * @property {string[]} paths Empty for the `otherwise` lens.
  * @property {true} [otherwise]
  * @property {string} [prompt] A whole prompt, by path.
- * @property {string} [source] A skill or agent by name (`plugin:name`), or a path.
+ * @property {string} [source] A skill, agent or command by name (`plugin:name`), or a path.
  * @property {string} [use] A lens of Tranchant's (`tranchant:<lens>`) the `add` source adds to.
  * @property {string} [add]
  * @property {string[]} [skills] Sources passed to the lens as references.
@@ -546,7 +546,7 @@ const EDIT_RECIPE =
 
 /**
  * Finds `label` and reads it: `tranchant:<lens>`, one of the plugin's lenses;
- * `plugin:name`, an installed plugin's skill or agent; else a path, from
+ * `plugin:name`, an installed plugin's skill, agent or command; else a path, from
  * `folder` (the recipe's) when relative, read at BASE for a project recipe.
  * Throws a LensRefusal saying why it cannot, and what fixes it.
  * @param {string} label
@@ -593,6 +593,8 @@ export async function resolveSource(label, { origin, folder, project }) {
         ? [path.join(installed.root, 'skills', inside, 'SKILL.md')]
         : []),
       path.join(installed.root, 'agents', `${inside}.md`),
+      // A command is a lens too once cleaned: its own review, or one reviewer it writes inline.
+      path.join(installed.root, 'commands', `${inside}.md`),
     ]
     for (const file of candidates) {
       if (path.relative(installed.root, file).startsWith('..')) continue
@@ -609,7 +611,7 @@ export async function resolveSource(label, { origin, folder, project }) {
         }
     }
     throw new LensRefusal(
-      `the plugin ${plugin} has no skill or agent named ${rest.join(':')}`,
+      `the plugin ${plugin} has no skill, agent or command named ${rest.join(':')}`,
       EDIT_RECIPE,
     )
   }

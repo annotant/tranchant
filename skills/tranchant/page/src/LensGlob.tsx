@@ -172,7 +172,7 @@ export function usePick(entries: LensMatch[], key: string) {
 }
 
 /** A source's short name, as a person calls it: `review-pr` for `pr-review-toolkit:review-pr` or `.claude/commands/review-pr.md`. */
-const shortName = (source: string) =>
+export const shortName = (source: string) =>
   source
     .replace(/[/\\]SKILL\.md$/i, '')
     .split(/[:/\\]/)
@@ -438,7 +438,7 @@ function GroupRow({
 }
 
 /** The rows, each where its slot puts it: on its own, or under the match that starts it. */
-function MatchList({
+export function MatchList({
   label,
   rows,
   slots,
@@ -483,7 +483,7 @@ function MatchList({
 }
 
 /** How many are checked, and the buttons that check them all or none. */
-function MatchesHead({
+export function MatchesHead({
   title,
   checked,
   frozen,
@@ -627,7 +627,7 @@ export function ReadingSource({ source }: { source: string }) {
 
 /**
  * The reviewers inside a source: a command, or an agent that starts
- * others. Each to check and rename; none, said, and nothing runs.
+ * others. Each to check and rename; none found, said, and an agent may look.
  */
 export function InsideMatches({
   inside,
@@ -644,18 +644,15 @@ export function InsideMatches({
       <>
         <p className="tr-lns-empty tr-matches-box" role="status">
           <strong>
-            No agent of its own in <code>{name}</code>.
+            No agent Tranchant finds in <code>{name}</code>.
           </strong>{' '}
-          It names no agent or skill Tranchant finds, by name beside it, in the project or
-          yours, or as <code>plugin:name</code>: they are written in{' '}
-          <code>{inside.label}</code> itself, or are a plugin’s not installed or turned
-          off. None can become a lens, and a whole process cannot either. Nothing will
-          run.
+          Its read, with no agent, finds no agent or skill it names, by name beside it, in
+          the project or yours, or as an installed <code>plugin:name</code>.
         </p>
         <span className="tr-field-help">
-          A plugin’s: install it or turn it on (<code>/plugin</code>), then type the
-          source again. Written in it: copy one review’s instructions into a file of its
-          own, then add that file.
+          An agent can read <code>{name}</code> with what it points to: it makes one lens
+          of a single review, or lists the reviewers it starts, files or instructions
+          written in it, for you to pick. That is one agent’s run.
         </span>
       </>
     )

@@ -19,6 +19,7 @@ import path from 'node:path'
 import { before, test } from 'node:test'
 import { say } from '../skills/tranchant/scripts/lib/discussion.mjs'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
+import { hashOf } from '../skills/tranchant/scripts/lib/project.mjs'
 import { buildPlayground } from './fixtures/playground.mjs'
 import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
 
@@ -2099,7 +2100,6 @@ test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, chang
   // Still being cleaned: nothing to add yet.
   assert.equal((await lensPost('add', { id: cleaning })).status, 409)
 
-  const { hashOf } = await import('../skills/tranchant/scripts/lib/project.mjs')
   const folder = path.join(stateDir, hashOf(server.project), 'cleanings', cleaning)
   await writeFile(path.join(folder, 'lens.md'), 'A float on a money path is a finding.\n')
   await writeFile(
@@ -2422,7 +2422,7 @@ test('/api/lens/inside lists the agents a command starts, those being added said
   assert.equal(whole.status, 409)
   assert.match(
     (await json(whole)).error,
-    /is a command, never a lens itself: add the 2 reviewers it starts instead \(code-review, test-review\)/,
+    /is a command that starts other reviewers: add the 2 reviewers it starts instead \(code-review, test-review\)/,
   )
   const added = await importing({
     scope: 'local',
@@ -2434,6 +2434,77 @@ test('/api/lens/inside lists the agents a command starts, those being added said
   assert.deepEqual(again.starts[0].already, [
     { scope: 'local', name: 'code-review', adding: true },
   ])
+
+  // A command whose read finds none: its name, and its cleaning agent looks when asked.
+  const alone = '.claude/commands/full-review.md'
+  await writeFile(
+    path.join(dotClaude, 'commands', 'full-review.md'),
+    'Read the change for missing null checks.\n',
+  )
+  assert.deepEqual(await json(await inside(alone)), {
+    inside: { kind: 'command', label: alone, starts: [] },
+    name: 'full-review',
+  })
+  const asked = await importing({ scope: 'local', source: alone })
+  assert.equal(asked.status, 200)
+  const { cleaning } = await json(asked)
+  // Its reviewers are picked once its agent found a process: not before.
+  const reviewers = (/** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/lens/reviewers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  assert.equal((await reviewers({ picks: [] })).status, 400)
+  const early = await reviewers({ id: cleaning, picks: [{ index: 0 }] })
+  assert.equal(early.status, 409)
+  assert.match((await json(early)).error, /lists no reviewers to add/)
+
+  // Its agent found a process: one reviewer being added already is locked; the checked one is cleaned.
+  await writeFile(path.join(dotClaude, 'agents', 'docs-review.md'), 'Review the docs.\n')
+  const cleaningDir = path.join(stateDir, hashOf(server.project), 'cleanings', cleaning)
+  await writeFile(
+    path.join(cleaningDir, 'report.json'),
+    JSON.stringify({
+      process: 'It starts two reviewers written beside it.',
+      reviewers: [
+        { name: 'code-review', file: path.join(dotClaude, 'agents', 'code-review.md') },
+        { name: 'docs-review', file: path.join(dotClaude, 'agents', 'docs-review.md') },
+      ],
+    }),
+  )
+  const checked = await run(
+    process.execPath,
+    [
+      path.join(SCRIPTS, 'clean.mjs'),
+      '--project',
+      server.project,
+      '--check',
+      cleaningDir,
+    ],
+    {
+      env: {
+        TRANCHANT_STATE_DIR: stateDir,
+        XDG_CONFIG_HOME: config,
+        CLAUDE_CONFIG_DIR: claude,
+      },
+    },
+  )
+  assert.match(checked.stdout, /^CLEANED process local full-review$/m, checked.stderr)
+  const settings = await json(await fetch(`${server.base}/api/settings`))
+  const card = settings.cleanings.find((/** @type {any} */ one) => one.id === cleaning)
+  assert.deepEqual(
+    card.reviewers.map((/** @type {any} */ one) => [one.name, one.already]),
+    [
+      ['code-review', [{ scope: 'local', name: 'code-review', adding: true }]],
+      ['docs-review', undefined],
+    ],
+  )
+  const printed = server.output().length
+  const picked = await reviewers({ id: cleaning, picks: [{ index: 1 }] })
+  assert.equal(picked.status, 200)
+  const [made] = (await json(picked)).cleanings
+  assert.equal(await server.nextLine('CLEAN ', printed), `CLEAN ${made}`)
 })
 
 test("/api/lens/catalog lists the plugins' skills, agents and commands, a turned-off one said, the project's and the user's .claude, names only", async (t) => {

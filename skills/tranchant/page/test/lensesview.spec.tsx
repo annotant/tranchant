@@ -557,24 +557,23 @@ test('Add a lens names it after its source before the cleaning; a name taken in 
   }
 })
 
-test('a cleaned lens shows what it found before Add this lens; a failed one, what to add instead', () => {
+test('a cleaned lens shows what it found before Add this lens; a failed one, why', () => {
   const { onLens } = renderLenses([
     READY,
     {
       id: 'c-2',
       createdAt: '2026-11-17T00:00:00Z',
-      name: 'code-review',
+      name: 'checklist',
       scope: 'local',
       again: false,
-      source: 'workflow:code-review',
+      source: 'docs/checklist.md',
       state: 'failed',
-      reason: 'the source holds no single review: it starts two reviewers',
-      instead: ['workflow:code-reviewer-abac', 'workflow:code-reviewer-api'],
+      reason: 'the source holds no review: it is a guide',
     },
   ])
   const adding = within(screen.getByRole('list', { name: 'Lenses being added' }))
   expect(adding.getByText('The report table')).toBeDefined()
-  expect(adding.getByText('workflow:code-reviewer-api')).toBeDefined()
+  expect(adding.getByText('the source holds no review: it is a guide')).toBeDefined()
   fireEvent.click(adding.getByRole('button', { name: 'Show the lens, whole' }))
   expect(adding.getByText('Amounts are integers in cents.')).toBeDefined()
   fireEvent.click(adding.getByRole('button', { name: 'Add this lens' }))
@@ -584,6 +583,68 @@ test('a cleaned lens shows what it found before Add this lens; a failed one, wha
   })
   fireEvent.click(adding.getAllByRole('button', { name: 'Discard' })[1]!)
   expect(onLens).toHaveBeenLastCalledWith('discard', { id: 'c-2' })
+})
+
+test('a whole process lists its reviewers to pick: a file, one written inline, one a lens already locked, a refused path said; Add the checked ones cleans each', () => {
+  const { onLens } = renderLenses([
+    {
+      id: 'c-3',
+      createdAt: '2026-11-18T00:00:00Z',
+      name: 'code-review',
+      scope: 'local',
+      again: false,
+      source: '~/team/plugins/workflow/code-review',
+      state: 'process',
+      process: 'It launches its reviewers in parallel and merges their reports.',
+      reviewers: [
+        {
+          name: 'code-reviewer-bugs',
+          kind: 'file',
+          source: '~/team/plugins/workflow/agents/code-reviewer-bugs.md',
+        },
+        {
+          name: 'code-reviewer-api',
+          kind: 'file',
+          source: '~/team/plugins/workflow/agents/code-reviewer-api.md',
+          already: [{ scope: 'local', name: 'api' }],
+        },
+        { name: 'perf', kind: 'inline', label: 'perf' },
+        {
+          name: 'secrets',
+          kind: 'refused',
+          file: '/etc/secrets.md',
+          reason: "outside the source's plugin and marketplace",
+        },
+      ],
+    },
+  ])
+  const adding = within(screen.getByRole('list', { name: 'Lenses being added' }))
+  expect(adding.getByText('a whole process: pick its lenses')).toBeDefined()
+  expect(
+    adding.getByText('code-review starts 4 reviewers: pick the lenses to make'),
+  ).toBeDefined()
+  expect(adding.getByText('/etc/secrets.md')).toBeDefined()
+  const locked = adding.getByRole('checkbox', {
+    name: '~/team/plugins/workflow/agents/code-reviewer-api.md',
+  })
+  expect(locked).toHaveProperty('disabled', true)
+  expect(locked).toHaveProperty('checked', false)
+  fireEvent.change(
+    adding.getByRole('textbox', {
+      name: 'Lens name for ~/team/plugins/workflow/code-review › perf',
+    }),
+    {
+      target: { value: 'performance' },
+    },
+  )
+  fireEvent.click(adding.getByRole('button', { name: 'Add the checked ones' }))
+  expect(onLens).toHaveBeenLastCalledWith('reviewers', {
+    id: 'c-3',
+    picks: [
+      { index: 0, name: 'code-reviewer-bugs' },
+      { index: 2, name: 'performance' },
+    ],
+  })
 })
 
 /** Moves the page to `hash`, as a link or the browser's back does. */
@@ -1014,24 +1075,27 @@ test("a plugin's command lists the agents it starts in place of a name; one that
   }
 })
 
-test('a command whose agents are written in it says none can become a lens, and adds nothing', async () => {
+test('a command whose read finds no agent offers an agent to look: one lens of it, or the reviewers it starts', async () => {
   stubMatches({
     inside: { kind: 'command', label: '.claude/commands/full-review.md', starts: [] },
+    name: 'full-review',
   })
   try {
-    renderLenses()
+    const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
       target: { value: '.claude/commands/full-review.md' },
     })
-    const said = await form.findByText(/No agent of its own in/)
-    expect(said.textContent).toBe('No agent of its own in full-review.')
-    expect(form.queryByLabelText('Name')).toBeNull()
-    expect(form.getByRole('button', { name: 'Add the lenses' })).toHaveProperty(
-      'disabled',
-      true,
-    )
+    const said = await form.findByText(/No agent Tranchant finds in/)
+    expect(said.textContent).toBe('No agent Tranchant finds in full-review.')
+    expect(form.getByLabelText('Name')).toHaveProperty('placeholder', 'full-review')
+    fireEvent.click(form.getByRole('button', { name: 'Ask an agent to look' }))
+    expect(onLens).toHaveBeenCalledWith('import', {
+      source: '.claude/commands/full-review.md',
+      name: 'full-review',
+      scope: 'local',
+    })
   } finally {
     vi.unstubAllGlobals()
   }

@@ -289,6 +289,7 @@ const fetchSettings = () => request<SettingsPayload>(SETTINGS)
 /** The changes to the lenses the server takes, by route. */
 export type LensRoute =
   | 'import'
+  | 'reviewers'
   | 'add'
   | 'discard'
   | 'save'
@@ -316,12 +317,12 @@ export interface LensMatch {
 }
 
 /** What `GET /api/lens/inside` answers: the reviewers inside a source, or null for a single one. */
-/** A single reviewer has the lens name its source gives when none is typed. */
+/** A single reviewer, or a source whose read found none, has the lens name its source gives when none is typed. */
 export type LensInside =
   | { inside: null; name: string }
   | {
       inside: { kind: LensKind; label: string; starts: LensMatch[]; more?: number }
-      name?: never
+      name?: string
     }
 
 /** The reviewers a command, or a source that starts agents, holds, read from its file with no agent. */
