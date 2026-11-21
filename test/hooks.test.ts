@@ -98,10 +98,13 @@ function world(
     env = {},
     commenting = { stdout: `INBOX ${INBOX}\n`, stderr: '' },
     stopRefused = [],
+    gone = [],
   }: {
     commenting?: { stdout: string; stderr: string }
     /** The agents TaskStop does not end: refused, and still running. */
     stopRefused?: string[]
+    /** The agents the list says completed: TaskStop refused on one of them still ended it. */
+    gone?: string[]
     spawnRefused?: string
     completeSays?: string
     unreadable?: string
@@ -232,7 +235,7 @@ function world(
     }
     if (e.argv[1]?.endsWith('/scripts/reset.mjs')) {
       resets.push(e.argv.slice(2))
-      return ok(`RESET ${PLAN}\n`, 0, 'kept 1 finding(s) still under way: bugs-1')
+      return ok(`RESET ${PLAN}\n`)
     }
     if (e.argv[1]?.endsWith('/scripts/reply.mjs')) {
       replies.push(e.argv.slice(2))
@@ -361,7 +364,9 @@ function world(
       name: agent.name,
       type: agent.type,
       description: '',
-      status: 'running' as const,
+      status: gone.includes(`a${index + 1}`)
+        ? ('completed' as const)
+        : ('running' as const),
     })),
   }))
   // Held, a spawn answers only once released: an agent slow to start.
@@ -1758,7 +1763,7 @@ test('Stop the review ends its agents, starts none of its queue and completes it
   await w.exit(0)
 })
 
-test('an agent TaskStop does not end runs on: said, not requeued, and Reset waits for it', async ($, on) => {
+test('an agent TaskStop does not end runs on: said, not queued again, and Reset refused until it ends', async ($, on) => {
   const w = world(on, { stopRefused: ['a2'] })
   await review($, w)
   await w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
@@ -1766,6 +1771,17 @@ test('an agent TaskStop does not end runs on: said, not requeued, and Reset wait
   expect(w.toasts).toContainEqual(
     'Tranchant could not stop rv-bugs (a2): the task is busy. It runs until its turn ends.',
   )
+  // Its run file says so: the page shows it running, the server refuses Reset.
+  const stuck = w.notes.find((one) => one.stdin.includes('Could not be stopped'))
+  expect(stuck?.argv.slice(0, 2)).toEqual(['--reviewer', 'rv-bugs'])
+  // Resume runs the two it ended again, told their findings landed; never a second rv-bugs.
+  await w.print('RESUME rev-1')
+  expect(w.spawned.slice(3).map((one) => one.type)).toEqual([
+    'tranchant:sm-summary-rev-1',
+    'tranchant:rv-style-rev-1',
+  ])
+  expect(w.spawned[4]?.prompt).toMatch(/This lens ran before and was interrupted/)
+  expect(w.spawned[3]?.prompt).not.toMatch(/interrupted/)
   await w.print('HALT rev-1', 'RESET rev-1')
   expect(w.resets).toEqual([])
   expect(w.toasts.at(-1)).toBe(
@@ -1776,6 +1792,44 @@ test('an agent TaskStop does not end runs on: said, not requeued, and Reset wait
   await w.clock.settle()
   await w.print('RESET rev-1')
   expect(w.resets).toEqual([['--review', DIR]])
+  await w.exit(0)
+})
+
+test('a TaskStop refused on an agent that ended meanwhile counts as stopped', async ($, on) => {
+  const w = world(on, { stopRefused: ['a2'], gone: ['a2'] })
+  await review($, w)
+  await w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
+  expect(w.toasts.some((toast) => toast.includes('could not stop'))).toBe(false)
+  await w.print('RESUME rev-1')
+  expect(w.spawned.slice(3).map((one) => one.type)).toContain('tranchant:rv-bugs-rev-1')
+  await w.exit(0)
+})
+
+test("a fix's agent TaskStop does not end keeps running and its place", async ($, on) => {
+  const w = world(on, { stopRefused: ['a1'] })
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'))
+  await w.print('STOP f-01')
+  expect(w.toasts.at(-1)).toBe(
+    'Tranchant could not stop the agent of f-01 (a1): the task is busy. It runs until its turn ends.',
+  )
+  expect(w.ended).toEqual([])
+  // Its place stays taken: f-04 waits.
+  expect(w.spawned).toHaveLength(3)
+  const stopped = await $.command.run(command('stop'))
+  expect(stopped.text).toBe(
+    'Tranchant stopped serving Classification overview. Ended 2 agent(s) at work on fixes.',
+  )
+  await w.exit(0)
+})
+
+test('Stop the review frees its places: a question waiting for one gets its agent', async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  await w.print('DISCUSS f-01')
+  expect(w.spawned).toHaveLength(3)
+  await w.print('HALT rev-1')
+  expect(w.spawned.map((one) => one.type).at(-1)).toBe('tranchant:ds-f-01-rev-1')
   await w.exit(0)
 })
 

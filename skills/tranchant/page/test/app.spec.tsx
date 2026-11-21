@@ -1101,6 +1101,11 @@ test('a review pausing offers Pause now; paused, Resume, the lenses left marked'
   let agents = screen.getByRole('region', { name: 'Review agents' })
   expect(agents.textContent).toContain('Pausing')
   expect(agents.textContent).toContain('bugs finishes its work; nothing new starts')
+  // Changed their mind while it pauses: Resume is there too.
+  fireEvent.click(within(agents).getByRole('button', { name: 'Resume' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({ url: '/api/review/resume', body: {} }),
+  )
   fireEvent.click(within(agents).getByRole('button', { name: 'Pause now' }))
   await waitFor(() =>
     expect(server.posts).toContainEqual({
@@ -1195,7 +1200,65 @@ test('Reset waits for a fix under way on a stopped review, and says which', asyn
   })
   expect(reset.disabled).toBe(true)
   expect(agents.textContent).toContain(
-    `Reset the review waits for ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+    `Reset the review once it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+  )
+})
+
+test('Stop and reset waits for a question awaiting its answer, Stop the review does not', async () => {
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'reviewing',
+        verify: true,
+        lenses: LENS_RECORDS,
+        findings: [FINDINGS[0]!],
+      },
+    }),
+    discussions: {
+      [FINDINGS[0]!.id]: { messages: [{ by: 'reviewer', text: 'Why?', at: 'x' }] },
+    },
+    reviewers: [{ name: 'rv-bugs', running: true, steps: [] }],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  const confirm = within(agents).getByRole('alertdialog', { name: 'Stop the review?' })
+  expect(
+    within(confirm).getByRole<HTMLButtonElement>('button', { name: 'Stop and reset' })
+      .disabled,
+  ).toBe(true)
+  expect(
+    within(confirm).getByRole<HTMLButtonElement>('button', { name: 'Stop the review' })
+      .disabled,
+  ).toBe(false)
+  expect(confirm.textContent).toContain(
+    `Stop and reset once it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+  )
+})
+
+test('a review agent the hooks could not stop shows running on a stopped review, and Reset waits for it', async () => {
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'complete',
+        verify: true,
+        lenses: LENS_RECORDS,
+        stopped: { at: '2026-11-20T10:00:00Z' },
+        findings: [],
+      },
+    }),
+    reviewers: [{ name: 'rv-bugs', running: true, stuck: true, steps: [] }],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('bugs').closest('li')?.className).not.toContain(
+    'tr-lens--failed',
+  )
+  expect(
+    within(agents).getByRole<HTMLButtonElement>('button', { name: 'Reset the review' })
+      .disabled,
+  ).toBe(true)
+  expect(agents.textContent).toContain(
+    'Reset the review once it ends: rv-bugs, still running: Tranchant could not stop it.',
   )
 })
 

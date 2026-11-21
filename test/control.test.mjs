@@ -174,7 +174,7 @@ test('an agent interrupted then started again runs; its end before says interrup
   assert.equal(again?.outcome, undefined)
 })
 
-test('reset waits for a fix, a post, an issue or an answer under way, and removes nothing', async (t) => {
+test('reset is refused while a fix, a post, an issue or an answer is under way, and removes nothing', async (t) => {
   const { dir, plan, store } = await reviewRun(t)
   await store.decide('f-01', { action: 'fix' })
   await store.claim('f-01', { agent: 'a1' })
@@ -209,6 +209,39 @@ test('reset waits for a fix, a post, an issue or an answer under way, and remove
   assert.equal((await store.readReview()).findings.length, 5)
   assert.equal(await readFile(plan, 'utf8'), planBefore)
   assert.ok(!existsSync(path.join(dir, 'choices.json')))
+})
+
+test('a discussion that is not JSON waits for nothing: the reset removes it', async (t) => {
+  const { dir, store } = await reviewRun(t)
+  await mkdir(path.join(dir, 'discussions'), { recursive: true })
+  await writeFile(path.join(dir, 'discussions', 'f-01.json'), '{ not json')
+  assert.deepEqual(await store.underWay(), [])
+  await store.halt()
+  await store.reset()
+  assert.ok(!existsSync(path.join(dir, 'discussions')))
+})
+
+test('an agent the hooks could not stop reads stuck until its end', async (t) => {
+  const { dir } = await reviewRun(t)
+  const file = path.join(dir, 'reviewers', 'rv-bugs.jsonl')
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(
+    file,
+    step({ at: 1, kind: 'start', label: 'Reviewing: bugs', state: 'done' }) +
+      step({
+        at: 2,
+        kind: 'note',
+        label: 'Could not be stopped: runs until its turn ends',
+        state: 'failed',
+      }) +
+      step({ at: 3, kind: 'note', label: 'still reading', state: 'done' }),
+  )
+  assert.equal((await readReviewAgents(dir))[0]?.stuck, true)
+  await writeFile(
+    file,
+    `${await readFile(file, 'utf8')}${step({ at: 4, kind: 'end', label: 'Ended', state: 'done' })}`,
+  )
+  assert.equal((await readReviewAgents(dir))[0]?.stuck, undefined)
 })
 
 test('a stale agent adds nothing to a reset review', async (t) => {

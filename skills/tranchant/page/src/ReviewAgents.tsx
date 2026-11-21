@@ -262,6 +262,7 @@ function noteOf(phase: ReviewPhase, state: LensProgress['state']) {
   if (paused && state === 'queued') return 'paused'
   if (paused && state === 'interrupted') return 'interrupted · runs again on Resume'
   if (phase === 'stopped' && state === 'failed') return 'stopped · not covered'
+  if (phase === 'stopped' && state === 'running') return 'still running'
   if (phase === 'stopped' && state !== 'done') return 'not covered'
   return undefined
 }
@@ -282,6 +283,12 @@ function Bar({ label, done, total }: { label: string; done: number; total: numbe
   )
 }
 
+/** Names for a note: the first three, then how many more. */
+const listed = (names: readonly string[]) =>
+  names.length > 3
+    ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`
+    : names.join(', ')
+
 /** A review's controls, as the page sends them. */
 export type ReviewControl =
   'pause' | 'pauseNow' | 'resume' | 'halt' | 'haltReset' | 'reset'
@@ -297,6 +304,7 @@ export function ReviewAgents({
   planned = NO_GROUPS,
   others = NO_GROUPS,
   underWay = NO_GROUPS,
+  stuck = NO_GROUPS,
   onOpen,
   onControl,
 }: {
@@ -313,8 +321,10 @@ export function ReviewAgents({
   verify: boolean
   project: string
   onOpen: (id: string) => void
-  /** The findings a fix, a post, an issue or an answer holds: Reset waits for them. */
+  /** The findings a fix, a post, an issue or an answer holds: Reset is refused until they end. */
   underWay?: readonly string[]
+  /** The review agents TaskStop did not end, still running: Reset is refused until they end too. */
+  stuck?: readonly string[]
   /** Pause, Resume, Stop and Reset; absent, the panel offers none. */
   onControl?: ((control: ReviewControl) => Promise<boolean>) | undefined
 }) {
@@ -323,9 +333,15 @@ export function ReviewAgents({
   const [busy, setBusy] = useState(false)
   if (!agents.length && !planned.length) return null
   const progress = progressOf(agents, findings, project, phase === 'done' ? [] : planned)
-  const waitsFor = underWay.length
-    ? `${underWay.length > 3 ? `${underWay.slice(0, 3).join(', ')} and ${underWay.length - 3} more` : underWay.join(', ')}: a fix, a post, an issue or an answer under way`
-    : undefined
+  const waitsFor =
+    [
+      underWay.length &&
+        `${listed(underWay)}: a fix, a post, an issue or an answer under way`,
+      stuck.length &&
+        `${listed(stuck)}, still running: Tranchant could not stop ${stuck.length > 1 ? 'them' : 'it'}`,
+    ]
+      .filter(Boolean)
+      .join('; ') || undefined
   const control = async (which: ReviewControl) => {
     if (!onControl || busy) return
     setBusy(true)
@@ -394,10 +410,10 @@ export function ReviewAgents({
           Pause now
         </button>
       )}
-      {phase === 'paused' && (
+      {paused && (
         <button
           type="button"
-          className="tr-btn tr-btn--small tr-btn--primary"
+          className={`tr-btn tr-btn--small${phase === 'paused' ? ' tr-btn--primary' : ''}`}
           disabled={busy}
           onClick={() => void control('resume')}
         >
@@ -424,7 +440,7 @@ export function ReviewAgents({
           disabled={busy || !!waitsFor}
           title={
             waitsFor
-              ? `Waits for ${waitsFor}`
+              ? `Once it ends: ${waitsFor}`
               : 'Delete the findings and go back to Ready to start, the lenses built'
           }
           onClick={() => void control('reset')}
@@ -538,7 +554,7 @@ export function ReviewAgents({
               disabled={busy || !!waitsFor}
               title={
                 waitsFor
-                  ? `Waits for ${waitsFor}`
+                  ? `Once it ends: ${waitsFor}`
                   : 'Delete the findings too, and go back to Ready to start'
               }
               onClick={() => void control('haltReset')}
@@ -555,7 +571,7 @@ export function ReviewAgents({
             </button>
             <span className="tr-muted">
               {waitsFor
-                ? `Stop and reset waits for ${waitsFor}. A fix already made stays on the working tree.`
+                ? `Stop and reset once it ends: ${waitsFor}. A fix already made stays on the working tree.`
                 : 'A fix under way keeps running, and a fix already made stays on the working tree.'}
             </span>
           </div>
@@ -576,7 +592,7 @@ export function ReviewAgents({
       {(paused || phase === 'stopped') && (
         <p className="tr-muted tr-rp-body">
           {phase === 'stopped'
-            ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. ${waitsFor ? `Reset the review waits for ${waitsFor}.` : 'Reset the review to run it again from Ready to start.'}`
+            ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. ${waitsFor ? `Reset the review once it ends: ${waitsFor}.` : 'Reset the review to run it again from Ready to start.'}`
             : `Paused: the ${findingCount} below are yours to settle while no reviewer runs.`}
         </p>
       )}
@@ -590,9 +606,13 @@ export function ReviewAgents({
                   <Chip
                     key={one.lens}
                     lens={one.lens}
-                    // Stopped, whatever did not finish is not covered.
+                    // Stopped, whatever did not finish is not covered; one the hooks could not stop still runs.
                     state={
-                      phase === 'stopped' && one.state !== 'done' ? 'failed' : one.state
+                      phase === 'stopped' &&
+                      one.state !== 'done' &&
+                      one.state !== 'running'
+                        ? 'failed'
+                        : one.state
                     }
                     count={one.state === 'done' ? String(one.findings) : undefined}
                     title={

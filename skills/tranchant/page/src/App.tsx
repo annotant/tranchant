@@ -749,7 +749,8 @@ export default function App() {
   const agents = (payload?.reviewers ?? []).flatMap((agent) => {
     // An interrupted agent runs again once resumed (its lens queued meanwhile); ended without it, its lens is not covered.
     if (agent.outcome === 'interrupted' && phase === 'running') return []
-    if (reviewing) return [agent]
+    // One the hooks could not stop does run: shown so, until its end step.
+    if (reviewing || agent.stuck) return [agent]
     // An agent whose end step was never written ended with its review all the same; stopped, before it finished.
     const cut = (review.stopped && agent.running) || agent.outcome === 'interrupted'
     return [{ ...agent, running: false, ...(cut && { outcome: 'failed' as const }) }]
@@ -801,6 +802,9 @@ export default function App() {
         planned={review.lenses?.map((lens) => lens.name) ?? []}
         onControl={review.lenses ? control : undefined}
         underWay={underWay}
+        stuck={(payload?.reviewers ?? [])
+          .filter((agent) => agent.stuck)
+          .map((agent) => agent.name)}
         findings={review?.findings ?? []}
         verify={review?.verify === true}
         project={review?.project ?? ''}

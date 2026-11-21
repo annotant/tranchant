@@ -1556,7 +1556,7 @@ async function handle(req, res) {
     return send(res, 200, { ok: true })
   }
 
-  // The review's own controls: its fixes, discussions and posts go on through each, and a reset waits for them.
+  // The review's own controls: its fixes, discussions and posts go on through each, and a reset is refused until they end.
   if (req.method === 'POST' && url.pathname === '/api/review/pause') {
     const input = await readJson(req)
     if (input?.now !== undefined && typeof input.now !== 'boolean')
@@ -1601,6 +1601,11 @@ async function handle(req, res) {
       return send(res, 409, { error: 'the review is being reset: wait for it' })
     const busy = await store.underWay()
     if (busy.length) return send(res, 409, { error: `reset refused: ${busyText(busy)}` })
+    const stuck = (await readReviewAgents(dir)).filter((one) => one.stuck)
+    if (stuck.length)
+      return send(res, 409, {
+        error: `reset refused: ${stuck.map((one) => one.name).join(', ')} still running, TaskStop did not end it`,
+      })
     askReset(latest.stopped.at)
     return send(res, 200, { ok: true })
   }

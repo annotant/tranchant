@@ -17,9 +17,9 @@ released to the `stable` branch.
   at work end, the queued ones never start, the lenses left are *not
   covered*, and the findings that landed stay to read and settle, with no
   Resume. **Reset the review** removes every finding, decision and
-  discussion, keeps the lenses built, and brings the page back to **Ready to
+  discussion, keeps its plan, and brings the page back to **Ready to
   start the review**. A fix, a post, an issue or a discussion under way goes
-  on through Pause and Stop; Reset waits for it to end. An agent the hooks
+  on through Pause and Stop; Reset is refused until it ends. An agent the hooks
   fail to stop (TaskStop) is said, and keeps showing running.
 - **A lens's model on Auto-detect: its source's, else the session's.** A
   lens's **Model** select starts with **Auto-detect**, the default of a lens

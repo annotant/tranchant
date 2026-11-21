@@ -365,6 +365,8 @@ export interface ReviewAgent {
   running: boolean
   /** `interrupted`: Pause now ended it; it runs again from the start on Resume. */
   outcome?: 'done' | 'failed' | 'interrupted'
+  /** Running, though the hooks could not stop it (TaskStop): Reset is refused until its end. */
+  stuck?: true
   /** Its last 50 steps. */
   steps: Step[]
 }
@@ -802,7 +804,7 @@ export const isWaiting = (discussion: Discussion | undefined) =>
 // As lib/store.mjs's `underWay`: a fix, a post or an issue holds the finding.
 const UNDER_WAY = new Set<State>(['queued', 'working', 'asking'])
 
-/** The findings a reset waits for (lib/store.mjs's `underWay`): held, or a question awaiting its answer. */
+/** The findings that refuse a reset (lib/store.mjs's `underWay`): held, or a question awaiting its answer. */
 export const underWayIds = (
   review: Pick<Review, 'findings'>,
   records: Records,

@@ -2833,11 +2833,17 @@ test("the review's controls write its pause or stop, then print the hooks' lines
   assert.equal(waiting.status, 409)
   assert.match((await json(waiting)).error, /f-01 still under way/)
   assert.equal((await store.readReview()).stopped, undefined)
+  // Stop alone goes through: the fix runs on.
+  printed = server.output().length
+  assert.equal((await control('halt', { reset: false })).status, 200)
+  assert.equal(await server.nextLine('HALT ', printed), `HALT ${id}`)
+  const refusedReset = await control('reset')
+  assert.equal(refusedReset.status, 409)
+  assert.match((await json(refusedReset)).error, /f-01 still under way/)
   await store.stop('f-01')
 
   printed = server.output().length
-  assert.equal((await control('halt', { reset: true })).status, 200)
-  assert.equal(await server.nextLine('HALT ', printed), `HALT ${id}`)
+  assert.equal((await control('reset')).status, 200)
   assert.equal(await server.nextLine('RESET ', printed), `RESET ${id}`)
   const twice = await control('reset')
   assert.equal(twice.status, 409)
@@ -2846,6 +2852,9 @@ test("the review's controls write its pause or stop, then print the hooks' lines
   const shown = await json(await fetch(`${server.base}/api/review`))
   assert.equal(typeof shown.review.stopped.at, 'string')
 })
+
+/** One step's line in a run file. */
+const line = (/** @type {object} */ step) => `${JSON.stringify(step)}\n`
 
 test('Reset on a review stopped prints RESET, then waits for it before asking again', async (t) => {
   const imported = await importReview(t, 'ours', stateDir, { verify: true })
@@ -2867,13 +2876,34 @@ test('Reset on a review stopped prints RESET, then waits for it before asking ag
       headers: { 'content-type': 'application/json' },
       body: '{}',
     })
-  // A fix under way: Reset waits for it.
+  // A fix under way: Reset is refused until it ends.
   const store = createStore(imported.dir)
   await store.decide('f-02', { action: 'fix' })
   const waiting = await reset()
   assert.equal(waiting.status, 409)
   assert.match((await json(waiting)).error, /f-02 still under way/)
   await store.stop('f-02')
+  // A review agent TaskStop did not end: Reset is refused until its end step.
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  const runFile = path.join(reviewers, 'rv-bugs.jsonl')
+  await writeFile(
+    runFile,
+    line({ at: 1, kind: 'start', label: 'Reviewing: bugs', state: 'done' }) +
+      line({
+        at: 2,
+        kind: 'note',
+        label: 'Could not be stopped: runs until its turn ends',
+        state: 'failed',
+      }),
+  )
+  const stuck = await reset()
+  assert.equal(stuck.status, 409)
+  assert.match((await json(stuck)).error, /rv-bugs still running/)
+  await writeFile(
+    runFile,
+    `${await readFile(runFile, 'utf8')}${line({ at: 3, kind: 'end', label: 'Ended', state: 'done' })}`,
+  )
   const printed = server.output().length
   assert.equal((await reset()).status, 200)
   assert.equal(await server.nextLine('RESET ', printed), `RESET ${imported.review.id}`)

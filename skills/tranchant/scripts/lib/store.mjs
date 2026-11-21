@@ -181,11 +181,15 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
  * One review agent, the summary agent (`sm-summary`), a lens's reviewer
  * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until the `end` after its last `start`.
  * `interrupted`: Pause now ended it, and it runs again from the start on Resume.
- * @typedef {{ name: string, running: boolean, outcome?: 'done' | 'failed' | 'interrupted', steps: Step[] }} ReviewAgent
+ * `stuck`: running, though the hooks' TaskStop did not end it: a reset is refused until its end.
+ * @typedef {{ name: string, running: boolean, stuck?: true, outcome?: 'done' | 'failed' | 'interrupted', steps: Step[] }} ReviewAgent
  */
 
 /** The label of the `end` step of an agent Pause now ended: the hooks write it, readReviewAgents reads it. */
 const INTERRUPTED = 'Interrupted'
+
+/** The label of the note the hooks write on an agent TaskStop did not end. */
+const NOT_STOPPED = 'Could not be stopped: runs until its turn ends'
 
 /**
  * The review agents of the review, in the order they started.
@@ -203,11 +207,15 @@ export async function readReviewAgents(dir, limit = PROGRESS_SHOWN) {
     const all = await readSteps(reviewAgentPath(dir, name))
     // An agent interrupted then started again: its last start opens the run that counts.
     const last = all.findLastIndex((step) => step.kind === 'start')
-    const end = all.slice(Math.max(last, 0)).findLast((step) => step.kind === 'end')
+    const run = all.slice(Math.max(last, 0))
+    const end = run.findLast((step) => step.kind === 'end')
+    const stuck =
+      !end && run.some((step) => step.kind === 'note' && step.label === NOT_STOPPED)
     agents.push({
       name,
       since: all[0]?.at ?? 0,
       running: !end,
+      ...(stuck && { stuck: /** @type {const} */ (true) }),
       ...(end && {
         outcome:
           end.state !== 'failed'
@@ -278,13 +286,9 @@ export function createStore(dir) {
   const warned = new Set()
 
   /**
-   * The review's envelope, as review.json holds it: its findings, if any
-   * are still inline, left as they are.
-   * @returns {Promise<Review>}
-   */
-  /**
    * The findings of `findings` a fix, a post or an issue holds, or whose
-   * discussion waits for its answer: one it cannot read may, so it counts.
+   * discussion waits for its answer. A discussion that is not JSON waits for
+   * nothing: no agent can read it either.
    * @param {{ id: string }[]} findings
    * @param {{ findings: Record<string, { state: string }> }} decisions
    */
@@ -306,15 +310,21 @@ export function createStore(dir) {
     try {
       text = await readFile(path.join(dir, 'discussions', `${id}.json`), 'utf8')
     } catch (error) {
-      return errorCode(error) !== 'ENOENT'
+      if (errorCode(error) === 'ENOENT') return false
+      throw error
     }
     try {
       return JSON.parse(text)?.messages?.at(-1)?.by === 'reviewer'
     } catch {
-      return true
+      return false
     }
   }
 
+  /**
+   * The review's envelope, as review.json holds it: its findings, if any
+   * are still inline, left as they are.
+   * @returns {Promise<Review>}
+   */
   async function readEnvelope() {
     let text
     try {
@@ -792,8 +802,8 @@ export function createStore(dir) {
     },
 
     /**
-     * The page's Pause: no new review agent starts; with `now`, Pause now,
-     * which ends those at work. Refused unless it runs, `reviewing` and not
+     * The page's Pause: no new review agent starts; with `now`, Pause now:
+     * the hooks end those at work. Refused unless it runs, `reviewing` and not
      * stopped. A pause keeps its time; Pause now while it pauses adds `now`.
      * @param {boolean} [now]
      * @returns {Promise<import('./format.mjs').Paused>}
@@ -856,8 +866,8 @@ export function createStore(dir) {
     /**
      * Reset a stopped review: back to `preparing`, its summary, its findings,
      * their decisions, runs and discussions, and its review agents' run files
-     * all gone. Refused unless stopped, and while anything is under way
-     * (`underWay`): Reset waits for it rather than cut it short.
+     * all gone. Refused unless stopped, and while a finding is under way
+     * (`underWay`): it is never cut short: asked again once it ends.
      * @returns {Promise<{ removed: string[] }>}
      */
     reset() {

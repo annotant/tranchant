@@ -79,9 +79,11 @@ try {
   try {
     await store.reset()
   } catch (error) {
-    // A fix started between the check and the reset: the review stays as it was.
-    await writeWhole(planFile, plan)
-    if (chose) await rm(choices, { force: true })
+    // A fix started between the check and the reset: refused, the review as it was, its plan too.
+    if (error instanceof StoreRefusal) {
+      await writeWhole(planFile, plan)
+      if (chose) await rm(choices, { force: true })
+    }
     throw error
   }
   console.log(`RESET ${planFile}`)

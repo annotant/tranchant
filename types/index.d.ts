@@ -37,7 +37,8 @@ export type Lens = {
  */
 export type ReviewJob =
   | { kind: 'summarizer' }
-  | { kind: 'reviewer'; lens: Lens }
+  /** `again`: queued again after Pause now, its findings so far landed. */
+  | { kind: 'reviewer'; lens: Lens; again?: true }
   | { kind: 'verifier'; id: string }
   | { kind: 'discusser'; id: string }
 
