@@ -1200,7 +1200,7 @@ test('Reset waits for a fix under way on a stopped review, and says which', asyn
   })
   expect(reset.disabled).toBe(true)
   expect(agents.textContent).toContain(
-    `Reset the review once it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+    `Reset is refused until it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
   )
 })
 
@@ -1231,7 +1231,7 @@ test('Stop and reset waits for a question awaiting its answer, Stop the review d
       .disabled,
   ).toBe(false)
   expect(confirm.textContent).toContain(
-    `Stop and reset once it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+    `Stop and reset is refused until it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
   )
 })
 
@@ -1258,7 +1258,7 @@ test('a review agent the hooks could not stop shows running on a stopped review,
       .disabled,
   ).toBe(true)
   expect(agents.textContent).toContain(
-    'Reset the review once it ends: rv-bugs, still running: Tranchant could not stop it.',
+    'Reset is refused until it ends: rv-bugs, still running: Tranchant could not stop it.',
   )
 })
 

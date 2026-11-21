@@ -1106,7 +1106,7 @@ async function handle(req, res) {
       await Promise.all([
         store.readAll(),
         store.runs(),
-        readReviewAgents(dir),
+        readReviewAgents(dir, undefined, { since: SERVED_SINCE }),
         readDiscussions(dir),
         currentHead(),
         readLensesStep(),
@@ -1579,9 +1579,9 @@ async function handle(req, res) {
     const input = await readJson(req)
     if (input?.reset !== undefined && typeof input.reset !== 'boolean')
       return send(res, 400, { error: 'reset is true or false' })
-    // Stop and reset, with a fix or an answer under way: refused whole, the review still runs.
-    const busy = input?.reset === true ? await store.underWay() : []
-    if (busy.length) return send(res, 409, { error: `reset refused: ${busyText(busy)}` })
+    // Stop and reset, with a fix, an answer or a stuck agent under way: refused whole, the review still runs.
+    const refused = input?.reset === true ? await resetRefusal() : undefined
+    if (refused) return send(res, refused.status, { error: refused.error })
     return controlReview(res, async () => {
       const stopped = await store.halt()
       print(`HALT ${review.id}`)
@@ -1599,13 +1599,8 @@ async function handle(req, res) {
       Date.now() - resetAsked.since < RESET_WAIT_MS
     )
       return send(res, 409, { error: 'the review is being reset: wait for it' })
-    const busy = await store.underWay()
-    if (busy.length) return send(res, 409, { error: `reset refused: ${busyText(busy)}` })
-    const stuck = (await readReviewAgents(dir)).filter((one) => one.stuck)
-    if (stuck.length)
-      return send(res, 409, {
-        error: `reset refused: ${stuck.map((one) => one.name).join(', ')} still running, TaskStop did not end it`,
-      })
+    const refused = await resetRefusal()
+    if (refused) return send(res, refused.status, { error: refused.error })
     askReset(latest.stopped.at)
     return send(res, 200, { ok: true })
   }
@@ -1636,6 +1631,37 @@ let asked
  */
 let resetAsked
 const RESET_WAIT_MS = 30_000
+
+/** When this server started: an agent noted stuck before it ended with the session that ran it. */
+const SERVED_SINCE = Date.now()
+
+/**
+ * Why a reset is refused now: a finding under way (409), a review agent the
+ * hooks could not stop in this session (409; a discussing agent belongs to
+ * its finding), or a discussion it cannot read (500, its reason).
+ * @returns {Promise<{ status: number, error: string } | undefined>}
+ */
+async function resetRefusal() {
+  let busy
+  try {
+    busy = await store.underWay()
+  } catch (error) {
+    return {
+      status: 500,
+      error: `reset refused: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+  if (busy.length) return { status: 409, error: `reset refused: ${busyText(busy)}` }
+  const stuck = (await readReviewAgents(dir, undefined, { since: SERVED_SINCE })).filter(
+    (one) => one.stuck && !one.name.startsWith('ds-'),
+  )
+  if (stuck.length)
+    return {
+      status: 409,
+      error: `reset refused: ${stuck.map((one) => one.name).join(', ')} still running, TaskStop did not end ${stuck.length > 1 ? 'them' : 'it'}`,
+    }
+  return undefined
+}
 
 /** RESET for the stop at `at`. @param {string} at */
 function askReset(at) {

@@ -79,7 +79,7 @@ try {
   try {
     await store.reset()
   } catch (error) {
-    // A fix started between the check and the reset: refused, the review as it was, its plan too.
+    // Refused (a fix started since the check): nothing removed, the plan put back. Any other error may come after some files went: the plan waits for a reset retried.
     if (error instanceof StoreRefusal) {
       await writeWhole(planFile, plan)
       if (chose) await rm(choices, { force: true })

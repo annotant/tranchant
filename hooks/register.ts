@@ -1038,12 +1038,18 @@ async function stopServing($: $) {
   for (const [id, worker] of running)
     if (await endWorker($, id, worker, '/tranchant stop')) fixes += 1
   await showStatus($)
-  if (!titles.length && !running.length && !reviewing)
+  const left = reviewing.left + running.length - fixes
+  if (!titles.length && !running.length && !reviewing.ended && !left)
     return 'Tranchant is not serving any review in this session.'
   return [
     ...(titles.length ? [`Tranchant stopped serving ${titles.join(', ')}.`] : []),
-    ...(reviewing ? [`Ended ${reviewing} agent(s) reviewing.`] : []),
+    ...(reviewing.ended ? [`Ended ${reviewing.ended} agent(s) reviewing.`] : []),
     ...(fixes ? [`Ended ${fixes} agent(s) at work on fixes.`] : []),
+    ...(left
+      ? [
+          `${left} agent(s) still running: TaskStop did not end them, they run until their turn ends.`,
+        ]
+      : []),
   ].join(' ')
 }
 
@@ -1267,7 +1273,8 @@ async function workerDone($: $, agent: string, answer: string) {
 
 /**
  * Review agents being started, by key: `end` once a stop came meanwhile, which
- * ends each once started; `requeue` (Pause now) queues it again first.
+ * starts none still loading and ends one already spawning; `requeue` (Pause
+ * now) queues it again too.
  */
 const startingReview = new Map<
   string,
@@ -1424,7 +1431,7 @@ function reviewPrompt($: $, review: Review, job: ReviewJob) {
   ].join('\n')
 }
 
-/** A reviewer run again after Pause now: the run it interrupted added findings already. */
+/** A reviewer run again after Pause now: the run it interrupted may have added findings already. */
 const AGAIN =
   'This lens ran before and was interrupted: the findings whose `lens` is yours in REVIEW/findings/ are its own, already added. Read them first, add none of them again, and number yours after the highest of their ids.'
 
@@ -1515,10 +1522,21 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
   // Off the queue, and not yet an agent: Pause now and Stop find it here, from now on.
   startingReview.set(key, { dir, since: Date.now(), kind })
   const loaded = await loadReview($, dir).catch((error: unknown) => message(error))
-  const early = startingReview.get(key)?.end
+  // A stop or a pause that came while it loaded, or while it left the queue: no agent starts.
+  const run = kind === 'discusser' ? undefined : (await read($, reviewRuns))[dir]
+  const early =
+    startingReview.get(key)?.end ??
+    (kind === 'discusser'
+      ? undefined
+      : !run
+        ? 'stop'
+        : run.paused
+          ? 'requeue'
+          : undefined)
   if (early) {
     startingReview.delete(key)
     if (early === 'requeue') await requeue($, dir, [job])
+    else if (job.kind === 'discusser') await unanswered($, dir, job.id)
     return
   }
   if (typeof loaded === 'string') {
@@ -1587,10 +1605,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     ...(lensModel && { lensModel }),
     job,
   }
-  await setReviewAgent($, key, one)
-  // Recorded: from now on Pause now and Stop find it among the agents.
-  const meanwhile = startingReview.get(key)
-  startingReview.delete(key)
+  // Its start before it is recorded: an end written meanwhile always comes after it.
   await reviewNote($, one, agent, [
     {
       at: Date.now(),
@@ -1605,6 +1620,10 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
       model,
     },
   ])
+  await setReviewAgent($, key, one)
+  // Recorded: Pause now and Stop find it among the agents; one that came while it started ends it here.
+  const meanwhile = startingReview.get(key)
+  startingReview.delete(key)
   await debug($, `${tag(name)}: agent ${agent} started`)
   if (!meanwhile?.end) return
   const cut = await endReviewAgent(
@@ -1614,7 +1633,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     'stopped',
     meanwhile.end === 'requeue' ? INTERRUPTED : 'Stopped',
   )
-  // Not ended, it finishes its job: queued again, it would run twice.
+  // Not ended here (it runs on, or Pause now ended it first): queued again, it would run twice.
   if (cut && meanwhile.end === 'requeue') await requeue($, dir, [againOf(job)])
 }
 
@@ -1629,19 +1648,31 @@ async function endReviewAgent(
   how: 'ended' | 'stopped',
   label: string,
 ) {
+  const ours = (now: ReviewAgent | undefined) => !!now?.running && now.agent === one.agent
+  // Ended by another path meanwhile (Pause now while it was recorded): its end is written already.
+  if (!ours((await read($, reviewAgents))[key])) return false
   const failed = how === 'stopped' ? await stopAgent($, one.agent) : undefined
   if (failed !== undefined) {
     $.ui.toast(
       `Tranchant could not stop ${tag(one.name)} (${one.agent}): ${short(failed, 200)}. It runs until its turn ends.`,
     )
-    // The page reads it: the agent shown running, and Reset refused, until its end step.
+    // The server reads it (`stuck`): the agent shown running, and Reset refused, until its end step.
     await reviewNote($, one, one.agent, [
       { at: Date.now(), kind: 'note', label: NOT_STOPPED, state: 'failed' },
     ])
     await debug($, `${tag(one.name)}: agent ${one.agent} not stopped: ${failed}`)
     return false
   }
-  await setReviewAgent($, key, { ...one, running: false })
+  let claimed = false
+  await update($, reviewAgents, (all) => {
+    const now = all[key]
+    if (!now || !ours(now)) return all
+    claimed = true
+    return { ...all, [key]: { ...now, running: false } }
+  })
+  // Two ends at once: the one that claimed it writes its end, once.
+  if (!claimed) return false
+  await showStatus($)
   await reviewNote($, one, one.agent, [
     { at: Date.now(), kind: 'end', label, state: how === 'stopped' ? 'failed' : 'done' },
   ])
@@ -1920,13 +1951,14 @@ async function stopReviewing($: $) {
     if (await endReviewAgent($, key, one, 'stopped', 'Stopped')) reviewersEnded += 1
   // Nothing more lands: the page stops showing the review in progress.
   for (const dir of runs) await finishReview($, dir, '/tranchant stop', true)
-  return reviewersEnded + cleanersEnded
+  const stoppedNow = reviewersEnded + cleanersEnded
+  return { ended: stoppedNow, left: running.length + cleaners.length - stoppedNow }
 }
 
 /** The `end` step's label of an agent Pause now ended: readReviewAgents reads it (lib/store.mjs's INTERRUPTED). */
 const INTERRUPTED = 'Interrupted'
 
-/** The note of an agent TaskStop did not end: the server and the page read it (lib/store.mjs's NOT_STOPPED). */
+/** The note of an agent TaskStop did not end: the server reads it (lib/store.mjs's NOT_STOPPED). */
 const NOT_STOPPED = 'Could not be stopped: runs until its turn ends'
 
 /** Review `dir`'s agents at work that its controls end: the discussing agents belong to their findings. */

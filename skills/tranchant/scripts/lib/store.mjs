@@ -181,7 +181,8 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
  * One review agent, the summary agent (`sm-summary`), a lens's reviewer
  * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until the `end` after its last `start`.
  * `interrupted`: Pause now ended it, and it runs again from the start on Resume.
- * `stuck`: running, though the hooks' TaskStop did not end it: a reset is refused until its end.
+ * `stuck`: running, though the hooks' TaskStop did not end it, since `since`: a reset is refused until its end.
+ * A note older than the server's session is not: the agent ended with the session that ran it.
  * @typedef {{ name: string, running: boolean, stuck?: true, outcome?: 'done' | 'failed' | 'interrupted', steps: Step[] }} ReviewAgent
  */
 
@@ -195,9 +196,10 @@ const NOT_STOPPED = 'Could not be stopped: runs until its turn ends'
  * The review agents of the review, in the order they started.
  * @param {string} dir The review folder.
  * @param {number} [limit] The last steps of each.
+ * @param {{ since?: number }} [options] `since`: when this session's server started, in ms.
  * @returns {Promise<ReviewAgent[]>}
  */
-export async function readReviewAgents(dir, limit = PROGRESS_SHOWN) {
+export async function readReviewAgents(dir, limit = PROGRESS_SHOWN, { since = 0 } = {}) {
   const names = await readdir(path.join(dir, 'reviewers')).catch(() => [])
   /** @type {(ReviewAgent & { since: number })[]} */
   const agents = []
@@ -210,7 +212,10 @@ export async function readReviewAgents(dir, limit = PROGRESS_SHOWN) {
     const run = all.slice(Math.max(last, 0))
     const end = run.findLast((step) => step.kind === 'end')
     const stuck =
-      !end && run.some((step) => step.kind === 'note' && step.label === NOT_STOPPED)
+      !end &&
+      run.some(
+        (step) => step.kind === 'note' && step.label === NOT_STOPPED && step.at >= since,
+      )
     agents.push({
       name,
       since: all[0]?.at ?? 0,
@@ -288,7 +293,7 @@ export function createStore(dir) {
   /**
    * The findings of `findings` a fix, a post or an issue holds, or whose
    * discussion waits for its answer. A discussion that is not JSON waits for
-   * nothing: no agent can read it either.
+   * nothing: no agent can read it either; one it cannot read throws, its reason said.
    * @param {{ id: string }[]} findings
    * @param {{ findings: Record<string, { state: string }> }} decisions
    */
@@ -314,7 +319,9 @@ export function createStore(dir) {
       throw error
     }
     try {
-      return JSON.parse(text)?.messages?.at(-1)?.by === 'reviewer'
+      const last = JSON.parse(text)?.messages?.at(-1)
+      // A change asked for waits for its fix, not for an answer (lib/discussion.mjs's waitsForAnswer).
+      return last?.by === 'reviewer' && !last.change
     } catch {
       return false
     }
@@ -867,7 +874,7 @@ export function createStore(dir) {
      * Reset a stopped review: back to `preparing`, its summary, its findings,
      * their decisions, runs and discussions, and its review agents' run files
      * all gone. Refused unless stopped, and while a finding is under way
-     * (`underWay`): it is never cut short: asked again once it ends.
+     * (`underWay`): never cut short, the user resets again once it ends.
      * @returns {Promise<{ removed: string[] }>}
      */
     reset() {

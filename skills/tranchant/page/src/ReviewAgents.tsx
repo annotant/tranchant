@@ -333,6 +333,7 @@ export function ReviewAgents({
   const [busy, setBusy] = useState(false)
   if (!agents.length && !planned.length) return null
   const progress = progressOf(agents, findings, project, phase === 'done' ? [] : planned)
+  const ends = underWay.length + stuck.length > 1 ? 'they end' : 'it ends'
   const waitsFor =
     [
       underWay.length &&
@@ -440,7 +441,7 @@ export function ReviewAgents({
           disabled={busy || !!waitsFor}
           title={
             waitsFor
-              ? `Once it ends: ${waitsFor}`
+              ? `Refused until ${ends}: ${waitsFor}`
               : 'Delete the findings and go back to Ready to start, the lenses built'
           }
           onClick={() => void control('reset')}
@@ -554,7 +555,7 @@ export function ReviewAgents({
               disabled={busy || !!waitsFor}
               title={
                 waitsFor
-                  ? `Once it ends: ${waitsFor}`
+                  ? `Refused until ${ends}: ${waitsFor}`
                   : 'Delete the findings too, and go back to Ready to start'
               }
               onClick={() => void control('haltReset')}
@@ -571,7 +572,7 @@ export function ReviewAgents({
             </button>
             <span className="tr-muted">
               {waitsFor
-                ? `Stop and reset once it ends: ${waitsFor}. A fix already made stays on the working tree.`
+                ? `Stop and reset is refused until ${ends}: ${waitsFor}. A fix already made stays on the working tree.`
                 : 'A fix under way keeps running, and a fix already made stays on the working tree.'}
             </span>
           </div>
@@ -592,7 +593,7 @@ export function ReviewAgents({
       {(paused || phase === 'stopped') && (
         <p className="tr-muted tr-rp-body">
           {phase === 'stopped'
-            ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. ${waitsFor ? `Reset the review once it ends: ${waitsFor}.` : 'Reset the review to run it again from Ready to start.'}`
+            ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. ${waitsFor ? `Reset is refused until ${ends}: ${waitsFor}.` : 'Reset the review to run it again from Ready to start.'}`
             : `Paused: the ${findingCount} below are yours to settle while no reviewer runs.`}
         </p>
       )}

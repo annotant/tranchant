@@ -189,7 +189,7 @@ the review by itself**, on by default, does the same for every review when off;
 While it runs, the page's progress panel has **Pause** (no new agent starts;
 **Pause now** ends those at work, which run again on **Resume**) and **Stop
 the review** (confirmed inline; no Resume, the findings stay to settle), then
-**Reset the review**, back to **Start the review** with the same lenses and
+**Reset the review**, back to **Start the review** with the lenses it ran on and
 no finding left. Pause and Stop never touch a fix, a discussion or a post
 under way; Reset is refused until they end.
 A lens whose globs the change does not touch is skipped. Three review agents

@@ -2897,6 +2897,19 @@ test('Reset on a review stopped prints RESET, then waits for it before asking ag
         state: 'failed',
       }),
   )
+  // Noted before this server's session: the agent ended with the session that ran it.
+  assert.equal(
+    (await json(await fetch(`${server.base}/api/review`))).reviewers[0].stuck,
+    undefined,
+  )
+  await writeFile(
+    runFile,
+    `${await readFile(runFile, 'utf8')}${line({ at: Date.now(), kind: 'note', label: 'Could not be stopped: runs until its turn ends', state: 'failed' })}`,
+  )
+  assert.equal(
+    (await json(await fetch(`${server.base}/api/review`))).reviewers[0].stuck,
+    true,
+  )
   const stuck = await reset()
   assert.equal(stuck.status, 409)
   assert.match((await json(stuck)).error, /rv-bugs still running/)

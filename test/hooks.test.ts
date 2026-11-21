@@ -1772,7 +1772,9 @@ test('an agent TaskStop does not end runs on: said, not queued again, and Reset 
     'Tranchant could not stop rv-bugs (a2): the task is busy. It runs until its turn ends.',
   )
   // Its run file says so: the page shows it running, the server refuses Reset.
-  const stuck = w.notes.find((one) => one.stdin.includes('Could not be stopped'))
+  const stuck = w.notes.find((one) =>
+    one.stdin.includes('"label":"Could not be stopped: runs until its turn ends"'),
+  )
   expect(stuck?.argv.slice(0, 2)).toEqual(['--reviewer', 'rv-bugs'])
   // Resume runs the two it ended again, told their findings landed; never a second rv-bugs.
   await w.print('RESUME rev-1')
@@ -1818,7 +1820,27 @@ test("a fix's agent TaskStop does not end keeps running and its place", async ($
   expect(w.spawned).toHaveLength(3)
   const stopped = await $.command.run(command('stop'))
   expect(stopped.text).toBe(
-    'Tranchant stopped serving Classification overview. Ended 2 agent(s) at work on fixes.',
+    'Tranchant stopped serving Classification overview. Ended 2 agent(s) at work on fixes. 1 agent(s) still running: TaskStop did not end them, they run until their turn ends.',
+  )
+  await w.exit(0)
+})
+
+test('Pause now frees its places too: a question waiting for one gets its agent, no reviewer', async ($, on) => {
+  const w = world(on)
+  await review($, w)
+  await w.print('DISCUSS f-01')
+  expect(w.spawned).toHaveLength(3)
+  await w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
+  expect(w.spawned.slice(3).map((one) => one.type)).toEqual(['tranchant:ds-f-01-rev-1'])
+  await w.exit(0)
+})
+
+test('/tranchant stop says the review agents it could not stop', async ($, on) => {
+  const w = world(on, { stopRefused: ['a2'] })
+  await review($, w)
+  const stopped = await $.command.run(command('stop'))
+  expect(stopped.text).toBe(
+    'Tranchant stopped serving Classification overview. Ended 2 agent(s) reviewing. 1 agent(s) still running: TaskStop did not end them, they run until their turn ends.',
   )
   await w.exit(0)
 })

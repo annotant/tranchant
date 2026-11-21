@@ -221,6 +221,18 @@ test('a discussion that is not JSON waits for nothing: the reset removes it', as
   assert.ok(!existsSync(path.join(dir, 'discussions')))
 })
 
+test('a change asked for in a discussion waits for its fix, not for an answer', async (t) => {
+  const { dir, store } = await reviewRun(t)
+  await mkdir(path.join(dir, 'discussions'), { recursive: true })
+  await writeFile(
+    path.join(dir, 'discussions', 'f-01.json'),
+    JSON.stringify({
+      messages: [{ by: 'reviewer', text: 'Do it.', at: 'x', change: true }],
+    }),
+  )
+  assert.deepEqual(await store.underWay(), [])
+})
+
 test('an agent the hooks could not stop reads stuck until its end', async (t) => {
   const { dir } = await reviewRun(t)
   const file = path.join(dir, 'reviewers', 'rv-bugs.jsonl')
@@ -237,6 +249,8 @@ test('an agent the hooks could not stop reads stuck until its end', async (t) =>
       step({ at: 3, kind: 'note', label: 'still reading', state: 'done' }),
   )
   assert.equal((await readReviewAgents(dir))[0]?.stuck, true)
+  // Read by a server started after the note: its session, and the agent, are gone.
+  assert.equal((await readReviewAgents(dir, 50, { since: 10 }))[0]?.stuck, undefined)
   await writeFile(
     file,
     `${await readFile(file, 'utf8')}${step({ at: 4, kind: 'end', label: 'Ended', state: 'done' })}`,

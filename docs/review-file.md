@@ -457,22 +457,22 @@ until they end.
   `Interrupted` (`outcome: "interrupted"` in `/api/review`), and the page
   says *interrupted · runs again on Resume*. Once none runs: *Review
   paused*. **Resume**, paused or pausing, starts the queue where it stopped;
-  with nothing left, the review completes. A reviewer queued again is told
-  its findings so far landed already (`again`), and adds none of them again.
+  with nothing left, the review completes. A reviewer queued again is told,
+  in its prompt, that the findings of its lens landed already: to add none of
+  them again, and to number its own after theirs.
 - **Stop the review**, paused or not, asks first, inline: **Keep it
   running** (*Keep it paused*), **Stop the review** or **Stop and reset**. It
   writes `stopped`: the agents at work end now, the queued ones never start,
   there is no Resume, and the hooks complete the review. The lenses left are
-  *not covered*; the findings that landed stay to read and settle. Stop and
-  Pause now free the agents' places: a question waiting for one gets its
-  agent.
+  *not covered*; the findings that landed stay to read and settle. Stop,
+  Pause now and Reset free the agents' places: a question, or another
+  review's queued agent, gets one (an agent TaskStop did not end keeps its).
 - **Reset the review** (and **Stop and reset**), the one control of a
   stopped review, with no confirmation (the stop had one): `reset.mjs`
-  removes its findings and their decisions, keeps its plan file, which
-  `lenses.mjs --replan` makes again from the settings as they stand, and
-  brings the page to **Ready to start the review**
-  ([waiting to start](#waiting-to-start), `wait: "reset"`), the lenses it
-  ran on turned on. **Start the review** runs it again from scratch, on the
+  removes its findings and their decisions, keeps its plan file
+  (`wait: "reset"`), which `lenses.mjs --replan` rebuilds from the settings
+  as they stand, and brings the page to **Ready to start the review**
+  ([waiting to start](#waiting-to-start)), the lenses it ran on turned on. **Start the review** runs it again from scratch, on the
   same commits (`headSha`): a fix already made stays on the working tree,
   where the reviewers read the files, but in the diff only once committed and
   reviewed again. It removes everything (findings, decisions, runs,
@@ -484,7 +484,9 @@ until they end.
 An agent the hooks' TaskStop does not end runs on: a toast says so, its run
 file gets a note `Could not be stopped: runs until its turn ends`
 (`stuck: true` in `/api/review`, shown running), Pause now does not queue it
-again, and Reset is refused (409, and by the hooks) until its `end` step.
+again, it keeps its place, and Reset is refused (409, and by the hooks) until
+its `end` step. A note older than the server's session counts for nothing:
+the agent ended with the session that ran it.
 
 `/tranchant stop` still ends everything, a paused review's agents included.
 
@@ -707,7 +709,7 @@ locks and show no progress.
 | `GET /api/account`    | `{ username, tool }`: the account `tool` posts as, `glab api user`'s `username` or `gh api user`'s `login`, run from `project` and kept once known; `null` when the tool cannot say (not installed, not logged in, an error), asked again next time. `tool` is `?tool=glab` or `?tool=gh` when the query names one (the batch bar asks for glab's: MR comments go through glab), else the settings' `postWith`, or with `auto` `gh` on a GitHub tracker and `glab` otherwise. The page names it in a post's confirmation, or says "your glab account", and in the Settings. |
 | `GET /api/settings`, `PUT /api/settings` | The user's settings file, read and written, with the recipe in force for the review's project, every lens that could run on it and the lenses being cleaned: see [the settings file](settings.md). |
 | `POST /api/review/start`, `POST /api/review/build` | `{ lenses: { <name>: true \| false }, remember, group? }`: on a review `preparing` whose `lenses.json` is `waiting` (else 409), the page's choices to `choices.json`, then `START` or `BUILD`. `group`, a group's name or `null` for every lens that is on, plans the lenses again with it; Start with a group other than the one `lenses.json` names answers 409. With `remember`, Start saves them first as Settings › Lenses does, or in the group the review runs; a settings or groups file it cannot read, a lens it cannot change, or a group left with no lens answers 409. 400 for unsound choices. |
-| `POST /api/review/pause`, `/resume`, `/halt`, `/reset` | The review's controls ([pause, stop and reset](#pause-stop-and-reset)), on a `/tranchant review` only. `pause` with `{ now? }` (Pause now) writes `paused` and prints `PAUSE` or `PAUSE_NOW`; `resume` removes it and prints `RESUME`; `halt` with `{ reset? }` writes `stopped` and prints `HALT`, then with `reset` `RESET`; each answers `{ review }`, its envelope, and 409 unless the review is `reviewing` and not stopped (`resume`: paused). `reset`, on a stopped review only, prints `RESET` and answers `{ ok: true }`; 409 for the same stop for 30 seconds, the hooks' reset still at work, then taken again. `reset`, and `halt` with `reset` (refused whole, nothing stopped), answer 409 while a finding is under way (`store.underWay()`), naming it; `reset` too while a review agent is `stuck`. |
+| `POST /api/review/pause`, `/resume`, `/halt`, `/reset` | The review's controls ([pause, stop and reset](#pause-stop-and-reset)), on a `/tranchant review` only. `pause` with `{ now? }` (Pause now) writes `paused` and prints `PAUSE` or `PAUSE_NOW`; `resume` removes it and prints `RESUME`; `halt` with `{ reset? }` writes `stopped` and prints `HALT`, then with `reset` `RESET`; each answers `{ review }`, its envelope, and 409 unless the review is `reviewing` and not stopped (`resume`: paused). `reset`, on a stopped review only, prints `RESET` and answers `{ ok: true }`; 409 for the same stop for 30 seconds, the hooks' reset still at work, then taken again. `reset`, and `halt` with `reset` (refused whole, nothing stopped), answer 409 while a finding is under way (`store.underWay()`), or a review agent other than a discussing one is `stuck`, naming them, and 500 with the reason when a discussion cannot be read. |
 | `GET /api/lens/prompt`, `POST /api/lens/*` | The lenses the user adds, one by one: see [the settings file's routes](settings.md#the-routes). |
 | `GET /api/tracker`    | `{ kind, web, prefix }`: where the project's issues go, from its `origin` remote, as `issue.mjs` reads it (both name the same project): `kind` `github` for `github.com`, `*.ghe.com` and `github.<domain>` hosts, `gitlab` for a host that names gitlab or any host when the review has an `mr`, and the settings' `postWith` (`glab` or `gh`) for a host neither names (one the other forge owns is refused, with the reason); an SSH endpoint (`ssh.github.com`, `altssh.gitlab.com`) or an account alias (`github.com-work`) names the forge itself. `web` the project's page; `prefix` the project's folder in its repository (the page links an issue's anchor to `<web>/blob/<ref>/<prefix><path>#L<line>`, `/-/blob/` on GitLab, `<ref>` the commit reviewed when it is the MR's head, else the branch). `{ kind: null, reason }` when there is none (no `origin`, not a url, another forge, git failing); a failure is read again on the next request. |
 | `GET /api/diff`       | `{ base, head, files, diff }`: the change's unified diff, `git diff <base>...<headSha>` run in `project` (`baseSha..headSha` with `mr.diffRefs` at the review's `headSha`; on `theirs`, refs at another head are refused, on `ours` the branch's own range is used), its paths relative to `project` like the findings', and its files, each `{ path, oldPath?, additions, deletions, binary }`. Computed once; a failure is computed again on the next request. Answers 409 with the reason when git is missing, `project` is not a git repository, a commit is not there, `base` is not a revision, the diff is empty or past `TRANCHANT_MAX_DIFF_MIB` (32), or git fails; the server logs git's words on stderr, and the page shows its list view. |
