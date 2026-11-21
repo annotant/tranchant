@@ -200,7 +200,7 @@ async function stopAgent(
   // The list unread: it may still run.
   if (!agents) return { failed }
   const agent = agents.find((one) => one.id === id)
-  // Completed: its work done. Gone from the list, failed or killed: one that ended on its own left its turn's end.
+  // Completed: its work done. Gone from the list, failed or killed: none finished (one that did left its turn's end).
   if (agent?.status === 'completed') return { finished: true }
   return agent && ALIVE.has(agent.status) ? { failed } : { stopped: true }
 }
@@ -1709,8 +1709,8 @@ async function endReviewAgent(
           : { ...now, running: false },
     }
   })
-  // Another end claimed it first (its own turn's end, a stop under way): that one writes the step.
   if (kept) return 'kept'
+  // Another end claimed it first (its own turn's end, a stop under way): that one writes the step.
   if (!claimed) return 'gone'
   const stop = how === 'stopped' ? await stopAgent($, one.agent) : undefined
   let turned = false
@@ -2235,33 +2235,52 @@ const crashOf = (stderr: string) =>
 
 /**
  * After a reload, the review agents at work get their hooks back. A stop the
- * reload cut short is not retried: a turn's end it kept ends the agent, the
- * list tells the rest (alive, it runs on; else it ends, stopped, and Pause
- * now's queues it again).
+ * reload cut short: a turn's end it kept ends the agent; else the list tells.
+ * Not alive (or gone), it ends through endReviewAgent (completed: finished;
+ * else stopped, queued again on a paused run). Alive, it runs on, said stuck
+ * when its review's run is gone (Stop the review). The list unread, it runs on.
  */
 async function registerReviewAgentsAgain($: $) {
   const cut = Object.entries(await read($, reviewAgents)).filter(
     ([, one]) => one.stopping,
   )
-  const agents = cut.length ? await $.agent.list().catch(() => undefined) : undefined
+  const agents = cut.length
+    ? await $.agent.list().catch(async (error: unknown) => {
+        await debug(
+          $,
+          `after a reload, the agent list could not be read: ${message(error)}`,
+        )
+        return undefined
+      })
+    : undefined
   for (const [key, cutShort] of cut) {
     const { stopping: _stopping, turnEnded, ...one } = cutShort
     await update($, reviewAgents, (all) =>
       all[key]?.agent === one.agent ? { ...all, [key]: one } : all,
     )
     const listed = agents?.find((agent) => agent.id === one.agent)
+    const run = (await read($, reviewRuns))[one.review]
+    // A job queued again only for Pause now's run; one with no job (an older version's) cannot run again.
+    const again = !!run?.paused && !!one.job
     if (turnEnded) await endReviewAgent($, key, one, 'ended', 'Ended')
     else if (agents && !(listed && ALIVE.has(listed.status))) {
-      const paused = !!(await read($, reviewRuns))[one.review]?.paused
       const outcome = await endReviewAgent(
         $,
         key,
         one,
         'stopped',
-        paused ? INTERRUPTED : 'Stopped',
+        again ? INTERRUPTED : 'Stopped',
       )
-      if (outcome === 'ended' && paused && one.job)
+      if (outcome === 'ended' && again && one.job)
         await requeue($, one.review, [againOf(one.job)])
+    } else if (!run) {
+      // Its review stopped (its run gone), and it runs on: said, as a TaskStop that failed.
+      $.ui.toast(
+        `Tranchant could not finish stopping ${tag(one.name)} (${one.agent}): a reload cut its stop short. It runs until its turn ends.`,
+      )
+      await reviewNote($, one, one.agent, [
+        { at: Date.now(), kind: 'note', label: NOT_STOPPED, state: 'failed' },
+      ])
     }
     void checkComplete($, one.review)
   }
@@ -2546,6 +2565,8 @@ async function buildAndQueue(
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
+      // A Pause clicked while the lenses were built holds the queue.
+      ...(all[dir]?.paused && { paused: true as const }),
       // The summary first: the page shows it while the lenses still run.
       queue: [
         { kind: 'summarizer' as const },

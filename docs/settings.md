@@ -104,7 +104,8 @@ cleaned again: its last version runs, said on the page, so a branch never
 rewrites the lens that reviews it. A cleaning that fails leaves the lens's
 last version running, said on the page, and is not tried again for the same
 source (Clean it again now does); a cleaning stopped by `/tranchant stop`
-counts as none (one whose turn ended meanwhile is checked as any). A source that cannot be found (a file gone, a plugin turned
+counts as none (one whose turn ended meanwhile, or that had completed, is
+checked as any). A source that cannot be found (a file gone, a plugin turned
 off) refuses the review, as a recipe's lens does. A review already running
 keeps the version it started with. A lens's files are its own even turned
 off: the `otherwise` lens never takes them, and one `otherwise` lens runs at

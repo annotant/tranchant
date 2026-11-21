@@ -269,7 +269,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
  * @property {string} [group] The group of lenses `/tranchant review` ran, when it ran one.
  * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
- * @property {Paused} [paused] While `reviewing`: the page's Pause; no new review agent starts.
+ * @property {Paused} [paused] While `reviewing`: the page's Pause; no agent of the review's queue starts.
  * @property {{ at: string }} [stopped] The page's Stop the review: its agents ended, no Resume; only Reset runs it again.
  * @property {Finding[]} findings At least one, unless the review is not `complete`.
  */

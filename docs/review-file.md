@@ -488,9 +488,10 @@ again, it keeps its place, and Reset is refused (409, and by the hooks) until
 its `end` step. A note older than the moment the Claude Code session that
 runs the server first served a review (the hooks pass it,
 `TRANCHANT_SESSION_SINCE`) counts for nothing: the agent ended with the
-session that ran it. An agent that ends on its own while it is stopped
-ended its work: its `end` says `Ended`, and Pause now does not queue it
-again.
+session that ran it. An agent whose turn ends while it is stopped, or that
+the list says completed, ended its work: its `end` says `Ended`, and Pause
+now does not queue it again; one that failed, was killed or is no longer
+listed ends stopped, and Pause now queues it again.
 
 `/tranchant stop` still ends everything it can, a paused review's agents
 included, and says how many agents TaskStop left running (a toast names each).
@@ -696,7 +697,7 @@ locks and show no progress.
 | `DISCUSS <id>`                                             | The reviewer asked about finding `id`: the hooks start its discussing agent. Again at start for each question still waiting. |
 | `CLEAN <id>`                                               | The page added a lens, or asked for one to be cleaned again: the hooks start cleaning `id`'s agent (`clean.mjs --start`). |
 | `START <review id>`, `BUILD <review id>`                   | The page's Start the review, or Build the lenses again, on a review waiting to start: the hooks run `lenses.mjs --start` or `--replan`. |
-| `PAUSE <review id>`, `PAUSE_NOW <review id>`, `RESUME <review id>` | The page's Pause, Pause now and Resume, `paused` written already (removed, for `RESUME`): the hooks start no review agent, end those at work and queue them again first, or start the queue again. |
+| `PAUSE <review id>`, `PAUSE_NOW <review id>`, `RESUME <review id>` | The page's Pause, Pause now and Resume, `paused` written already (removed, for `RESUME`): the hooks start no agent of its queue, end those at work and queue them again first, or start the queue again. |
 | `HALT <review id>`                                         | The page's Stop the review, `stopped` written already: the hooks end the review's agents, empty its queue and complete it. |
 | `RESET <review id>`                                        | The page's Reset the review, or Stop and reset after `HALT`: the hooks run `reset.mjs`, then `lenses.mjs --check --replan` on its plan; a review agent still running (TaskStop did not end it) refuses it, in a toast. |
 | `PORT_BUSY <port> is used by <owner>`                      | Could not listen.                                                                |

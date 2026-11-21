@@ -1198,6 +1198,38 @@ test('a review opened before its findings grows as they land, then completes', a
   }
 })
 
+test('a finding that lands again under its id after a reset prints LANDED again', async (t) => {
+  const { findings: landing } = await fixture('ours')
+  const imported = await importReview(t, 'ours', stateDir, {
+    id: 'live-reset-1',
+    status: 'reviewing',
+    verify: true,
+    findings: [landing[1]],
+  })
+  const file = path.join(imported.dir, 'review.json')
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...JSON.parse(await readFile(file, 'utf8')),
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  assert.equal(await server.nextLine('LANDED', 0), `LANDED ${landing[1].id}`)
+  const store = createStore(imported.dir)
+  await store.halt()
+  await store.reset()
+  await store.prepared([{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }])
+  const seen = server.output().length
+  const added = await run(
+    process.execPath,
+    [path.join(SCRIPTS, 'add.mjs'), '--review', imported.dir],
+    { input: JSON.stringify(landing[1]) },
+  )
+  assert.equal(added.stdout, `ADDED ${landing[1].id}\n`, added.stderr)
+  assert.equal(await server.nextLine('LANDED', seen), `LANDED ${landing[1].id}`)
+})
+
 test('a verified review prints LANDED once per finding, and serves its review agents', async (t) => {
   const { findings: landing } = await fixture('ours')
   const imported = await importReview(t, 'ours', stateDir, {

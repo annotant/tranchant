@@ -4,7 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { AgentOfferInput, CommandRunInput, EngineInterface, On } from 'claude-code'
 
-import type { Cleaning, ReviewAgent, Served } from '../types'
+import type { Cleaning, ReviewAgent, ReviewRun, Served } from '../types'
 
 type AgentSpec = Parameters<EngineInterface['agent']['register']>[0]
 
@@ -85,6 +85,8 @@ function world(
     seeded,
     seededCleanings,
     seededReviewAgents,
+    seededReviewRuns,
+    alsoListed = [],
     refusing,
     preparing = PREPARED,
     building = BUILT,
@@ -99,15 +101,15 @@ function world(
     env = {},
     commenting = { stdout: `INBOX ${INBOX}\n`, stderr: '' },
     stopRefused = [],
-    gone = [],
+    finishedAgents = [],
     statuses = {},
   }: {
     commenting?: { stdout: string; stderr: string }
     /** The agents TaskStop does not end: refused, and still running. */
     stopRefused?: string[]
     /** The agents the list says completed: TaskStop refused on one of them still ended it. */
-    gone?: string[]
-    /** Each agent's status in the list, besides completed (`gone`) and running; TaskStop errs on it. */
+    finishedAgents?: string[]
+    /** Each agent's status in the list, besides `finishedAgents` (completed) and running; TaskStop errs on it. */
     statuses?: Record<string, 'failed' | 'killed'>
     spawnRefused?: string
     completeSays?: string
@@ -118,6 +120,10 @@ function world(
     seededCleanings?: Record<string, Cleaning>
     /** The review agents `$.state` holds, as after a reload. */
     seededReviewAgents?: Record<string, ReviewAgent>
+    /** The review runs `$.state` holds, as after a reload. */
+    seededReviewRuns?: Record<string, ReviewRun>
+    /** Agents the list shows running besides those spawned here: started before a reload. */
+    alsoListed?: string[]
     refusing?: string
     preparing?: string
     building?: string | ((argv: string[]) => string)
@@ -349,7 +355,7 @@ function world(
   })
   const stopped: string[] = []
   // The agents whose loop ended: the list says completed, and TaskStop errs on them.
-  const ended = new Set(gone)
+  const ended = new Set(finishedAgents)
   // Held, a TaskStop answers only once released.
   let stopsHeld: Promise<void> | undefined
   let releaseStops: () => void = ignore
@@ -377,15 +383,23 @@ function world(
     []
   // A spawn the plugin makes, answered here, carries no id: the list has it.
   on('agent.list', () => ({
-    value: spawned.map((agent, index) => ({
-      id: `a${index + 1}`,
-      name: agent.name,
-      type: agent.type,
-      description: '',
-      status:
-        statuses[`a${index + 1}`] ??
-        (ended.has(`a${index + 1}`) ? ('completed' as const) : ('running' as const)),
-    })),
+    value: [
+      ...spawned.map((agent, index) => ({
+        id: `a${index + 1}`,
+        name: agent.name,
+        type: agent.type,
+        description: '',
+        status:
+          statuses[`a${index + 1}`] ??
+          (ended.has(`a${index + 1}`) ? ('completed' as const) : ('running' as const)),
+      })),
+      ...alsoListed.map((id) => ({
+        id,
+        type: 'tranchant:rv-bugs-rev-1',
+        description: '',
+        status: 'running' as const,
+      })),
+    ],
   }))
   // Held, a spawn answers only once released: an agent slow to start.
   let held: Promise<void> | undefined
@@ -406,6 +420,7 @@ function world(
   let seed = seeded
   let cleanSeed = seededCleanings
   let agentSeed = seededReviewAgents
+  let runSeed = seededReviewRuns
   on('state.get', (_$, e, next) =>
     seed && e.key === 'serving'
       ? { value: { value: seed, version: 1 } }
@@ -413,10 +428,13 @@ function world(
         ? { value: { value: cleanSeed, version: 1 } }
         : agentSeed && e.key === 'reviewAgents'
           ? { value: { value: agentSeed, version: 0 } }
-          : next(e),
+          : runSeed && e.key === 'reviewRuns'
+            ? { value: { value: runSeed, version: 0 } }
+            : next(e),
   )
   on('state.set', (_$, e, next) => {
     if (e.key === 'reviewAgents') agentSeed = undefined
+    if (e.key === 'reviewRuns') runSeed = undefined
     if (e.key === 'cleaning') cleanSeed = undefined
     if (e.key === 'serving') seed = undefined
     return next(e)
@@ -1026,8 +1044,9 @@ test('a reload serves the reviews again, without opening the browser', async ($,
 })
 
 /** A reviewer a reload found being stopped: `turnEnded` when its turn's end came meanwhile. */
-const stoppingAgent = (kept: boolean): Record<string, ReviewAgent> => ({
+const stoppingAgent = (kept: boolean, job = false): Record<string, ReviewAgent> => ({
   [`rv-bugs@${DIR}`]: {
+    ...(job && { job: { kind: 'reviewer' as const, lens: BUGS_LENS } }),
     agent: 'a9',
     name: 'rv-bugs',
     kind: 'reviewer',
@@ -1050,6 +1069,59 @@ test('a reload during a stop: a turn end it kept ends the agent, its work done',
   expect(ends).toHaveLength(1)
   expect(ends[0]?.stdin).toMatch(/"label":"Ended","state":"done"/)
   expect(w.stopped).toEqual([])
+})
+
+/** The bugs lens, as a reviewer's job holds it. */
+const BUGS_LENS = { name: 'bugs', prompt: '/lenses/bugs.md', paths: ['**'] }
+
+test('a reload during Pause now: an agent the list no longer has is interrupted, and runs again on Resume', async ($, on) => {
+  const w = world(on, {
+    seeded: { [DIR]: { review: DIR, project: ROOT } },
+    seededReviewAgents: stoppingAgent(false, true),
+    seededReviewRuns: { [DIR]: { queue: [], verifying: [], paused: true } },
+  })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  const started = $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  await w.print(READY)
+  await started
+  const ends = w.notes.filter((one) => one.stdin.includes('"kind":"end"'))
+  expect(ends.at(-1)?.stdin).toMatch(/"label":"Interrupted"/)
+  expect(w.spawned).toEqual([])
+  await w.print('RESUME rev-1')
+  expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:rv-bugs-rev-1'])
+  expect(w.spawned[0]?.prompt).toMatch(/This lens ran before and was interrupted/)
+})
+
+test('a reload during Stop the review: an agent still alive runs on, said stuck, and its turn ends it', async ($, on) => {
+  const w = world(on, { seededReviewAgents: stoppingAgent(false), alsoListed: ['a9'] })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.toasts).toContainEqual(
+    'Tranchant could not finish stopping rv-bugs (a9): a reload cut its stop short. It runs until its turn ends.',
+  )
+  expect(w.notes.at(-1)?.stdin).toMatch(
+    /"label":"Could not be stopped: runs until its turn ends"/,
+  )
+  await $.turn.complete(turnEnded('a9', 'Done.'))
+  await w.clock.settle()
+  expect(w.notes.at(-1)?.stdin).toMatch(/"label":"Ended","state":"done"/)
+})
+
+test('a reload during Pause now: an agent still alive finishes its work, nothing said', async ($, on) => {
+  const w = world(on, {
+    seededReviewAgents: stoppingAgent(false, true),
+    seededReviewRuns: { [DIR]: { queue: [], verifying: [], paused: true } },
+    alsoListed: ['a9'],
+  })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.notes).toEqual([])
+  await $.turn.complete(turnEnded('a9', 'Done.'))
+  await w.clock.settle()
+  expect(w.notes.at(-1)?.stdin).toMatch(/"label":"Ended","state":"done"/)
 })
 
 test('a reload during a stop: an agent the list no longer has ends, stopped', async ($, on) => {
@@ -1085,7 +1157,7 @@ test('/tranchant stop checks a cleaning whose turn ends during its stop as any, 
 test('/tranchant stop checks a cleaning that completed before it as any', async ($, on) => {
   const w = world(on, {
     checking: 'STALE {"name":"abac","scope":"local"}\n',
-    gone: ['a1'],
+    finishedAgents: ['a1'],
   })
   await review($, w)
   await $.command.run(command('stop'))
@@ -1933,7 +2005,7 @@ test('an agent TaskStop does not end runs on: said, not queued again, and Reset 
 })
 
 test('an agent that ended on its own while Pause now stopped it finished its work: not queued again', async ($, on) => {
-  const w = world(on, { gone: ['a2'] })
+  const w = world(on, { finishedAgents: ['a2'] })
   await review($, w)
   await w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
   expect(w.toasts.some((toast) => toast.includes('could not stop'))).toBe(false)
@@ -1957,7 +2029,10 @@ test('a turn that ends while Pause now waits on its TaskStop ends the agent once
   const paused = w.print('PAUSE rev-1', 'PAUSE_NOW rev-1')
   await w.clock.settle()
   w.finish('a1')
+  // Its report and its turn's end both come: its answer said once.
+  await peer($, w.spawned[0]?.name ?? '', 'Done.')
   await $.turn.complete(turnEnded('a1', 'Done.'))
+  expect(w.toasts.filter((toast) => toast === 'sm-summary: Done.')).toHaveLength(1)
   await w.releaseStops()
   await paused
   const ends = w.notes.filter(
@@ -2032,7 +2107,7 @@ test('Pause now on an agent being started that ends on its own: its work done, n
 })
 
 test('/tranchant stop starts no agent for a question asked again, its agent ended meanwhile', async ($, on) => {
-  const w = world(on, { gone: ['a1'] })
+  const w = world(on, { finishedAgents: ['a1'] })
   await open($, w)
   await w.print('DISCUSS f-01', 'DISCUSS f-01')
   expect(w.spawned).toHaveLength(1)

@@ -590,7 +590,7 @@ export function ReviewAgents({
           : each review keeps its group. Comparing their findings is still to come (#112).
         </p>
       )}
-      {(paused || phase === 'stopped') && (
+      {(phase === 'paused' || phase === 'stopped') && (
         <p className="tr-muted tr-rp-body">
           {phase === 'stopped'
             ? `Stopped: the ${findingCount} that landed stay below, to read and settle as usual, for as long as you want. ${waitsFor ? `Reset is refused until ${ends}: ${waitsFor}.` : 'Reset the review to run it again from Ready to start.'}`

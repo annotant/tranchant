@@ -220,7 +220,7 @@ export interface Review {
   sources?: { codeReview?: number; reviewPr?: number; both?: number }
   /** Findings land unverified and a verifier confirms each: `/tranchant review` sets it. */
   verify?: boolean
-  /** The page's Pause: no new review agent starts; `now` once Pause now ended those at work. */
+  /** The page's Pause: no agent of the review's queue starts; `now` once Pause now ended those at work. */
   paused?: { at: string; now?: true }
   /** The page's Stop the review: no Resume, only Reset the review. */
   stopped?: { at: string }
@@ -812,7 +812,11 @@ export const underWayIds = (
 ) =>
   review.findings
     .map((one) => one.id)
-    .filter((id) => UNDER_WAY.has(stateOf(records, id)) || isWaiting(discussions?.[id]))
+    .filter(
+      (id) =>
+        UNDER_WAY.has(stateOf(records, id)) ||
+        (isWaiting(discussions?.[id]) && !waitsForChange(discussions?.[id])),
+    )
 
 /** The reviewer's last message waits for the change it asked for. */
 export const waitsForChange = (discussion: Discussion | undefined) =>

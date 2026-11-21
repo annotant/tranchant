@@ -809,7 +809,7 @@ export function createStore(dir) {
     },
 
     /**
-     * The page's Pause: no new review agent starts; with `now`, Pause now:
+     * The page's Pause: no agent of the review's queue starts; with `now`, Pause now:
      * the hooks end those at work. Refused unless it runs, `reviewing` and not
      * stopped. A pause keeps its time; Pause now while it pauses adds `now`.
      * @param {boolean} [now]

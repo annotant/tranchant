@@ -747,7 +747,7 @@ export default function App() {
   const reviewing = isReviewing(review) && !review.stopped
   const phase = phaseOf(review, payload?.reviewers ?? [])
   const agents = (payload?.reviewers ?? []).flatMap((agent) => {
-    // An interrupted agent runs again once resumed (its lens queued meanwhile); ended without it, its lens is not covered.
+    // An interrupted agent runs again once resumed (a reviewer's lens shows queued meanwhile); ended without it, its lens is not covered.
     if (agent.outcome === 'interrupted' && phase === 'running') return []
     // One the hooks could not stop does run: shown so, until its end step.
     if (reviewing || agent.stuck) return [agent]
