@@ -83,8 +83,9 @@ export type ReviewAgent = {
   lensModel?: string
   /** What started it: queued again from the start when Pause now ends it. */
   job?: ReviewJob
-  /** TaskStop under way: still running, in its place; `turnEnded` once its turn's end came meanwhile. */
+  /** TaskStop under way: still running, in its place, until the stop reads what came meanwhile. */
   stopping?: true
+  /** While `stopping`: its turn's end came, so the stop ends it as finished. */
   turnEnded?: true
 }
 

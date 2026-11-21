@@ -181,9 +181,10 @@ const ignore = () => undefined
 const ALIVE = new Set(['pending', 'running', 'waiting', 'idle'])
 
 /**
- * Ends agent `id` with TaskStop: `stopped`, `finished` (TaskStop erred on an
- * agent the list says completed, or no longer lists), or `failed`, why it may
- * still run (alive in the list, or the list unread).
+ * Ends agent `id` with TaskStop: `stopped` (TaskStop ended it, or erred on one
+ * the list says failed or killed, or no longer lists), `finished` (it erred on
+ * one the list says completed), or `failed`, why it may still run (alive in
+ * the list, or the list unread).
  */
 async function stopAgent(
   $: $,
@@ -199,9 +200,9 @@ async function stopAgent(
   // The list unread: it may still run.
   if (!agents) return { failed }
   const agent = agents.find((one) => one.id === id)
-  // Completed, or dropped from the list as a subagent is seconds after: its work done.
-  if (!agent || agent.status === 'completed') return { finished: true }
-  return ALIVE.has(agent.status) ? { failed } : { stopped: true }
+  // Completed: its work done. Gone from the list, failed or killed: one that ended on its own left its turn's end.
+  if (agent?.status === 'completed') return { finished: true }
+  return agent && ALIVE.has(agent.status) ? { failed } : { stopped: true }
 }
 const skillDir = ($: $) => `${$.plugin.root}/skills/tranchant`
 /** A finding's id as the person reads it. */
@@ -1670,10 +1671,11 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
 
 /**
  * Ending a review agent: `ended` here (its turn's end, or stopped), `finished`
- * (it ended on its own while stopped, its work done), `gone` (another end
- * claimed it first), `stuck` (TaskStop did not end it).
+ * (it ended on its own while stopped, its work done), `kept` (its turn's end,
+ * kept for the stop under way), `gone` (another end claimed it first), `stuck`
+ * (TaskStop did not end it).
  */
-type EndOutcome = 'ended' | 'finished' | 'gone' | 'stuck'
+type EndOutcome = 'ended' | 'finished' | 'kept' | 'gone' | 'stuck'
 
 /**
  * A review agent ended, or was ended: its last step, and what comes next.
@@ -1688,19 +1690,27 @@ async function endReviewAgent(
 ): Promise<EndOutcome> {
   const ours = (now: ReviewAgent | undefined) => !!now?.running && now.agent === one.agent
   let claimed = false
+  let kept = false
   await update($, reviewAgents, (all) => {
     const now = all[key]
     if (!now || !ours(now)) return all
     // Being stopped, still running and in its place: its turn's end is kept for the stop to read.
-    if (now.stopping)
-      return how === 'ended' ? { ...all, [key]: { ...now, turnEnded: true } } : all
+    if (now.stopping) {
+      if (how !== 'ended' || now.turnEnded) return all
+      kept = true
+      return { ...all, [key]: { ...now, turnEnded: true as const } }
+    }
     claimed = true
     return {
       ...all,
-      [key]: how === 'stopped' ? { ...now, stopping: true } : { ...now, running: false },
+      [key]:
+        how === 'stopped'
+          ? { ...now, stopping: true as const }
+          : { ...now, running: false },
     }
   })
   // Another end claimed it first (its own turn's end, a stop under way): that one writes the step.
+  if (kept) return 'kept'
   if (!claimed) return 'gone'
   const stop = how === 'stopped' ? await stopAgent($, one.agent) : undefined
   let turned = false
@@ -1725,7 +1735,7 @@ async function endReviewAgent(
     await debug($, `${tag(one.name)}: agent ${one.agent} not stopped: ${failed}`)
     return 'stuck'
   }
-  // Its turn's end, or one that came while it was stopped: its work done, never queued again.
+  // Its turn's end, one that came while it was stopped, or TaskStop found it completed: its work done, never queued again.
   const finished = how === 'ended' || turned || (!!stop && 'finished' in stop)
   await showStatus($)
   await reviewNote($, one, one.agent, [
@@ -1931,9 +1941,13 @@ async function reviewAgentDone($: $, agent: string, answer: string) {
     return
   }
   if (!found.one.running) return
-  await endReviewAgent($, found.key, found.one, 'ended', 'Ended')
+  const outcome = await endReviewAgent($, found.key, found.one, 'ended', 'Ended')
+  // Its report and its turn's end both come here: the first one said it.
+  if (outcome === 'gone') return
   const said = answer.trim().split('\n')[0] ?? ''
   if (said) $.ui.toast(`${tag(found.one.name)}: ${short(said, 200)}`)
+  // Kept for the stop under way, which ends it and frees its place.
+  if (outcome === 'kept') return
   await pumpReviews($)
   await checkComplete($, found.one.review)
 }
@@ -1961,13 +1975,14 @@ async function stopReviewing($: $) {
   // One being started meanwhile is running once this settles: stopped below with the others.
   await cleanDispatching
   const cleaners = Object.values(await read($, cleaning)).filter((one) => one.running)
+  // Each one's turn's end, until its own stop reads it: kept from now, for all of them.
+  for (const one of cleaners) cleanersStopping.set(one.agent, undefined)
   await update($, cleaning, (every) => ({
     ...every,
     ...Object.fromEntries(cleaners.map((one) => [one.dir, { ...one, running: false }])),
   }))
   let cleanersEnded = 0
   for (const one of cleaners) {
-    cleanersStopping.set(one.agent, undefined)
     const stop = await stopAgent($, one.agent)
     const said = cleanersStopping.get(one.agent)
     cleanersStopping.delete(one.agent)
@@ -2220,20 +2235,35 @@ const crashOf = (stderr: string) =>
 
 /**
  * After a reload, the review agents at work get their hooks back. A stop the
- * reload cut short is over: its flag goes, and a turn's end it kept ends the agent.
+ * reload cut short is not retried: a turn's end it kept ends the agent, the
+ * list tells the rest (alive, it runs on; else it ends, stopped, and Pause
+ * now's queues it again).
  */
 async function registerReviewAgentsAgain($: $) {
   const cut = Object.entries(await read($, reviewAgents)).filter(
     ([, one]) => one.stopping,
   )
-  for (const [key, one] of cut) {
-    await update($, reviewAgents, (all) => {
-      const now = all[key]
-      if (!now || now.agent !== one.agent) return all
-      const { stopping: _stopping, turnEnded: _turnEnded, ...rest } = now
-      return { ...all, [key]: rest }
-    })
-    if (one.turnEnded) await endReviewAgent($, key, one, 'ended', 'Ended')
+  const agents = cut.length ? await $.agent.list().catch(() => undefined) : undefined
+  for (const [key, cutShort] of cut) {
+    const { stopping: _stopping, turnEnded, ...one } = cutShort
+    await update($, reviewAgents, (all) =>
+      all[key]?.agent === one.agent ? { ...all, [key]: one } : all,
+    )
+    const listed = agents?.find((agent) => agent.id === one.agent)
+    if (turnEnded) await endReviewAgent($, key, one, 'ended', 'Ended')
+    else if (agents && !(listed && ALIVE.has(listed.status))) {
+      const paused = !!(await read($, reviewRuns))[one.review]?.paused
+      const outcome = await endReviewAgent(
+        $,
+        key,
+        one,
+        'stopped',
+        paused ? INTERRUPTED : 'Stopped',
+      )
+      if (outcome === 'ended' && paused && one.job)
+        await requeue($, one.review, [againOf(one.job)])
+    }
+    void checkComplete($, one.review)
   }
   for (const one of Object.values(await read($, reviewAgents))) {
     if (!one.running) continue
@@ -2897,7 +2927,7 @@ async function startQueuedCleaning($: $, next: QueuedCleaning) {
 /** Cleaning agents /tranchant stop is stopping, by agent: the answer of a turn that ended meanwhile. */
 const cleanersStopping = new Map<string, string | undefined>()
 
-/** A cleaning agent ended: what it wrote checked, and said; a review waiting on it goes on. */
+/** A cleaning agent ended: what it wrote checked, and said; a review waiting on it goes on. While /tranchant stop stops it, only its answer kept. */
 async function cleanDone($: $, agent: string, answer: string) {
   if (cleanersStopping.has(agent)) {
     cleanersStopping.set(agent, answer)

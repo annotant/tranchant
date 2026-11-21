@@ -79,7 +79,7 @@ try {
   try {
     await store.reset()
   } catch (error) {
-    // Refused, nothing removed: the plan and the choices back; another error may follow removals, the plan kept for a retry.
+    // Refused (a fix or a question since the check), nothing removed: plan and choices back; another error keeps them for a retry.
     if (error instanceof StoreRefusal) {
       await writeWhole(planFile, plan)
       if (chose) await rm(choices, { force: true })
