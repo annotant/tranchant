@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% if page.title %}{{ page.title }} · {% endif %}{{ site.title }}</title>
+    <meta
+      name="description"
+      content="{{ page.description | default: site.description }}"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="{{ page.root }}assets/tranchant.svg" type="image/svg+xml" />
+    <!-- A new URL on each build: a cached page never meets a newer stylesheet. -->
+    <link
+      rel="stylesheet"
+      href="{{ page.root }}assets/site.css?v={{ site.time | date: '%s' }}"
+    />
+    {% if site.posthog.key %}{% unless site.preview %}
+    <!-- PostHog's snippet, on the published site only (npm run site marks its
+    builds as previews, which load nothing): no cookie, and nothing stored in a
+    visitor's browser but the owner's ?internal mark. PostHog tells the visitors apart by a hash of the day,
+    their IP and their browser (the project's "Cookieless tracking"): unique per
+    day, never followed from one day to the next. Every event says whether it is
+    internal, which the project's "Filter out internal and test users" leaves
+    out: the owner's browser, marked once with ?internal (?internal=0 unmarks it). -->
+    <script>
+      let internal = false
+      try {
+        const marked = new URLSearchParams(location.search).get('internal')
+        if (marked === '0') localStorage.removeItem('posthog-internal')
+        else if (marked !== null) localStorage.setItem('posthog-internal', '1')
+        internal = localStorage.getItem('posthog-internal') === '1'
+      } catch {
+        // No storage (blocked, private window): a visitor like any other.
+      }
+      !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+      posthog.init({{ site.posthog.key | jsonify }}, {
+        api_host: {{ site.posthog.host | jsonify }},
+        cookieless_mode: 'always',
+        persistence: 'memory',
+        person_profiles: 'identified_only',
+        disable_session_recording: true,
+        disable_surveys: true,
+        before_send: (event) => {
+          if (event) Object.assign(event.properties, { internal })
+          return event
+        },
+      })
+      // The GitHub links and the sibling's, as events of their own (the
+      // landing page counts the copied commands).
+      document.addEventListener('click', (event) => {
+        const link = event.target.closest?.('a[href]')
+        if (link?.href.startsWith('https://github.com/')) {
+          posthog.capture('github link clicked', { href: link.href })
+        } else if (link?.href.startsWith({{ site.sibling.url | jsonify }})) {
+          posthog.capture('annotant link clicked', { href: link.href })
+        }
+      })
+    </script>
+    {% endunless %}{% endif %}
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to the content</a>
+    <header class="bar">
+      <div class="brands">
+        <a class="brand" href="{{ page.root | default: './' }}">
+          <svg class="brand-mark" width="26" height="26" viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M10 40 A22 22 0 0 1 40 10 Z" fill="currentColor" opacity=".35" /><path d="M24 54 A22 22 0 0 0 54 24 Z" fill="currentColor" /><path d="M6 58 L58 6" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" /></svg>
+          <span>Tranch<span class="brand-accent">ant</span></span>
+        </a>
+        <span class="brands-sep" aria-hidden="true"></span>
+        <a class="brand brand--sibling" href="{{ site.sibling.url }}" aria-label="Annotant, Tranchant's sibling">
+          <span>Annot<span class="brand-accent">ant</span></span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8" /></svg>
+        </a>
+      </div>
+      <nav aria-label="Site">
+        <a href="{{ page.root }}docs/"{% if page.url == "/docs/" %} aria-current="page"{% elsif page.layout == "docs" %} aria-current="true"{% endif %}>Docs</a>
+        <a href="https://github.com/annotant/tranchant">GitHub</a>
+      </nav>
+    </header>
+    <main id="main">{{ content }}</main>
+    <footer class="foot">
+      <p class="foot-sibling">
+        Tranchant's sibling: <a href="{{ site.sibling.url }}">Annotant</a>.
+        {{ site.sibling.tagline }}
+      </p>
+      <p>
+        <a href="https://github.com/annotant/tranchant/blob/main/LICENSE">MIT</a> © Kevin
+        Manson. Tranchant is an independent open source project, not affiliated with,
+        endorsed by or supported by Anthropic. Claude and Claude Code are trademarks of
+        Anthropic, PBC.
+      </p>
+    </footer>
+  </body>
+</html>

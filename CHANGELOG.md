@@ -9,6 +9,9 @@ released to the `stable` branch.
 
 ### Added
 
+- **A website.** A landing page and the docs on GitHub Pages
+  (https://annotant.github.io/tranchant/), built from the README and
+  `docs/`, linked to Annotant, its sibling.
 - **A skill or command added as a lens is analysed into one lens, or the
   reviewers it starts.** A whole review process (a team's skill that
   launches its reviewers in prose, a command whose agents are written in
