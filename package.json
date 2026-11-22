@@ -12,6 +12,7 @@
   "scripts": {
     "build": "npm run build --workspace skills/tranchant/page",
     "watch": "npm run watch --workspace skills/tranchant/page",
+    "site": "node .github/scripts/site-preview.mjs",
     "typecheck": "tsc -p skills/tranchant/scripts && tsc -p .github/scripts && tsc -p test && tsc -p skills/tranchant/page",
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives",
     "lint:unused": "knip",

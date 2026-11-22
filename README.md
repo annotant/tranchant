@@ -3,7 +3,13 @@
 <p align="center">
   <strong>Settle a code review, one finding at a time, from a page.</strong><br>
   A <a href="https://claude.com/claude-code">Claude Code</a> plugin that turns a review's
-  findings into fixes on your branch, or comments on a merge request, yours or someone else's.
+  findings into fixes on your working tree, or comments on a merge request, yours or someone else's.
+</p>
+
+<p align="center">
+  <a href="https://annotant.github.io/tranchant/">Website</a> ·
+  <a href="https://annotant.github.io/tranchant/docs/">Docs</a> ·
+  <a href="https://annotant.keveun.net/">Annotant</a>, its sibling
 </p>
 
 <p align="center">
@@ -260,8 +266,8 @@ In the page:
   opens one issue per finding, as drafted); Post all to do posts every open
   finding at once.
 
-Nothing is committed or pushed: the fixes wait on your branch for your
-review.
+Nothing is committed or pushed: the fixes wait in your working tree for
+your review.
 
 ### Settings
 

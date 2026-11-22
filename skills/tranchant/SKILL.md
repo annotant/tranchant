@@ -91,6 +91,6 @@ with `node SKILL/scripts/complete.mjs --review <dir>`.
 
 - Never edit `decisions.json` or `review.json` in the state folder: the
   server owns the first and the producer the second.
-- Nothing is committed or pushed: the fixes wait on the branch for the user.
+- Nothing is committed or pushed: the fixes wait in the working tree for the user.
 - The page source is `SKILL/page/src`; `npm ci && npm run build` at the
   repository root (two levels above SKILL) rebuilds `dist/page.js`.

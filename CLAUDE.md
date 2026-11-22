@@ -68,6 +68,12 @@ pattern, read how annotant does it.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.
+- `site/`: the website on GitHub Pages (Jekyll), its landing page and
+  layouts; `.github/scripts/site.mjs` builds its docs pages from the Markdown
+  files its `PAGES` lists (never copied into `site/`), and `.github/workflows/pages.yml`
+  publishes it. `npm run site` (`.github/scripts/site-preview.mjs`) previews
+  it. Its poster (`site/assets/demo-poster.png`) is the page on
+  `test/fixtures/review-ours.json`, `f-01` working.
 - `docs/review-file.md`: the review, decisions and run files, their schemas
   and the findings' states. `docs/settings.md`: the settings file, its
   schema, its precedence and its routes. `docs/studies/`: the decisions a
@@ -85,6 +91,8 @@ pattern, read how annotant does it.
 - `npm run test:hooks`: validate the plugin and run `test/hooks.test.ts` in
   Claude Code (not in CI; run it when `hooks/` changes).
 - `npm run build`: rebuild `page/dist/`. `npm run watch`: on every change.
+- `npm run site`: preview the website on http://localhost:4000 (Docker, or a
+  local `jekyll`), rebuilt and reloaded on every change.
 - `npm run format`: apply Prettier.
 
 ## Conventions
