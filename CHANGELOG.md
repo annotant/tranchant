@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-22
+
 ### Added
 
 - **A website.** A landing page and the docs on GitHub Pages
