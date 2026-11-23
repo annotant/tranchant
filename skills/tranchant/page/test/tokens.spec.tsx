@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import type {
   Finding,
@@ -9,7 +9,16 @@ import type {
   Usage,
 } from '../src/domain'
 import { applyTheme } from '../src/theme'
-import { chipOf, formatTokens, whoOf } from '../src/tokens'
+import {
+  chipOf,
+  formatTokens,
+  kindRows,
+  type LensInput,
+  lensRows,
+  notesOf,
+  totalNote,
+  whoOf,
+} from '../src/tokens'
 import { fakeServer, FINDINGS, payload, record, settingsPayload } from './fixture'
 
 const TITLE = 'Classification overview page'
@@ -301,7 +310,7 @@ test('by agent kind: a stopped review says its agents count, their last request 
   )
 })
 
-test('by lens: sorted by tokens, what each found, per confirmed, and nothing confirmed marked', async () => {
+test("by lens: in the server's order, what each found, per confirmed, and nothing confirmed marked", async () => {
   location.hash = '#tokens'
   await renderPage()
   fireEvent.click(await screen.findByRole('tab', { name: /^By lens/ }))
@@ -394,3 +403,236 @@ for (const theme of ['light', 'dark'] as const)
     fireEvent.click(screen.getByRole('tab', { name: /^By lens/ }))
     expect(screen.getAllByText('nothing confirmed')).toHaveLength(2)
   })
+
+/** The lens rows of the fixture's review, with `change` applied. */
+const rowsOf = (change: Partial<LensInput> = {}) => {
+  const data = reviewPayload()
+  return lensRows({
+    usage: data.usage!,
+    review: data.review,
+    records: data.findings,
+    reviewers: REVIEWERS,
+    lenses: undefined,
+    ...change,
+  })
+}
+
+const lensRow = (rows: ReturnType<typeof lensRows>, lens: string) => {
+  const found = rows.find((one) => one.lens === lens)
+  if (!found) throw new Error(`no lens ${lens}`)
+  return found
+}
+
+test('by agent kind: a fix, a discussion and a cleaning at work move their rows; nothing does once the server counts nothing live', () => {
+  const spent = usage({
+    running: true,
+    kinds: [
+      { kind: 'fixes', agents: 1, usage: figure(204) },
+      { kind: 'discussions', agents: 1, usage: figure(20) },
+      { kind: 'cleanings', agents: 1, usage: null },
+    ],
+  })
+  const at = {
+    reviewers: [],
+    records: { 'correctness-1': record('working') },
+    discussions: {
+      'tests-1': {
+        messages: [],
+        step: { at: 1, kind: 'read', label: 'a.ts', state: 'running' as const },
+      },
+    },
+    lenses: {
+      state: 'ready' as const,
+      lenses: [
+        {
+          name: 'docs',
+          source: 'x',
+          state: 'ready' as const,
+          cleaning: 'running' as const,
+        },
+      ],
+    },
+  }
+  const rows = kindRows(spent, at)
+  expect(rows.map((one) => [one.name, one.tokens, one.running, one.share])).toEqual([
+    ['Fixes', '204k so far', true, 12],
+    ['Discussions', '20k so far', true, 1],
+    ['Cleanings', 'so far', true, null],
+    ['Before the reset', '200k', false, 12],
+  ])
+  expect(kindRows({ ...spent, running: false }, at).some((one) => one.running)).toBe(
+    false,
+  )
+})
+
+test('by agent kind: a kind not reported has no share, and a partial one running reads at least so far', () => {
+  const rows = kindRows(
+    usage({
+      running: true,
+      kinds: [
+        { kind: 'reviewers', agents: 2, usage: figure(400, { partial: true }) },
+        { kind: 'cleanings', agents: 1, usage: null },
+      ],
+    }),
+    {
+      reviewers: [agent('rv-tests', { running: true })],
+      records: {},
+      discussions: undefined,
+      lenses: undefined,
+    },
+  )
+  expect(rows[0]?.tokens).toBe('at least 400k so far')
+  expect(rows[1]).toMatchObject({ tokens: '—', share: null })
+})
+
+test('by lens: a reviewer the stop or a failure ended, one interrupted, and lenses that never started say so', () => {
+  const stopped = { stopped: { at: '2026-11-23T10:00:00Z' } }
+  const failed = REVIEWERS.map((one) =>
+    one.name === 'rv-security' ? { ...one, outcome: 'failed' as const } : one,
+  )
+  const base = reviewPayload().review
+  const rows = (review: Partial<LensInput['review']>, reviewers = failed) =>
+    rowsOf({
+      review: {
+        ...base,
+        ...review,
+        lenses: [...base.lenses!, { name: 'docs', source: 'x', hash: 'd' }],
+      },
+      reviewers,
+    })
+  expect(lensRow(rows(stopped), 'security').note).toBe('stopped · last request estimated')
+  expect(lensRow(rows(stopped), 'docs').note).toBe('not covered')
+  expect(lensRow(rows({}), 'security')).toMatchObject({
+    note: 'failed · not covered',
+    nothingConfirmed: false,
+  })
+  expect(
+    lensRow(rows({ status: 'reviewing', paused: { at: '2026-11-23T10:00:00Z' } }), 'docs')
+      .note,
+  ).toBe('paused · not started')
+  const interrupted = REVIEWERS.map((one) =>
+    one.name === 'rv-tests' ? { ...one, outcome: 'interrupted' as const } : one,
+  )
+  expect(lensRow(rows({}, interrupted), 'tests')).toMatchObject({
+    note: 'interrupted · runs again on Resume',
+    nothingConfirmed: false,
+  })
+})
+
+test('by lens: nothing confirmed waits for every verifier, queued ones included', () => {
+  // tests-1's verifier has not started: no run file yet.
+  const queued = REVIEWERS.filter((one) => one.name !== 'vf-tests-1')
+  expect(lensRow(rowsOf({ reviewers: queued }), 'tests').nothingConfirmed).toBe(false)
+  expect(lensRow(rowsOf(), 'tests').nothingConfirmed).toBe(true)
+})
+
+test('by lens: a review without verifiers counts every finding confirmed, and a finding with no lens goes by its id', () => {
+  const data = reviewPayload()
+  const rows = rowsOf({
+    review: {
+      ...data.review,
+      verify: false,
+      findings: FOUND.map(({ lens: _lens, ...one }) => ({ ...one, verified: false })),
+    },
+    reviewers: REVIEWERS.filter((one) => !one.name.startsWith('vf-')),
+  })
+  expect(lensRow(rows, 'correctness')).toMatchObject({
+    landed: '2',
+    confirmed: '2',
+    perConfirmed: '275k',
+  })
+  expect(lensRow(rows, 'tests')).toMatchObject({
+    landed: '1',
+    confirmed: '1',
+    nothingConfirmed: false,
+  })
+})
+
+test('by lens: a dead reviewer of a past session does not move when another agent runs', () => {
+  const dead = REVIEWERS.map((one) =>
+    one.name === 'rv-tests' ? { name: one.name, running: true, steps: one.steps } : one,
+  )
+  const tests = lensRow(
+    rowsOf({ usage: usage({ running: true, partial: ['rv-tests'] }), reviewers: dead }),
+    'tests',
+  )
+  expect(tests).toMatchObject({ running: false, review: '250k' })
+  expect(tests.note).toBeUndefined()
+})
+
+test('by lens: per confirmed is a floor when a part is, and rounds', () => {
+  const spent = usage({
+    lenses: [
+      { lens: 'correctness', reviewer: null, verifiers: figure(1), tokens: 1000 },
+      { lens: 'security', reviewer: figure(350), verifiers: null, tokens: 350_000 },
+    ],
+  })
+  const data = reviewPayload()
+  const three = [...FOUND.slice(0, 2), finding('correctness-4', 'correctness', true, 3)]
+  expect(
+    lensRow(
+      rowsOf({ usage: spent, review: { ...data.review, findings: three } }),
+      'correctness',
+    ).perConfirmed,
+  ).toBe('at least 333')
+})
+
+test('a model that is no string is none: the screen does not break on it', () => {
+  // As a run file a fix's agent wrote could hold it, read from JSON as the server serves it.
+  const steps: ReviewAgent['steps'] = JSON.parse(
+    '[{"at":1,"kind":"start","label":"Started","state":"done","model":{"x":1}}]',
+  )
+  const odd = REVIEWERS.map((one) => (one.name === 'rv-tests' ? { ...one, steps } : one))
+  expect(lensRow(rowsOf({ reviewers: odd }), 'tests').model).toBe('')
+})
+
+test('the line beside the total, and the note Pause now leaves', () => {
+  const review = { status: 'reviewing' as const }
+  expect(totalNote(usage({ running: true }), review)).toBe(
+    'tokens so far · moves as the agents work',
+  )
+  expect(totalNote(usage(), { ...review, paused: { at: 'x' } })).toBe(
+    'tokens · paused: nothing runs until Resume',
+  )
+  expect(totalNote(usage(), { ...review, stopped: { at: 'x' } })).toBe(
+    'tokens · the review stopped',
+  )
+  expect(totalNote(usage(), { status: 'complete' })).toBe(
+    'tokens · the review, its fixes, discussions and cleanings',
+  )
+  expect(notesOf(usage(), { paused: { at: 'x', now: true } })[0]).toMatch(
+    /^Pause now ended agents mid-request/,
+  )
+})
+
+test('#tokens with no usage block says it cannot be read; with no figure, that none is reported', async () => {
+  location.hash = '#tokens'
+  await renderPage(reviewPayload(null))
+  expect(await screen.findByText(/tokens cannot be read/)).toBeDefined()
+})
+
+test('#tokens with no figure yet says none is reported', async () => {
+  location.hash = '#tokens'
+  await renderPage(reviewPayload(usage({ total: null, kinds: [], lenses: [] })))
+  expect(
+    await screen.findByText('No agent of this review has reported its tokens yet.'),
+  ).toBeDefined()
+})
+
+test("a lens's report is scrolled to, and the chip back reopens the tab left", async () => {
+  const scroll = vi.spyOn(Element.prototype, 'scrollIntoView')
+  location.hash = '#tokens'
+  await renderPage()
+  fireEvent.click(await screen.findByRole('tab', { name: /^By lens/ }))
+  go('#report/tests')
+  await waitFor(() => expect(report('tests')?.getAttribute('aria-expanded')).toBe('true'))
+  expect(
+    scroll.mock.contexts.some(
+      (element) => element instanceof Element && element.id === 'tr-report-tests',
+    ),
+  ).toBe(true)
+  go('#tokens')
+  expect(
+    await screen.findByRole('tab', { name: /^By lens/, selected: true }),
+  ).toBeDefined()
+})

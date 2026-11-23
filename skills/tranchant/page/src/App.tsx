@@ -54,7 +54,7 @@ import { Summary } from './Summary'
 import { applyTheme, type Theme } from './theme'
 import { SettingsLink, ThemeToggle } from './ThemeToggle'
 import { chipOf } from './tokens'
-import { TokensChip, TokensView } from './TokensView'
+import { TokensChip, type TokensTab, TokensView } from './TokensView'
 
 const NO_SECTIONS: readonly Section[] = []
 
@@ -127,7 +127,7 @@ function Header({
   lenses: LensesProgress | undefined
   tally: ReturnType<typeof counts>
   moved: boolean
-  /** The Settings or the Tokens are shown: the gear or the chip leads back. */
+  /** What the page shows: on the Settings or the Tokens, the gear or the chip leads back. */
   route: Route
   /** Opens the next finding waiting on the reviewer. */
   onNeedsYou: () => void
@@ -342,6 +342,7 @@ export default function App() {
     if (theme) applyTheme(theme)
   }, [theme])
   const [notice, setNotice] = useState<string>()
+  const [tokensTab, setTokensTab] = useState<TokensTab>('kind')
   // A review waiting to start: the switches of its ready screen, kept while the Settings show.
   const [choicesPick, setChoices] = useState<StartChoices>()
   const savedChoices = payload?.lenses?.choices
@@ -700,7 +701,13 @@ export default function App() {
           </div>
         )}
         {header}
-        <TokensView review={review} payload={payload} records={records} />
+        <TokensView
+          review={review}
+          payload={payload}
+          records={records}
+          tab={tokensTab}
+          onTab={setTokensTab}
+        />
       </div>
     )
   }

@@ -1,6 +1,13 @@
-import { useState } from 'react'
 import type { Records, Review, ReviewPayload } from './domain'
-import { type Chip, kindRows, lensRows, notesOf, formatTokens, totalNote } from './tokens'
+import {
+  type Chip,
+  cellOf,
+  kindRows,
+  lensRows,
+  notesOf,
+  formatTokens,
+  totalNote,
+} from './tokens'
 
 const COINS = (
   <svg
@@ -41,21 +48,25 @@ const KIND_FOOT =
   'Tokens as the API counts them: input, output, cache reads and cache writes, summed. Cache reads are most of it: an agent sends what it read again at each step, from the cache.'
 
 const LENS_FOOT =
-  "Review: the lens's reviewer. Verify: its findings' verifiers, those removed included. Dropped: removed by its verifier, or dropped by you. Settled: fixed, posted or moved. Per confirmed: both, over the findings the verifiers kept. Sorted by tokens, the most first; a lens's name opens its reviewer's report."
+  "Review: the lens's reviewer. Verify: its findings' verifiers, those removed included. Dropped: removed by its verifier, or dropped by you. Settled: fixed, posted or moved. Per confirmed: both, over the findings that stand confirmed. Sorted by tokens, the most first; a lens's name opens its reviewer's report."
 
-type Tab = 'kind' | 'lens'
+export type TokensTab = 'kind' | 'lens'
 
 /** The Tokens screen (`#tokens`): the total, then by agent kind and by lens. */
 export function TokensView({
   review,
   payload,
   records,
+  tab,
+  onTab,
 }: {
   review: Review
   payload: ReviewPayload
   records: Records
+  /** Kept by the page: a lens's report and the chip back reopen the same tab. */
+  tab: TokensTab
+  onTab: (tab: TokensTab) => void
 }) {
-  const [tab, setTab] = useState<Tab>('kind')
   const usage = payload.usage
   const head = (
     <div className="tr-settings-head">
@@ -79,7 +90,11 @@ export function TokensView({
     return (
       <main className="tr-settings tr-settings--wide" aria-labelledby="tr-tk-title">
         {head}
-        <p className="tr-muted">No agent of this review has reported its tokens yet.</p>
+        <p className="tr-muted">
+          {usage
+            ? 'No agent of this review has reported its tokens yet.'
+            : "This review's tokens cannot be read: the server is older than this page, or its usage.json is unreadable (the server's log says why)."}
+        </p>
       </main>
     )
   const atLeast = !!usage.total.partial || usage.notReported.length > 0
@@ -92,7 +107,7 @@ export function TokensView({
   })
   const lenses = lensRows({ usage, review, records, reviewers, lenses: payload.lenses })
   const notes = notesOf(usage, review)
-  const tabs: [Tab, string, number?][] = [
+  const tabs: [TokensTab, string, number?][] = [
     ['kind', 'By agent kind'],
     ['lens', 'By lens', lenses.length],
   ]
@@ -125,7 +140,7 @@ export function TokensView({
               id={`tr-tk-tab-${one}`}
               aria-selected={one === tab}
               aria-controls="tr-tk-panel"
-              onClick={() => setTab(one)}
+              onClick={() => onTab(one)}
             >
               {label}
               {count !== undefined && <span className="tr-tab-count">{count}</span>}
@@ -167,12 +182,16 @@ export function TokensView({
                     <td className="tr-tk-num">{row.agents}</td>
                     <td className="tr-tk-num">{row.tokens}</td>
                     <td>
-                      <div className="tr-tk-share">
-                        <span className="tr-tk-bar" aria-hidden="true">
-                          <span style={{ width: `${Math.max(row.share, 1)}%` }} />
-                        </span>
-                        <span className="tr-muted">{row.share} %</span>
-                      </div>
+                      {row.share === null ? (
+                        <span className="tr-muted">—</span>
+                      ) : (
+                        <div className="tr-tk-share">
+                          <span className="tr-tk-bar" aria-hidden="true">
+                            <span style={{ width: `${Math.max(row.share, 1)}%` }} />
+                          </span>
+                          <span className="tr-muted">{row.share} %</span>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -259,7 +278,7 @@ export function TokensView({
           {tab === 'kind' ? KIND_FOOT : LENS_FOOT}
           {tab === 'lens' &&
             usage.reset?.usage &&
-            ` Before the reset: ${formatTokens(usage.reset.usage.tokens)} tokens, in no row.`}
+            ` Before the reset: ${cellOf(usage.reset.usage)} tokens, in no row.`}
         </p>
       </section>
     </main>

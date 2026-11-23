@@ -269,8 +269,8 @@ In the page:
   finding at once.
 - **The tokens chip** in the header (`2.90M tokens`) sums what every agent
   of the review spent, its fixes, discussions and cleanings included, and
-  what a reset removed: `so far` while one works, `paused` once nothing
-  does, `at least` when one did not report its figure. It opens the
+  what a reset removed: `so far` while one works, `paused` while
+  the review is paused and nothing runs, `at least` when one did not report its figure or only a last reading. It opens the
   **Tokens** screen: by agent kind (agents, tokens, their share, the four
   counts and the models), and by lens (its reviewer's and its verifiers'
   tokens, what it found, confirmed, dropped and settled, its tokens per

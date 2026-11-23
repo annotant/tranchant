@@ -14,8 +14,8 @@ released to the `stable` branch.
   runs, and in a review's `usage.json` while they work and once a reset
   removed them. `/api/review` sums them by kind, lens and finding.
 - **A review's tokens in the header.** A chip beside the review's status,
-  `2.90M tokens` (`so far` while an agent works, `paused` once nothing
-  does, `at least` with an agent not reported), opens the Tokens screen
+  `2.90M tokens` (`so far` while an agent works, `paused` while
+  the review is paused and nothing runs, `at least` with an agent not reported or partial), opens the Tokens screen
   (`#tokens`): by agent kind, and by lens with what each lens found,
   confirmed and dropped, its tokens per confirmed finding and **nothing
   confirmed** marked. A lens's name opens its reviewer's report.

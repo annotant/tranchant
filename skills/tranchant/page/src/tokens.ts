@@ -26,7 +26,7 @@ export function formatTokens(count: number) {
   return count >= 1000 ? `${Math.round(count / 1000)}k` : String(count)
 }
 
-/** Paused from the page, and nothing it counts runs any more. */
+/** Paused from the page, still reviewing: whether anything runs is the caller's to check. */
 const pausedOf = (review: Pick<Review, 'paused' | 'stopped' | 'status'>) =>
   !!review.paused && !review.stopped && review.status === 'reviewing'
 
@@ -53,11 +53,20 @@ export function chipOf(
 }
 
 /** A figure in a cell: `—` when not reported, `so far` while it runs, `at least` when partial. */
-function cellOf(usage: Usage | null | undefined, running = false) {
+export function cellOf(usage: Usage | null | undefined, running = false) {
   if (!usage) return running ? 'so far' : '—'
-  const amount = formatTokens(usage.tokens)
-  if (running) return `${amount} so far`
-  return usage.partial ? `at least ${amount}` : amount
+  const amount = `${usage.partial ? 'at least ' : ''}${formatTokens(usage.tokens)}`
+  return running ? `${amount} so far` : amount
+}
+
+/**
+ * Whether an agent the page lists works now: its run file has no end step, the
+ * server counts something live, and not this agent's figure as a past session's.
+ */
+function liveOf(usage: ReviewUsage) {
+  const stale = new Set([...usage.partial, ...usage.notReported])
+  return (agent: Pick<ReviewAgent, 'name' | 'running'> | undefined) =>
+    !!agent?.running && usage.running && !stale.has(agent.name)
 }
 
 /** The four counts summed over the models, and the models: one line under a row. */
@@ -98,7 +107,7 @@ function kindOf(label: string): UsageKind | undefined {
   )[prefix]
 }
 
-/** A run name as a reader says it: `the verifier of tests-3`, `the fix of f-03 (run r1)`. */
+/** A run name as a reader says it: `the verifier of tests-3`, `the fix of f-03 (r1)`, `the reviewer of bugs (run 2)`. */
 export function whoOf(label: string) {
   const [name = label, again] = label.split('#')
   const run = again ? ` (run ${again})` : ''
@@ -134,8 +143,8 @@ export interface KindRow {
   name: string
   agents: string
   tokens: string
-  /** Its share of the review's total, in percent. */
-  share: number
+  /** Its share of the review's total, in percent; null when not reported. */
+  share: number | null
   detail: string
   running: boolean
 }
@@ -152,8 +161,9 @@ function runningKinds(usage: ReviewUsage, at: AtWork) {
   const kinds = new Set<UsageKind>()
   // A live figure older than the serving session is no longer live: neither is its row.
   if (!usage.running) return kinds
+  const live = liveOf(usage)
   for (const agent of at.reviewers) {
-    const kind = agent.running ? kindOf(agent.name) : undefined
+    const kind = live(agent) ? kindOf(agent.name) : undefined
     if (kind) kinds.add(kind)
   }
   if (Object.values(at.records).some((record) => record.state === 'working'))
@@ -177,7 +187,7 @@ export function kindRows(usage: ReviewUsage, at: AtWork): KindRow[] {
       name: KIND_LABELS[one.kind],
       agents: missing ? `${one.agents} · ${missing} not reported` : String(one.agents),
       tokens: cellOf(one.usage, live),
-      share: share(one.usage?.tokens ?? 0),
+      share: one.usage ? share(one.usage.tokens) : null,
       detail: breakdownOf(one.usage),
       running: live,
     }
@@ -227,7 +237,9 @@ export interface LensInput {
 
 /** The model a lens's reviewer ran on: its own start step, else the Lenses step's row. */
 function modelOf(agent: ReviewAgent | undefined, row: string | undefined) {
-  return agent?.steps.find((step) => step.kind === 'start' && step.model)?.model ?? row
+  // The server passes run files' steps through unchecked: a model that is no string is none.
+  const model: unknown = agent?.steps.find((step) => step.kind === 'start')?.model
+  return typeof model === 'string' && model ? model : row
 }
 
 function noteOf(
@@ -251,7 +263,7 @@ function noteOf(
   return undefined
 }
 
-/** One row per lens the review ran, the most tokens first; those not started last. */
+/** One row per lens the review ran, in the server's order (the most tokens first); those it has no figure of last. */
 export function lensRows({ usage, review, records, reviewers, lenses }: LensInput) {
   const agents = new Map(reviewers.map((agent) => [agent.name, agent]))
   const planned = review.lenses?.map((one) => one.name) ?? []
@@ -265,6 +277,7 @@ export function lensRows({ usage, review, records, reviewers, lenses }: LensInpu
     .map((agent) => agent.name.slice(3))
     .filter((id) => !standing.has(id))
   const figures = new Map(usage.lenses.map((one) => [one.lens, one]))
+  const live = liveOf(usage)
   return names.map((lens): LensRowView => {
     const figure = figures.get(lens)
     const agent = agents.get(`rv-${lens}`)
@@ -277,33 +290,45 @@ export function lensRows({ usage, review, records, reviewers, lenses }: LensInpu
     const settled = own.filter((finding) =>
       SETTLED.has(stateOf(records, finding.id)),
     ).length
-    const verifying = own.some((finding) => agents.get(`vf-${finding.id}`)?.running)
-    const reviewing = !!agent?.running && usage.running
+    const verifying = own.some((finding) => live(agents.get(`vf-${finding.id}`)))
+    // A verifier queued has no run file yet: its finding is unsettled all the same.
+    const unverified =
+      !!review.verify &&
+      own.some((finding) => {
+        const verifier = agents.get(`vf-${finding.id}`)
+        return finding.verified !== true && (!verifier || verifier.running)
+      })
+    const reviewing = live(agent)
     const started = !!figure || !!agent
     const blank = (text: string) => (started ? text : '—')
     const tokens = (figure?.reviewer?.tokens ?? 0) + (figure?.verifiers?.tokens ?? 0)
+    // A part not reported, or partial: the cost per finding is a floor too.
+    const floor =
+      !figure?.reviewer ||
+      !!figure.reviewer.partial ||
+      !!figure.verifiers?.partial ||
+      (!!review.verify && gone + own.length > 0 && !figure.verifiers)
     const ended =
       !!agent &&
       !agent.running &&
       agent.outcome !== 'failed' &&
       agent.outcome !== 'interrupted'
-    const note = noteOf(agent, review, usage.running)
+    const note = noteOf(agent, review, reviewing)
     return {
       lens,
       model: modelOf(agent, lenses?.lenses.find((row) => row.name === lens)?.model) ?? '',
       review: started ? cellOf(figure?.reviewer, reviewing) : '—',
-      verify:
-        figure?.verifiers || (verifying && usage.running)
-          ? cellOf(figure?.verifiers, verifying && usage.running)
-          : '—',
+      verify: figure?.verifiers || verifying ? cellOf(figure?.verifiers, verifying) : '—',
       landed: blank(String(own.length + gone)),
       confirmed: blank(String(confirmed.length)),
       dropped: blank(String(gone + byYou)),
       settled: blank(String(settled)),
       perConfirmed:
-        confirmed.length && tokens ? formatTokens(tokens / confirmed.length) : '—',
+        confirmed.length && tokens
+          ? `${floor ? 'at least ' : ''}${formatTokens(Math.round(tokens / confirmed.length))}`
+          : '—',
       running: reviewing,
-      nothingConfirmed: ended && !verifying && confirmed.length === 0,
+      nothingConfirmed: ended && !unverified && confirmed.length === 0,
       ...(note && { note }),
       report: !!agent,
     }
