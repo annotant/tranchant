@@ -112,7 +112,7 @@ import {
   writeSettings,
 } from './lib/settings.mjs'
 import { trackerOf } from './lib/tracker.mjs'
-import { estimateOf } from './lib/estimate.mjs'
+import { estimateOf, lensHistories } from './lib/estimate.mjs'
 import { reviewUsage } from './lib/usage.mjs'
 import {
   MAX_ISSUE_BODY,
@@ -407,7 +407,8 @@ function trackerOnce(values) {
  * What `GET /api/settings` answers: the file as it stands, the values in
  * force, the keys an environment variable locks, the recipe in force for
  * this review's project, every lens that could run on it (Settings ›
- * Lenses) and the lenses being cleaned.
+ * Lenses) with its average over the project's reviews, and the lenses
+ * being cleaned.
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
@@ -420,6 +421,16 @@ async function settingsPayload() {
     readGroups(lensRoot),
   ])
   const cleanings = withProcessAlready(listed, [...described.lenses, ...adding(listed)])
+  const histories = await lensHistories(dir, described.lenses).catch((error) => {
+    console.error(`tranchant server: lens histories: ${oneLine(String(error))}`)
+    return described.lenses.map(() => null)
+  })
+  const shown = described.lenses.map((one, i) => {
+    // The hash is the server's, to read the history by: not the page's.
+    const { hash: _hash, ...lens } = /** @type {typeof one & { hash?: string }} */ (one)
+    const history = histories[i]
+    return history ? { ...lens, history } : lens
+  })
   return {
     path: SETTINGS_FILE,
     settings,
@@ -431,7 +442,7 @@ async function settingsPayload() {
     lenses: described.lenses
       .filter((lens) => lens.scope === 'recipe')
       .map((lens) => lens.name),
-    lensSet: { dirs: described.dirs, lenses: described.lenses },
+    lensSet: { dirs: described.dirs, lenses: shown },
     cleanings,
     groups: {
       file: groups.file,

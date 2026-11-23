@@ -54,7 +54,11 @@ const GROUPS: GroupsPayload = {
   ],
 }
 
-function renderLenses(focus?: string, groups: GroupsPayload = GROUPS) {
+function renderLenses(
+  focus?: string,
+  groups: GroupsPayload = GROUPS,
+  lenses: LensEntry[] = LENSES,
+) {
   const settings = settingsPayload(
     {},
     {
@@ -64,7 +68,7 @@ function renderLenses(focus?: string, groups: GroupsPayload = GROUPS) {
           global: '/me/.config/tranchant/lenses',
           local: '/me/.config/tranchant/projects/3c1e/lenses',
         },
-        lenses: LENSES,
+        lenses,
       },
       cleanings: [],
       groups,
@@ -290,4 +294,45 @@ test('the ready screen names the group, its lenses off in the settings, and a gr
     true,
   )
   expect(screen.getByText('Building the lenses of this group…')).toBeTruthy()
+})
+
+/** The lenses with a history: money and bugs; the others none. */
+const WITH_HISTORY = LENSES.map((one) =>
+  one.name === 'money'
+    ? { ...one, history: { tokens: 140_000, confirmed: 0.8, runs: 10 } }
+    : one.name === 'bugs' && one.scope === 'recipe'
+      ? { ...one, history: { tokens: 300_000, confirmed: 1.3, runs: 4 } }
+      : one,
+)
+
+test("a lens's average shows under its row, a lens with no history shows none", () => {
+  renderLenses(undefined, GROUPS, WITH_HISTORY)
+  const money = itemOf(screen.getByText('money'))
+  const line = within(money).getByText('~140k tokens a review · 0.8 confirmed')
+  expect(line.className).toBe('tr-lns-history')
+  expect(line.getAttribute('title')).toMatch(/last 10 complete reviews in this project/)
+  expect(
+    within(itemOf(screen.getByText('sql'))).queryByText(/tokens a review/),
+  ).toBeNull()
+  expect(document.querySelectorAll('.tr-lns-history')).toHaveLength(2)
+})
+
+test("a group's average sums its lenses', those with none said; a group with none shows none", () => {
+  renderLenses('groups', GROUPS, WITH_HISTORY)
+  const list = within(screen.getByRole('list', { name: 'Groups' }))
+  const backend = itemOf(list.getByText('backend'))
+  expect(
+    within(backend).getByText(
+      '~440k tokens a review · 2.1 confirmed · 1 lens with no history, not counted',
+    ),
+  ).toBeTruthy()
+  const frontend = itemOf(list.getByText('frontend'))
+  expect(within(frontend).queryByText(/tokens a review/)).toBeNull()
+})
+
+test('with no history at all, no lens and no group shows an average', () => {
+  renderLenses()
+  expect(document.querySelectorAll('.tr-lns-history')).toHaveLength(0)
+  fireEvent.click(tab(/^Groups/))
+  expect(document.querySelectorAll('.tr-lns-history')).toHaveLength(0)
 })

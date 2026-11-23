@@ -19,6 +19,7 @@ import {
   type UsageKind,
 } from './domain'
 import { lensOf } from './progress'
+import type { LensHistory } from './settings'
 
 /** `2.90M`, `412k`, `950`. */
 export function formatTokens(count: number) {
@@ -547,4 +548,41 @@ export function findingCostOf(
     foot = parts.length ? `${head}: ${listed(parts)}.` : `${head}.`
   }
   return { rows, runs, foot }
+}
+
+/** `0.8`, `2`: a count a review, to one decimal. */
+const perReview = (count: number) => String(Math.round(count * 10) / 10)
+
+/** What a lens's or a group's line under its row says, and its tooltip. */
+export interface HistoryLine {
+  text: string
+  title: string
+}
+
+/** A lens's line in Settings › Lenses; none with no history. */
+export function lensHistoryOf(history: LensHistory | undefined): HistoryLine | undefined {
+  if (!history) return undefined
+  return {
+    text: `~${formatTokens(history.tokens)} tokens a review · ${perReview(history.confirmed)} confirmed`,
+    title: `Its reviewer's and its verifications' tokens, and its findings that stood confirmed: the average of its last ${plural(history.runs, 'complete review')} in this project with its prompt as it is now`,
+  }
+}
+
+/**
+ * A group's line in Settings › Lenses › Groups: its lenses' averages summed,
+ * those with none said; none when none of them has one.
+ */
+export function groupHistoryOf(
+  members: readonly (LensHistory | undefined)[],
+): HistoryLine | undefined {
+  const known = members.flatMap((one) => (one ? [one] : []))
+  if (!known.length) return undefined
+  const tokens = known.reduce((sum, one) => sum + one.tokens, 0)
+  const confirmed = known.reduce((sum, one) => sum + one.confirmed, 0)
+  const missing = members.length - known.length
+  return {
+    text: `~${formatTokens(tokens)} tokens a review · ${perReview(confirmed)} confirmed${missing ? ` · ${plural(missing, 'lens', 'lenses')} with no history, not counted` : ''}`,
+    title:
+      "Its lenses' averages summed, each over its last complete reviews in this project: what a review of this group should spend and find",
+  }
 }

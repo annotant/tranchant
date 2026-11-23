@@ -360,6 +360,8 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-lns-state--warn { color: var(--tr-warn); font-weight: 600; }
 .tr-lns-state--danger { color: var(--tr-danger); font-weight: 600; }
 .tr-lns-reason { grid-column: 2 / -1; margin: 0; color: var(--tr-warn); font-size: 12.5px; }
+.tr-lns-history { grid-column: 2 / -1; margin: 0; color: var(--tr-muted); font-size: 12px; }
+.tr-grp-row .tr-lns-history { grid-column: 1 / -1; }
 .tr-lns-edit { display: flex; flex-direction: column; gap: 14px; padding: 4px 16px 16px 60px; }
 .tr-lns-fields, .tr-lns-reads { display: flex; flex-direction: column; gap: 14px; }
 .tr-lns-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 12.5px; }

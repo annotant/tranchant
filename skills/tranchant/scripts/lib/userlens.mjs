@@ -584,8 +584,8 @@ const reasonOf = (error) => (error instanceof Error ? error.message : String(err
  * Every lens that could run on `project`, as Settings › Lenses shows it: the
  * project's, the global ones and the recipe's, each with where it comes
  * from, whether it is on and whether it runs, its settings, and why it
- * cannot be built now when it cannot; an added lens with its last cleaning
- * and whether its source changed since.
+ * cannot be built now when it cannot, its prompt's hash when it can; an
+ * added lens with its last cleaning and whether its source changed since.
  * @param {{ project: string, base: string, values: import('./settings.mjs').Values }} given
  */
 export async function describeLenses({ project, base, values }) {
@@ -639,6 +639,8 @@ export async function describeLenses({ project, base, values }) {
           ...row,
           ...(spec.added && originOfSource(row.source, built.file)),
           ...(built.record.version && { version: built.record.version }),
+          // Its prompt's: a lens's history in the project's reviews is that prompt's.
+          hash: built.hash,
           // What Auto-detect finds, whatever the lens's model: the page says it before it is chosen.
           detected: { file: path.basename(built.file), ...autoModel(built.frontmatter) },
           ...(shown && { frontmatter: shown }),

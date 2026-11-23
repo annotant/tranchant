@@ -5,7 +5,8 @@
 // times its median findings; plus the summary's median. No history file: the
 // review folders the state keeps are the history, read bounded. A past
 // folder is data a fix's agent could have written: one that cannot be read
-// is left out, said once on stderr, never a failure of the page.
+// is left out, said once on stderr, never a failure of the page. The same
+// scan gives Settings › Lenses each lens's average over its last reviews.
 import { readFile, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
@@ -17,11 +18,15 @@ import { pastAgents } from './usage.mjs'
  * What one past review spent on one lens: `reviewer` its reviewer's tokens,
  * none when one of its reviewer's runs reported no whole figure;
  * `verifications` one per finding whose verifiers all reported one;
- * `findings` the findings it sent to verification, whole or not.
- * @typedef {{ hash: string, files?: number, reviewer?: number, verifications: number[], findings: number }} PastLens
+ * `findings` the findings it sent to verification, whole or not;
+ * `confirmed` those of its findings that stand confirmed (all that stand, in
+ * a review not verified).
+ * @typedef {{ hash: string, files?: number, reviewer?: number, verifications: number[], findings: number, confirmed: number }} PastLens
  */
 /**
- * @typedef {{ id: string, createdAt: number, recorded: boolean, summary?: number, lenses: Map<string, PastLens> }} PastReview
+ * `complete`: its status says so; a review cut or still under way says
+ * little of what a lens costs.
+ * @typedef {{ id: string, createdAt: number, complete: boolean, recorded: boolean, summary?: number, lenses: Map<string, PastLens> }} PastReview
  */
 /**
  * What `/api/review` answers as `estimate` while a review waits: `recorded`
@@ -34,10 +39,21 @@ import { pastAgents } from './usage.mjs'
  * @typedef {{ recorded: boolean, summary: Part | null, lenses: (Part & { name: string, perFile: number, runs: number })[] }} Estimate
  */
 
+/**
+ * A lens's average over its last reviews, as Settings › Lenses says it:
+ * `tokens` its reviewer's and its verifications', `confirmed` its findings
+ * that stood confirmed, a review; `runs` the reviews averaged.
+ * @typedef {{ tokens: number, confirmed: number, runs: number }} LensHistory
+ */
+
 /** The most past reviews read: the last written. */
 const SCANNED = 20
 /** The runs of a lens its medians are taken over. */
 const RUNS = 5
+/** The reviews a lens's average in Settings is taken over. */
+const AVERAGED = 10
+/** The most findings of a past review read: a review lands a few dozen. */
+const MAX_FINDINGS = 1000
 /** A file past this size is not read: no review's file is that large. */
 const MAX_FILE = 16 * 1024 * 1024
 /** The most an estimate says, as readUsage caps a count. */
@@ -94,9 +110,64 @@ async function sizeOf(file) {
   return { at: info.mtimeMs, stamp: `${info.mtimeMs}:${info.size}` }
 }
 
+/** The files of a past review's folder `sub`, sorted; none when it has no such folder. */
+async function filesOf(
+  /** @type {string} */ dir,
+  /** @type {string} */ sub,
+  /** @type {string} */ ext,
+) {
+  const names = await readdir(path.join(dir, sub)).catch((error) => {
+    if (errorCode(error) === 'ENOENT') return []
+    throw error
+  })
+  return names.filter((name) => name.endsWith(ext)).toSorted()
+}
+
 /**
- * One past review's sums, read from review.json and its run files' `end`
- * steps; undefined when it ran no lens, or its review.json is unsound.
+ * The lens a finding came from: its own `lens`, else the longest lens name
+ * its id starts with, as the page reads it.
+ * @param {any} finding
+ * @param {string[]} names
+ */
+function lensOfFinding(finding, names) {
+  if (typeof finding.lens === 'string') return finding.lens
+  let found
+  for (const name of names)
+    if (finding.id.startsWith(`${name}-`) && name.length > (found?.length ?? -1))
+      found = name
+  return found
+}
+
+/**
+ * By lens, the findings of a past review that stand confirmed: a removed one
+ * has no file left. One that cannot be read counts for none.
+ * @param {string} dir
+ * @param {string[]} names The review's lenses.
+ * @param {boolean} verify Whether its findings were verified.
+ */
+async function confirmedOf(dir, names, verify) {
+  /** @type {Map<string, number>} */
+  const counts = new Map()
+  const files = (await filesOf(dir, 'findings', '.json')).slice(0, MAX_FINDINGS)
+  for (const name of files) {
+    const file = path.join(dir, 'findings', name)
+    /** @type {any} */
+    const finding = await sizeOf(file)
+      .then(() => readFile(file, 'utf8'))
+      .then((text) => JSON.parse(text))
+      .catch(() => undefined)
+    if (!finding || typeof finding !== 'object' || typeof finding.id !== 'string')
+      continue
+    if (verify && finding.verified !== true) continue
+    const lens = lensOfFinding(finding, names)
+    if (lens && names.includes(lens)) counts.set(lens, (counts.get(lens) ?? 0) + 1)
+  }
+  return counts
+}
+
+/**
+ * One past review's sums, read from review.json, its run files' `end`
+ * steps and its findings; undefined when it ran no lens, or its review.json is unsound.
  * @param {string} dir
  * @returns {Promise<PastReview | undefined>}
  */
@@ -111,6 +182,10 @@ async function readPast(dir) {
   )
     return undefined
   const agents = await pastAgents(dir)
+  const names = review.lenses.flatMap((/** @type {any} */ one) =>
+    typeof one?.name === 'string' && LENS_NAME.test(one.name) ? [one.name] : [],
+  )
+  const confirmed = await confirmedOf(dir, names, review.verify === true)
   const of = (/** @type {string} */ kind, /** @type {string} */ lens) =>
     agents.filter((one) => one.kind === kind && one.lens === lens)
   /** @type {Map<string, PastLens>} */
@@ -137,12 +212,14 @@ async function readPast(dir) {
         return tokens === undefined ? [] : [tokens]
       }),
       findings: byFinding.size,
+      confirmed: confirmed.get(lens.name) ?? 0,
     })
   }
   const summary = whole(agents.filter((one) => one.kind === 'summary'))
   return {
     id: path.basename(dir),
     createdAt,
+    complete: review.status === undefined || review.status === 'complete',
     recorded: agents.some((one) => one.usage),
     ...(summary !== undefined && { summary }),
     lenses,
@@ -157,17 +234,21 @@ async function readPast(dir) {
  */
 async function pastReview(dir, head) {
   const runs = path.join(dir, 'reviewers')
-  const names = await readdir(runs).catch((error) => {
-    if (errorCode(error) === 'ENOENT') return []
-    throw error
-  })
   const files = await Promise.all(
-    names
-      .filter((name) => name.endsWith('.jsonl'))
-      .toSorted()
-      .map(async (name) => `${name}=${(await sizeOf(path.join(runs, name))).stamp}`),
+    (await filesOf(dir, 'reviewers', '.jsonl')).map(
+      async (name) => `${name}=${(await sizeOf(path.join(runs, name))).stamp}`,
+    ),
   )
-  const stamp = [head, ...files].join('\n')
+  // A verifier confirms a finding, or removes it, in its file: the sums change with it.
+  const found = await Promise.all(
+    (await filesOf(dir, 'findings', '.json')).slice(0, MAX_FINDINGS).map((name) =>
+      sizeOf(path.join(dir, 'findings', name)).then(
+        (info) => `findings/${name}=${info.stamp}`,
+        () => `findings/${name}=?`,
+      ),
+    ),
+  )
+  const stamp = [head, ...files, ...found].join('\n')
   const kept = cache.get(dir)
   if (kept?.stamp === stamp) return kept.past
   try {
@@ -182,12 +263,13 @@ async function pastReview(dir, head) {
 }
 
 /**
- * The project's past reviews that ran lenses before this one, the newest
+ * The project's past reviews that ran lenses before `before`, the newest
  * first: at most SCANNED read, the last written.
- * @param {string} dir The review waiting to start: never one of them.
- * @param {number} before Its creation, in ms: a past review was created before.
+ * @param {string} dir A review of the project, the one waiting to start for an estimate.
+ * @param {number} before In ms: a past review was created before.
+ * @param {boolean} [mine] Whether `dir` is one of them: never for its own estimate.
  */
-async function pastReviews(dir, before) {
+async function pastReviews(dir, before, mine = false) {
   const root = path.dirname(dir)
   const names = await readdir(root).catch((error) => {
     say(`${root}: ${why(error)}, no past review read`)
@@ -196,7 +278,7 @@ async function pastReviews(dir, before) {
   const stamped = await Promise.all(
     names
       .map((name) => path.join(root, name))
-      .filter((one) => one !== dir)
+      .filter((one) => mine || one !== dir)
       .map((one) =>
         sizeOf(path.join(one, 'review.json')).then(
           (info) => ({ dir: one, ...info }),
@@ -298,4 +380,55 @@ export async function estimateOf(dir, rows, createdAt) {
         : { tokens: capped(summary), reviews: summaries.map((one) => one.id) },
     lenses,
   }
+}
+
+/**
+ * A lens's average over its last AVERAGED complete reviews with the same
+ * prompt (its hash; unknown, its last run's), its reviewer and every
+ * verification whole; null with none.
+ * @param {PastReview[]} past
+ * @param {string} name
+ * @param {string | undefined} hash
+ * @returns {LensHistory | null}
+ */
+function averageOf(past, name, hash) {
+  /** @type {{ tokens: number, confirmed: number }[]} */
+  const runs = []
+  let prompt = hash
+  for (const review of past) {
+    const lens = review.lenses.get(name)
+    if (!lens || !review.complete) continue
+    prompt ??= lens.hash
+    // The same rule as the estimate's: a prompt changed starts its history over.
+    if (lens.hash !== prompt) break
+    if (lens.reviewer === undefined || lens.verifications.length !== lens.findings)
+      continue
+    runs.push({
+      tokens: lens.reviewer + lens.verifications.reduce((sum, one) => sum + one, 0),
+      confirmed: lens.confirmed,
+    })
+    if (runs.length === AVERAGED) break
+  }
+  if (!runs.length) return null
+  const mean = (/** @type {'tokens' | 'confirmed'} */ key) =>
+    runs.reduce((sum, one) => sum + one[key], 0) / runs.length
+  return {
+    tokens: capped(mean('tokens')),
+    confirmed: Math.round(mean('confirmed') * 10) / 10,
+    runs: runs.length,
+  }
+}
+
+/**
+ * Each lens's average in the project's reviews, in `lenses`' order: Settings
+ * › Lenses. The review the page serves counts once it is complete.
+ * @param {string} dir A review of the project: its folder's siblings are the others.
+ * @param {{ name: string, hash?: string }[]} lenses
+ * @returns {Promise<(LensHistory | null)[]>}
+ */
+export async function lensHistories(dir, lenses) {
+  const past = await pastReviews(dir, Infinity, true)
+  return lenses.map((one) =>
+    LENS_NAME.test(one.name) ? averageOf(past, one.name, one.hash) : null,
+  )
 }

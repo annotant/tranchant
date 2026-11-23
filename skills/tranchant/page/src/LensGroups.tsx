@@ -7,6 +7,7 @@ import type {
   LensGroup,
   LensScope,
 } from './settings'
+import { groupHistoryOf } from './tokens'
 
 /** A group's name, as a lens's: `--group <name>`. */
 const GROUP_NAME = /^[\w-]{1,40}$/
@@ -184,6 +185,13 @@ export function GroupsTab({
             const isOpen = editing === key && draft !== undefined
             const members = isOpen ? draft.members : group.lenses
             const gone = members.filter((one) => !known(one))
+            // Its lenses' averages, as they stand in the draft while it is edited.
+            const history = groupHistoryOf(
+              members.flatMap((one) => {
+                const lens = lenses.find((entry) => isMember([entry], one))
+                return lens ? [lens.history] : []
+              }),
+            )
             const id = `tr-grp-${key}`
             return (
               <li
@@ -233,6 +241,11 @@ export function GroupsTab({
                   >
                     {isOpen ? 'Close' : 'Edit'}
                   </button>
+                  {history && (
+                    <p className="tr-lns-history" title={history.title}>
+                      {history.text}
+                    </p>
+                  )}
                 </div>
                 {isOpen && (
                   <GroupEditor
