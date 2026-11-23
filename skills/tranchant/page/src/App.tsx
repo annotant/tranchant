@@ -37,6 +37,7 @@ import {
   orderedFindings,
   plural,
   type Review,
+  type ReviewUsage,
   type StartChoices,
   stateOf,
   unverifiedIds,
@@ -52,36 +53,54 @@ import { SettingsView } from './SettingsView'
 import { Summary } from './Summary'
 import { applyTheme, type Theme } from './theme'
 import { SettingsLink, ThemeToggle } from './ThemeToggle'
+import { chipOf } from './tokens'
+import { TokensChip, TokensView } from './TokensView'
 
 const NO_SECTIONS: readonly Section[] = []
 
-/** What the page shows: the review, the Settings (`#settings`) or their Lenses (`#settings/lenses`, `/<lens>` opening its editor). */
-type Route = 'review' | 'settings' | 'lenses'
+/**
+ * What the page shows: the review (`#report/<lens>` opening that lens's
+ * report), its Tokens (`#tokens`), the Settings (`#settings`) or their Lenses
+ * (`#settings/lenses`, `/<lens>` opening its editor).
+ */
+type Route = 'review' | 'tokens' | 'settings' | 'lenses'
 
 const LENSES_HASH = '#settings/lenses'
+const REPORT_HASH = '#report'
 
 const readRoute = (): Route =>
   location.hash === '#settings'
     ? 'settings'
-    : location.hash === LENSES_HASH || location.hash.startsWith(`${LENSES_HASH}/`)
-      ? 'lenses'
-      : 'review'
+    : location.hash === '#tokens'
+      ? 'tokens'
+      : location.hash === LENSES_HASH || location.hash.startsWith(`${LENSES_HASH}/`)
+        ? 'lenses'
+        : 'review'
 
-/** The lens `#settings/lenses/<lens>` names, as LensesView keys it. */
-function readLens() {
-  if (!location.hash.startsWith(`${LENSES_HASH}/`)) return undefined
+/** The name after `<prefix>/` in the hash. */
+function readName(prefix: string) {
+  if (!location.hash.startsWith(`${prefix}/`)) return undefined
   try {
-    return decodeURIComponent(location.hash.slice(LENSES_HASH.length + 1))
+    return decodeURIComponent(location.hash.slice(prefix.length + 1))
   } catch {
     return undefined
   }
 }
 
-/** The route the URL's hash names, and the lens it opens, following the gear and the browser's back. */
-function useRoute(): { route: Route; lens: string | undefined } {
-  const [at, setAt] = useState(() => ({ route: readRoute(), lens: readLens() }))
+/** The lens `#settings/lenses/<lens>` names, as LensesView keys it. */
+const readLens = () => readName(LENSES_HASH)
+
+const readAt = () => ({
+  route: readRoute(),
+  lens: readLens(),
+  report: readName(REPORT_HASH),
+})
+
+/** The route the URL's hash names, the lens it opens and the report, following the gear, the chip and the browser's back. */
+function useRoute(): ReturnType<typeof readAt> {
+  const [at, setAt] = useState(readAt)
   useEffect(() => {
-    const onChange = () => setAt({ route: readRoute(), lens: readLens() })
+    const onChange = () => setAt(readAt())
     window.addEventListener('hashchange', onChange)
     return () => window.removeEventListener('hashchange', onChange)
   }, [])
@@ -97,22 +116,25 @@ function Header({
   lenses,
   tally,
   moved,
-  settingsOpen,
+  usage,
+  route,
   onNeedsYou,
   onTheme,
 }: {
   review: Review
+  usage: ReviewUsage | undefined
   /** The Lenses step of a `/tranchant review` review. */
   lenses: LensesProgress | undefined
   tally: ReturnType<typeof counts>
   moved: boolean
-  /** The Settings are shown: the gear leads back. */
-  settingsOpen: boolean
+  /** The Settings or the Tokens are shown: the gear or the chip leads back. */
+  route: Route
   /** Opens the next finding waiting on the reviewer. */
   onNeedsYou: () => void
   /** The theme toggle: written to the settings, for every page. */
   onTheme: (theme: Theme) => void
 }) {
+  const chip = chipOf(usage, review)
   return (
     <header className="tr-header">
       <div className="tr-header-main">
@@ -206,6 +228,7 @@ function Header({
           {lenses && review.status !== 'preparing' && review.status !== 'refused' && (
             <LensesControl step={lenses} />
           )}
+          {chip && <TokensChip chip={chip} open={route === 'tokens'} />}
         </div>
       </div>
       <div className="tr-attention">
@@ -236,7 +259,7 @@ function Header({
       </dl>
       <div className="tr-header-end">
         <div className="tr-header-tools">
-          <SettingsLink open={settingsOpen} />
+          <SettingsLink open={route === 'settings' || route === 'lenses'} />
           <ThemeToggle onPick={onTheme} />
         </div>
         <span className="tr-version">tranchant {TRANCHANT_VERSION}</span>
@@ -305,7 +328,7 @@ export default function App() {
     [reloadSettings, reloadTracker],
   )
   const { payload, reachable, loaded, reload } = useReview(onSettings)
-  const { route, lens: focusedLens } = useRoute()
+  const { route, lens: focusedLens, report } = useRoute()
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [cursorState, setCursor] = useState<string>()
   const [openState, setOpenId] = useState<string>()
@@ -627,7 +650,8 @@ export default function App() {
       lenses={payload?.lenses}
       tally={tally}
       moved={moved}
-      settingsOpen={route !== 'review'}
+      usage={payload?.usage}
+      route={route}
       onNeedsYou={openNextNeedingYou}
       onTheme={(next) => {
         // No settings read yet (an older server): the switch holds for this visit.
@@ -664,6 +688,19 @@ export default function App() {
           onSave={(change) => void settings.save(change)}
           onLens={settings.lens}
         />
+      </div>
+    )
+  }
+  if (route === 'tokens' && payload) {
+    return (
+      <div className="tr-app">
+        {!reachable && (
+          <div className="tr-banner" role="alert">
+            Tranchant stopped serving this review. Retrying every 5 seconds…
+          </div>
+        )}
+        {header}
+        <TokensView review={review} payload={payload} records={records} />
       </div>
     )
   }
@@ -826,6 +863,7 @@ export default function App() {
           .map((group) => group.name)
           .filter((name) => name !== review?.group)}
         onOpen={open}
+        report={report}
       />
       <Summary
         review={review}

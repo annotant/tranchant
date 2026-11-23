@@ -133,6 +133,25 @@ for (const scheme of ['light', 'dark'] as const)
     expect(failing).toEqual([])
   })
 
+for (const scheme of ['light', 'dark'] as const)
+  test(`the ${scheme} tokens chip, its notes and nothing confirmed read at 4.5:1`, () => {
+    const get = palette(scheme)
+    const failing = [
+      'tr-tk-chip',
+      'tr-tk-chip--live',
+      'tr-tk-chip--paused',
+      'tr-tk-note',
+      'tr-tk-flag',
+    ].flatMap((selector) => {
+      const { color, background } = ruleColours(selector)
+      if (!color || !background) return [`${selector} has no colour or background`]
+      return contrast(rgb(get(color))[0], rgb(get(background))[0]) < 4.5
+        ? [`${selector} on ${background}`]
+        : []
+    })
+    expect(failing).toEqual([])
+  })
+
 test('the text is Figtree, under a name of its own, upright and italic', () => {
   const faces = [...PAGE_CSS.matchAll(/@font-face \{([^}]*)\}/g)].map(
     (face) => face[1] ?? '',
