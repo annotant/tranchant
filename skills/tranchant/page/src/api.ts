@@ -3,6 +3,7 @@ import type {
   DecisionInput,
   DecisionsResult,
   ReviewPayload,
+  StartChoices,
   Step,
   Tracker,
 } from './domain'
@@ -181,6 +182,30 @@ export const postDiscuss = (id: string, text: string, change = false) =>
     body: JSON.stringify({ id, text, ...(change && { change: true }) }),
   })
 
+/** Start the review that waits, with the page's choices; or (`build`) build its lenses again, waiting still. */
+export const postStart = (choices: StartChoices, build = false) =>
+  request<{ ok: true }>(`/api/review/${build ? 'build' : 'start'}`, {
+    method: 'POST',
+    body: JSON.stringify(choices),
+  })
+
+/** The review's controls: its agents, never its fixes, discussions or posts. */
+export const postPause = (now = false) =>
+  request<unknown>('/api/review/pause', { method: 'POST', body: JSON.stringify({ now }) })
+
+export const postResume = () =>
+  request<unknown>('/api/review/resume', { method: 'POST', body: '{}' })
+
+/** Stop the review; with `reset`, Stop and reset. */
+export const postHalt = (reset = false) =>
+  request<unknown>('/api/review/halt', {
+    method: 'POST',
+    body: JSON.stringify({ reset }),
+  })
+
+export const postReset = () =>
+  request<unknown>('/api/review/reset', { method: 'POST', body: '{}' })
+
 export const postStop = (id: string) =>
   request<unknown>(STOP, { method: 'POST', body: JSON.stringify({ id }) })
 
@@ -262,7 +287,145 @@ export function useAccount(wanted: boolean, tool?: 'glab' | 'gh') {
 const fetchSettings = () => request<SettingsPayload>(SETTINGS)
 
 /** The changes to the lenses the server takes, by route. */
-export type LensRoute = 'import' | 'add' | 'discard' | 'save' | 'remove' | 'clean'
+export type LensRoute =
+  | 'import'
+  | 'reviewers'
+  | 'add'
+  | 'discard'
+  | 'save'
+  | 'remove'
+  | 'clean'
+  | 'group/save'
+  | 'group/remove'
+  | 'group/default'
+
+/** What a source is, from where it lies: a command is never a lens. */
+type LensKind = 'agent' | 'skill' | 'command'
+
+/** One file a glob typed in Add a lens matches, or one reviewer a command starts: its source, the lens name it gets, why it reads as no reviewer. */
+export interface LensMatch {
+  source: string
+  name: string
+  kind?: LensKind
+  notReviewer?: string
+  /** The lenses made from this same file, and those being added from it. */
+  already?: { scope: 'local' | 'global'; name: string; adding?: true }[]
+  /** A command's, or a file's that starts agents: the reviewers it starts. It is never a lens itself. */
+  starts?: LensMatch[]
+  /** With `starts`: how many more it names, left out. */
+  more?: number
+}
+
+/** What `GET /api/lens/inside` answers: the reviewers inside a source, or null for a single one. */
+/** A single reviewer, or a source whose read found none, has the lens name its source gives when none is typed. */
+export type LensInside =
+  | { inside: null; name: string }
+  | {
+      inside: { kind: LensKind; label: string; starts: LensMatch[]; more?: number }
+      name?: string
+    }
+
+/** The reviewers a command, or a source that starts agents, holds, read from its file with no agent. */
+export const fetchLensInside = (source: string) =>
+  request<LensInside>(`/api/lens/inside?${new URLSearchParams({ source }).toString()}`)
+
+/** What `GET /api/lens/matches` answers: the matches, how many more were left out, or the folder of a glob that matched nothing. */
+export interface LensMatches {
+  matches: LensMatch[]
+  more?: number
+  folder?: {
+    label: string
+    files: string[]
+    count: number
+    missing?: true
+    /** The error code of a folder that is there but cannot be read. */
+    unreadable?: string
+  }
+}
+
+/** The files a glob matches, as the server finds them from the project's root. */
+export const fetchLensMatches = (source: string) =>
+  request<LensMatches>(`/api/lens/matches?${new URLSearchParams({ source }).toString()}`)
+
+/** One skill, agent or command the source's picker offers, written as Source takes it. */
+export interface PickerItem {
+  kind: LensKind
+  name: string
+  source: string
+  already?: LensMatch['already']
+}
+
+/** A `.claude` folder's skills, agents and commands, as the picker lists them. */
+interface DotClaude {
+  folder: string
+  items: PickerItem[]
+  problem?: string
+  more?: number
+}
+
+/** What `GET /api/lens/catalog` answers: the installed plugins', the project's and the user's skills, agents and commands, names only. */
+export interface LensCatalog {
+  plugins: {
+    name: string
+    version?: string
+    folder: string
+    /** False when a settings file turns it off for this project: a lens made from it would not build. */
+    enabled: boolean
+    items: PickerItem[]
+    /** Why some of its items cannot be listed: its folder missing, or unreadable. */
+    problem?: string
+    /** Items past the most listed. */
+    more?: number
+  }[]
+  /** Claude Code's register of plugins cannot be read. */
+  pluginsError?: string
+  project: DotClaude
+  user: DotClaude
+  /** The folders the Files tab may list. */
+  roots: string[]
+}
+
+/** What the source's picker lists in a tab. */
+export const fetchLensCatalog = () => request<LensCatalog>('/api/lens/catalog')
+
+/** Where the Files tab browses: the project, Claude Code's folder, the plugins' folders. */
+export type PickerRoot = 'project' | 'user' | 'plugins'
+
+/** One entry of a folder: one to open, a Markdown file to pick, or one shown and never opened, `reason` saying why. */
+export interface FolderEntry {
+  name: string
+  kind: 'folder' | 'file' | 'hidden' | 'link' | 'unreadable' | 'other'
+  source?: string
+  reason?: string
+  already?: LensMatch['already']
+}
+
+/** What `GET /api/lens/folder` answers: a folder under one of the roots, names only. */
+export interface LensFolder {
+  root: PickerRoot
+  /** Inside its root, `/`-separated; '' for the root itself. */
+  path: string
+  label: string
+  entries: FolderEntry[]
+  more?: number
+}
+
+/** A folder of a root, or one typed (`go`), placed in the root it lies in; refused outside them. */
+export const fetchLensFolder = (
+  where: { root: PickerRoot; path: string } | { go: string },
+) => request<LensFolder>(`/api/lens/folder?${new URLSearchParams(where).toString()}`)
+
+/** What a change to the lenses answers: the settings, the cleanings it made, the matches it refused. */
+export interface LensDone {
+  settings?: SettingsPayload
+  cleaning?: string
+  cleanings?: string[]
+  refused?: { source: string; reason: string }[]
+  /** A lens removed: the groups it left. */
+  removedFrom?: string[]
+  /** The lens changed, but its groups could not follow: why. */
+  groupsProblem?: string
+}
 
 /** The prompt a lens's reviewer reads, built as a review builds it. */
 export const fetchLensPrompt = (scope: string, name: string) =>
@@ -339,10 +502,10 @@ export function useSettings() {
   const lens = useCallback(
     async (route: LensRoute, body: Record<string, unknown>) => {
       try {
-        const done = await request<{ settings?: SettingsPayload; cleaning?: string }>(
-          `/api/lens/${route}`,
-          { method: 'POST', body: JSON.stringify(body) },
-        )
+        const done = await request<LensDone>(`/api/lens/${route}`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        })
         setError(undefined)
         if (!done.settings) await reload()
         else {

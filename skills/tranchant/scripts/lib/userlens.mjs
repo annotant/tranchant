@@ -11,30 +11,32 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
-import { TOPICS } from './format.mjs'
+import { LENS_NAME, TOPICS } from './format.mjs'
 import { hashOf } from './project.mjs'
 import {
   LensRefusal,
   RecipeRefusal,
+  autoModel,
   buildLens,
   checkRecipe,
   findRecipe,
   folderOf,
+  isPluginName,
   originOf,
   readRecipe,
   resolveSource,
 } from './lens.mjs'
 import { SETTINGS_DIR, expandHome } from './settings.mjs'
+import { kindOfPath } from './inside.mjs'
 
 /** @typedef {import('./lens.mjs').LensSpec} LensSpec */
 /** @typedef {'global' | 'local'} Scope */
 /**
  * What a cleaning removed from a source and added for Tranchant, and the
- * hashes of the source and the context skill it read.
+ * hash of the source it read.
  * @typedef {object} Cleaned
  * @property {string} at
  * @property {string} sourceHash
- * @property {string} [contextHash]
  * @property {string} [version]
  * @property {{ what: string, why: string }[]} removed
  * @property {string[]} added
@@ -43,29 +45,27 @@ import { SETTINGS_DIR, expandHome } from './settings.mjs'
  * A lens the user added, as lens.json holds it.
  * @typedef {object} UserLens
  * @property {string} name
- * @property {string} source A plugin's skill or agent (`plugin:name`), or a path.
+ * @property {string} source A plugin's skill, agent or command (`plugin:name`), or a path.
+ * @property {string} [reviewer] A reviewer written inline in the source, by name: the lens is that one alone.
  * @property {boolean} on
  * @property {string[]} paths Empty for an `otherwise` lens.
  * @property {true} [otherwise]
  * @property {string[]} [topics]
  * @property {string} [model]
- * @property {string} [context] A skill that frames the lens's run.
  * @property {string} rules The added instructions: the cleaning agent's, then the user's.
  * @property {true} [rulesEdited] Kept as they are when the lens is cleaned again.
  * @property {Cleaned} cleaned
- * @property {{ at: string, reason: string, sourceHash: string, contextHash?: string }} [failedCleaning]
+ * @property {{ at: string, reason: string, sourceHash: string }} [failedCleaning]
  */
 
 const LENS_VERSION = 1
-const LENS_NAME = /^[\w-]{1,40}$/
 const MODEL = /^[\w.:-]{1,80}$/
-/** Lenses of a scope at most: each is one more agent on every review. */
-export const MAX_SCOPE_LENSES = 12
 const MAX_RULES = 8 * 1024
 const MAX_LIST = 20
 const MAX_TEXT = 500
 const MAX_PATHS = 40
 const MAX_SOURCE = 1024
+const MAX_REVIEWER = 100
 
 /** A lens file, or a change to it, this Tranchant refuses, and why. */
 export class LensFileRefusal extends Error {}
@@ -124,8 +124,8 @@ export async function writeText(/** @type {string} */ file, /** @type {string} *
 const isText = (value) => typeof value === 'string' && value.trim() !== ''
 
 /**
- * A source or a context skill as a lens names it: one line, no control
- * character, since it becomes a line of the cleaning agent's prompt.
+ * A source as a lens names it: one line, no control character, since it
+ * becomes a line of the cleaning agent's prompt.
  * @param {unknown} value
  * @returns {value is string}
  */
@@ -212,10 +212,14 @@ export function checkUserLens(raw) {
     refuse(`version: ${LENS_VERSION} is the only one read`)
   if (typeof raw.name !== 'string' || !LENS_NAME.test(raw.name))
     refuse('name: letters, digits, - and _ only')
-  if (!isSourceText(raw.source)) refuse('source: a skill or agent by name, or a path')
+  if (!isSourceText(raw.source))
+    refuse('source: a skill, agent or command by name, or a path')
+  if (
+    raw.reviewer !== undefined &&
+    !(isSourceText(raw.reviewer) && raw.reviewer.length <= MAX_REVIEWER)
+  )
+    refuse(`reviewer: a name on one line, ${MAX_REVIEWER} characters at most`)
   if (typeof raw.on !== 'boolean') refuse('on: true or false')
-  if (raw.context !== undefined && !isSourceText(raw.context))
-    refuse('context: a skill by name, or a path')
   if (typeof raw.rules !== 'string' || raw.rules.length > MAX_RULES)
     refuse(`rules: a text of ${MAX_RULES / 1024} KiB at most`)
   const spec = checkRuntime(raw, refuse)
@@ -242,18 +246,17 @@ export function checkUserLens(raw) {
   return {
     name: raw.name,
     source: raw.source,
+    ...(raw.reviewer !== undefined && { reviewer: raw.reviewer }),
     on: raw.on,
     paths: spec.paths,
     ...(spec.otherwise && { otherwise: true }),
     ...(spec.topics && { topics: spec.topics }),
     ...(spec.model && { model: spec.model }),
-    ...(raw.context !== undefined && { context: raw.context }),
     rules: raw.rules,
     ...(raw.rulesEdited === true && { rulesEdited: true }),
     cleaned: {
       at: cleaned.at,
       sourceHash: cleaned.sourceHash,
-      ...(isText(cleaned.contextHash) && { contextHash: cleaned.contextHash }),
       ...(isText(cleaned.version) && { version: cleaned.version }),
       ...changes,
     },
@@ -262,7 +265,6 @@ export function checkUserLens(raw) {
         at: failed.at,
         reason: String(failed.reason).slice(0, 1000),
         sourceHash: failed.sourceHash,
-        ...(isText(failed.contextHash) && { contextHash: failed.contextHash }),
       },
     }),
   }
@@ -311,7 +313,7 @@ export async function writeUserLens(
  * @param {string} project
  * @returns {Promise<Listed[]>}
  */
-export async function listUserLenses(scope, project) {
+async function listUserLenses(scope, project) {
   const root = scopeDir(scope, project)
   const names = (await readdir(root, { withFileTypes: true }).catch(() => []))
     .filter((entry) => entry.isDirectory() && LENS_NAME.test(entry.name))
@@ -361,60 +363,59 @@ export function recordedSource(label, scope, project) {
 }
 
 /**
- * The hashes of a lens's source and context skill as they stand, and the
- * source found; throws a LensRefusal when one cannot be found.
- * @param {{ source: string, context?: string }} lens
+ * A source's text as its hash reads it: its line ends LF, its frontmatter's
+ * `model:` line left out, since each review reads that line anew
+ * (Auto-detect). The frontmatter ends where splitFrontmatter ends it.
+ * @param {string} text
+ */
+function hashedText(text) {
+  const normalized = text.replace(/\r\n/g, '\n')
+  if (!normalized.startsWith('---\n')) return text
+  const end = normalized.indexOf('\n---', 3)
+  // No frontmatter line, or never closed: nothing to leave out.
+  if (end < 4) return text
+  const kept = normalized
+    .slice(4, end)
+    .split('\n')
+    .filter((line) => !line.startsWith('model:'))
+  return ['---', ...kept].join('\n') + normalized.slice(end)
+}
+
+/**
+ * The hash of a lens's source as it stands, and the source found; throws a
+ * LensRefusal when it cannot be found. `wholeHash`, its whole text's: a
+ * lens cleaned before the model line was left out recorded that one.
+ * @param {{ source: string }} lens
  * @param {string} project
  */
 export async function hashesOf(lens, project) {
-  const where = whereOf(project)
-  const source = await resolveSource(lens.source, where)
-  let context
-  if (lens.context) {
-    try {
-      context = await resolveSource(lens.context, where)
-    } catch (error) {
-      if (!(error instanceof LensRefusal)) throw error
-      throw new LensRefusal(
-        `its context skill ${lens.context}: ${error.message}`,
-        error.fix,
-      )
-    }
-  }
+  const source = await resolveSource(lens.source, whereOf(project))
   return {
     source,
-    sourceHash: hashText(source.text),
-    ...(context && { context, contextHash: hashText(context.text) }),
+    sourceHash: hashText(hashedText(source.text)),
+    wholeHash: hashText(source.text),
   }
 }
 
 /**
- * Whether `lens` must be cleaned again: its source or its context skill
- * changed since its last cleaning, and no cleaning failed on them as they
- * stand (the page's Clean it again tries anew).
+ * Whether `lens` must be cleaned again: its source changed since its last
+ * cleaning, and no cleaning failed on it as it stands (the page's Clean it
+ * again tries anew). Its `model:` line alone changing is no change, once it
+ * was cleaned by a Tranchant that leaves that line out of the hash.
  * @param {UserLens} lens
- * @param {{ sourceHash: string, contextHash?: string }} now
+ * @param {{ sourceHash: string, wholeHash?: string }} now
  */
 export function staleness(lens, now) {
-  const changed =
-    now.sourceHash !== lens.cleaned.sourceHash ||
-    now.contextHash !== lens.cleaned.contextHash
-  if (!changed) return 'clean'
-  const failed = lens.failedCleaning
-  if (
-    failed &&
-    failed.sourceHash === now.sourceHash &&
-    failed.contextHash === now.contextHash
-  )
-    return 'failed'
-  return 'stale'
+  const is = (/** @type {string | undefined} */ hash) =>
+    hash !== undefined && (hash === now.sourceHash || hash === now.wholeHash)
+  if (is(lens.cleaned.sourceHash)) return 'clean'
+  return is(lens.failedCleaning?.sourceHash) ? 'failed' : 'stale'
 }
 
 /**
  * A change to a stored lens from the page: its name and scope (the folder
- * moves), on or off, where it runs, its topics, model, context skill and
- * added instructions. A key left out stays as it is; `model` or `context`
- * `null` unsets it.
+ * moves), on or off, where it runs, its topics, model and added
+ * instructions. A key left out stays as it is; `model` `null` unsets it.
  * @param {string} project
  * @param {Scope} scope
  * @param {string} name
@@ -435,10 +436,6 @@ export async function updateUserLens(project, scope, name, change) {
     refuse(
       `a lens named ${renamed} is ${to === 'global' ? 'global' : "this project's"} already`,
     )
-  if (target !== dir && to !== scope) {
-    const count = (await listUserLenses(to, project)).length
-    if (count >= MAX_SCOPE_LENSES) refuse(`${MAX_SCOPE_LENSES} lenses of a scope at most`)
-  }
   /** @type {any} */
   // A global lens runs from every project: its paths are recorded absolute.
   const next = {
@@ -454,13 +451,11 @@ export async function updateUserLens(project, scope, name, change) {
     delete next.otherwise
     next.paths = change.paths ?? (lens.otherwise ? ['**'] : lens.paths)
   }
-  for (const key of /** @type {const} */ (['topics', 'model', 'context'])) {
+  for (const key of /** @type {const} */ (['topics', 'model'])) {
     if (change[key] === null || (Array.isArray(change[key]) && !change[key].length))
       delete next[key]
     else if (change[key] !== undefined) next[key] = change[key]
   }
-  if (next.context !== undefined)
-    next.context = recordedSource(String(next.context), to, project)
   if (change.rules !== undefined && change.rules !== lens.rules) {
     next.rules = change.rules
     next.rulesEdited = true
@@ -512,11 +507,13 @@ export async function removeUserLens(
 /**
  * The lenses in force: the project's, then the global ones, then the
  * recipe's; under each name, the first that is on runs. A lens whose
- * lens.json cannot be read runs not, and says why.
- * @param {{ project: string, recipe: LensSpec[], disabled: Set<string>, models: Record<string, string> }} given
+ * lens.json cannot be read runs not, and says why. With `members`, a
+ * group's lenses: a lens is on when it is one of them, whatever its switch
+ * (its spec then says `offInSettings` when that is off).
+ * @param {{ project: string, recipe: LensSpec[], disabled: Set<string>, models: Record<string, string>, members?: { scope: string, name: string }[] }} given
  * @returns {Promise<Candidate[]>}
  */
-export async function lensSet({ project, recipe, disabled, models }) {
+export async function lensSet({ project, recipe, disabled, models, members }) {
   const added = [
     ...(await listUserLenses('local', project)),
     ...(await listUserLenses('global', project)),
@@ -540,7 +537,6 @@ export async function lensSet({ project, recipe, disabled, models }) {
         paths: lens.paths,
         ...(lens.otherwise && { otherwise: true }),
         source: lens.source,
-        ...(lens.context && { context: lens.context }),
         ...(lens.model && { model: lens.model }),
         ...(lens.topics && { topics: lens.topics }),
         added: { scope: listed.scope, dir: listed.dir },
@@ -562,6 +558,14 @@ export async function lensSet({ project, recipe, disabled, models }) {
       spec: { ...lens, ...(models[lens.name] && { model: models[lens.name] }) },
     })),
   ]
+  if (members) {
+    const inGroup = new Set(members.map((one) => `${one.scope}:${one.name}`))
+    for (const one of all) {
+      const on = inGroup.has(`${one.scope}:${one.name}`)
+      if (on && !one.on && one.spec) one.spec = { ...one.spec, offInSettings: true }
+      one.on = on
+    }
+  }
   const taken = new Set()
   for (const one of all) {
     if (!one.on || !one.spec || taken.has(one.name)) continue
@@ -619,7 +623,7 @@ export async function describeLenses({ project, base, values }) {
         ...(spec?.topics && { topics: spec.topics }),
         ...(spec?.model && { model: spec.model }),
         ...(lens && {
-          ...(lens.context && { context: lens.context }),
+          ...(lens.reviewer && { reviewer: lens.reviewer }),
           rules: lens.rules,
           ...(lens.rulesEdited && { rulesEdited: true }),
           cleaned: lens.cleaned,
@@ -630,14 +634,20 @@ export async function describeLenses({ project, base, values }) {
       try {
         const built = await buildLens(spec, spec.added ? whereOf(project) : recipeWhere)
         const standing = lens ? staleness(lens, await hashesOf(lens, project)) : undefined
+        const shown = shownFrontmatter(built.frontmatter.fields)
         return {
           ...row,
+          ...(spec.added && originOfSource(row.source, built.file)),
           ...(built.record.version && { version: built.record.version }),
+          // What Auto-detect finds, whatever the lens's model: the page says it before it is chosen.
+          detected: { file: path.basename(built.file), ...autoModel(built.frontmatter) },
+          ...(shown && { frontmatter: shown }),
           ...(standing && standing !== 'clean' && { stale: standing }),
         }
       } catch (error) {
         return {
           ...row,
+          ...(spec.added && originOfSource(row.source)),
           problem: reasonOf(error),
           ...(error instanceof LensRefusal && { fix: error.fix }),
         }
@@ -649,6 +659,42 @@ export async function describeLenses({ project, base, values }) {
     dirs: { global: scopeDir('global', project), local: scopeDir('local', project) },
     lenses,
   }
+}
+
+/**
+ * Where an added lens comes from: `picked` up from an agent, a skill or a
+ * command (`sourceKind`, what its path says it is), or `custom`, a file of
+ * none (a checklist). A plugin's source is always picked up.
+ * @param {string} label
+ * @param {string} [file] Its file, once found; absent, its label is read as a path.
+ * @returns {{ origin: 'picked' | 'custom', sourceKind?: import('./inside.mjs').Kind }}
+ */
+function originOfSource(label, file) {
+  const plugin = isPluginName(label)
+  const named = file ?? expandHome(label)
+  let kind = kindOfPath(named)
+  // A skill added by its folder, its source gone: the folder is all there is to read.
+  if (!kind && !plugin && !file && path.basename(path.dirname(named)) === 'skills')
+    kind = 'skill'
+  // A plugin's agent in a folder of its agents (plugin:folder:agent).
+  if (!kind && plugin && file && named.split(path.sep).includes('agents')) kind = 'agent'
+  if (kind) return { origin: 'picked', sourceKind: kind }
+  return { origin: plugin ? 'picked' : 'custom' }
+}
+
+/**
+ * What Settings › Lenses shows of a source's frontmatter beside its source,
+ * its name, tools and model (Auto-detect reads the model alone), each cut
+ * short; undefined when it names none of them.
+ * @param {Record<string, string>} fields
+ */
+function shownFrontmatter(fields) {
+  const shown = Object.fromEntries(
+    ['name', 'tools', 'model'].flatMap((key) =>
+      fields[key] ? [[key, fields[key].slice(0, 120)]] : [],
+    ),
+  )
+  return Object.keys(shown).length ? shown : undefined
 }
 
 /** How a lens names its source. @param {LensSpec} lens */

@@ -7,6 +7,200 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-22
+
+### Added
+
+- **A website.** A landing page and the docs on GitHub Pages
+  (https://annotant.github.io/tranchant/), built from the README and
+  `docs/`, linked to Annotant, its sibling.
+- **A skill or command added as a lens is analysed into one lens, or the
+  reviewers it starts.** A whole review process (a team's skill that
+  launches its reviewers in prose, a command whose agents are written in
+  it) is no longer a failed cleaning: its card reads "code-review starts 9
+  reviewers: pick the lenses to make", one checkbox each, its name
+  editable, one that is a lens already locked, and **Add the checked ones**
+  cleans each into a lens of its own. A reviewer is the agent's or skill's
+  file it starts, found in the source's own plugin and marketplace even
+  when that plugin is not installed, or instructions written in the source
+  itself: that lens records its source and the reviewer's name, and is
+  extracted again when the source changes. The agent's paths are data: a
+  file is offered only under the source's plugin or marketplace, or the
+  agents, skills and commands of the project's `.claude` and `~/.claude`;
+  any other is listed with why. A command can become a lens, and one whose
+  read finds no agent offers **Ask an agent to look**.
+- **Pause, stop and reset a review.** The progress panel of a
+  `/tranchant review` gets **Pause**: no new agent starts, those at work
+  finish (*Pausing*), and **Pause now** ends them, each running again from
+  the start on **Resume**. **Stop the review**, paused or not, asks inline
+  (**Keep it running**, **Stop the review**, **Stop and reset**): the agents
+  at work end, the queued ones never start, the lenses left are *not
+  covered*, and the findings that landed stay to read and settle, with no
+  Resume. **Reset the review** removes every finding, decision and
+  discussion, keeps its plan, and brings the page back to **Ready to
+  start the review**. A fix, a post, an issue or a discussion under way goes
+  on through Pause and Stop; Reset is refused until it ends. An agent the hooks
+  fail to stop (TaskStop) is said, keeps showing running, and Reset is
+  refused until it ends (a discussing agent TaskStop did not end aside: it
+  belongs to its finding, and only its question, waiting, holds Reset).
+- **A lens's model on Auto-detect: its source's, else the session's.** A
+  lens's **Model** select starts with **Auto-detect**, the default of a lens
+  you add: the model its agent's, skill's or command's frontmatter names
+  (`model: opus` runs on Opus), else the model of the session that ran
+  `/tranchant review` (no model, `inherit`, or a model that is not
+  Claude's). The source is read again at each review, and a change to its
+  `model:` line alone cleans nothing again (a lens cleaned before this
+  version is cleaned once more the first time); a branch that edits an
+  added lens's source never picks that lens's model. Beside the select, a line says
+  what it resolves to and why; the Source field shows the frontmatter it
+  reads; each lens's row, and each reviewer's on Ready to start, names the
+  model it runs on (*auto · claude-opus-5-5*). `TRANCHANT_MODEL` still wins
+  (#121).
+- **Groups of lenses, one review process per group.** Settings › Lenses has
+  a **Groups** tab beside **Lenses**: a group is a named set of lenses (the
+  project's, the global ones, the built-in ones), made, edited, duplicated
+  (B starts from A) and deleted there, with a name filter, **Check the N
+  shown** and a checkbox on each scope's heading, one lens per name.
+  `/tranchant review --group <name>` runs a group's lenses whatever their
+  switches; with no `--group`, the project's **default group**, *Every lens
+  that is on* until another is picked. Before Start, a **Group** select
+  changes the lenses, and **Save these switches in the group** saves them
+  in it. The header and the progress bar name the group a review runs;
+  each lens on the Lenses tab names its groups, and the filter has a
+  **Group** select. A lens removed leaves every group of the project,
+  and the group's reviews say so until one runs. Groups live with the project's lenses, outside the
+  repository.
+
+- **Only a lens's source is required.** Its name comes from the source: a
+  file's name without its extension (a skill's folder's whole), a
+  `plugin:name`'s name without the plugin; `money-review.md` is no longer
+  shortened to `money`, nor `workflow:code-reviewer-abac` to `abac`. In
+  **Add a lens**, Name shows that name once the source is read, to change,
+  and says before the cleaning starts when it is no lens name or is taken
+  where it would live; `/tranchant import` refused for a taken name gives
+  the command again with `--name`.
+
+- **Filter the lenses.** Settings › Lenses has a filter above the groups: a
+  name (as typed, any case), the origin (**All**, **Built-in**, **Picked
+  up**, **Custom**) and the finding kind; they combine, each group counts
+  its matches (*2 of 5*) and hides with none, a count says how many lenses
+  match, and **Clear the filters** sets them back; no match says which
+  filters are set. Each row names its origin: *built-in*, *picked up ·
+  agent* (or skill, or command: a plugin's, or a file in an `agents` or
+  `commands` folder, or a skill's), *custom · checklist*. The lens whose
+  editor is open stays shown while filtering. The plugin's lenses now
+  declare the topics their prompts file under.
+
+- **Pick a lens's source.** In Settings › Lenses, **Add a lens** has
+  **Browse…** beside Source: a picker under the field, with a search box
+  and four tabs, the three lists counting their matches. **Plugins** lists each installed
+  plugin's skills, agents and commands, with its version and folder; a
+  plugin turned off for this project is said so, its items still pickable
+  (*plugin off here: the lens would not build*). **This project** and
+  **~/.claude** list their `.claude`'s agents, skills and commands.
+  **Files** browses three roots, this project, `~/.claude/` and the
+  plugins' folders, with a breadcrumb and **Go to a folder**: only Markdown
+  files are offered; hidden files, links leaving their root and unreadable
+  folders are shown dimmed with why, never opened; a folder outside the
+  roots is refused, the roots named. An item that is a lens already says so
+  and stays pickable: once picked, Source's help says adding it makes a
+  second lens. Picking fills Source, which stays editable. Names only while
+  browsing: a file's first lines are read once it is in Source, as for a
+  source typed, to list the agents it starts. A plugin's own skill, agent or
+  command is written `plugin:name` in Files too. Tranchant's own lenses are
+  built in, not listed.
+
+- **The lenses inside a command.** In Settings › Lenses, **Add a lens**
+  takes a command as its source, a plugin's (`pr-review-toolkit:review-pr`)
+  or a file in a `commands` folder, and any agent or skill that starts other
+  agents: Tranchant reads it, with no agent (*Reading review-pr for the
+  agents it starts…*), and lists in place of the name the agents and skills
+  it names that resolve, its plugin's, the project's, the user's, or any
+  installed plugin's written `plugin:name`; one that starts agents itself
+  is left out. Each one is checked and renamable, one that is a lens
+  already locked; **Add the N lenses** cleans
+  them as a glob's matches. Among a glob's matches, a command is a group
+  with the agents it starts under it, its checkbox checking or unchecking
+  them all; an agent the glob matched too is listed once, under it. A
+  command is never a lens itself: one that names no agent Tranchant finds
+  (written in it, or a plugin's not installed or turned off) says so and
+  adds nothing, and `/tranchant import` refuses a command, or a
+  source that starts the agents it names, before any cleaning, naming them.
+
+- **Add several lenses at once, from a glob.** In Settings › Lenses, **Add
+  a lens** takes a glob as its source (`.claude/agents/*-review.md`,
+  `~/.claude/agents/review-*.md`): before anything runs, the page lists its
+  matches, each named after its file and renamable, with **Check all** /
+  **Check none**. A file that is a lens already, or being added, under any
+  name, says so (*added already*, *being added*) and cannot be checked; a
+  different file whose name is another lens's where it would live, or
+  another match's, has its name marked: the lenses are added once it is
+  changed. A lens it would replace is said, and a file that starts other
+  agents is flagged *not a reviewer* and starts unchecked. **Add the N lenses** cleans
+  each checked match with its own agent, `maxReviewAgents` at a time; under
+  *Lenses being added* a bar counts the lenses cleaned, those still at work
+  folded behind **Show the details**, those to check or failed listed. One
+  that fails stops none. A
+  glob that matches nothing says so, with the files of the folder it looked
+  in.
+
+- **Start the review yourself, once the lenses are built.** A new setting,
+  **Start the review by itself** (on by default), and `/tranchant review
+  --no-start` for one run (`--start` forces it on; neither is saved): the
+  lenses build, then the page waits in its center with what will run (the
+  target, the lenses on and the files each reads, the agents, the token note
+  past 12 reviewers), a switch on each lens for this review and **Start the
+  review**. **Remember these choices** saves them on Start as Settings ›
+  Lenses does. A lens that cannot be built no longer refuses the review
+  there: turned off, the review starts; **Build the lenses again** builds
+  them anew, as the way back from Settings does.
+
+- **The lens that found each finding.** After `/tranchant review`, each row
+  of the findings list and the finding's detail name the lens that found
+  it, on a quiet chip. A finding no lens found (a review opened from a
+  file, the threads of `/tranchant comments`) shows none.
+
+### Changed
+
+- **The lenses build in the center of the page, then fold into the
+  header.** While `/tranchant review` builds its lenses (or cleans one
+  again first), the page shows a spinner, how many are ready and the rows
+  on demand, in place of the accordion above the review. Once built, a
+  chip in the header (*13 lenses*, amber with a warning when a lens runs
+  its last version) opens the same rows over the page. A refused review
+  names each lens that could not be built, with a link to its editor in
+  Settings › Lenses.
+- A reviewer names its lens when it adds a finding
+  (`add.mjs --lens LENS`), and its hooks refuse the call otherwise. A
+  recipe's whole `prompt` written before this must say so.
+- A review agent's Bash command with a comment (`#`) is refused: the
+  shell drops the words after it, which the hooks would still have read.
+- **Small polish of the page.** The findings' rows and the diff's markers
+  light up on hover; the open finding's *To do* chip, and the file being
+  read's finding count, keep their background on the highlighted row; a
+  truncated title shows whole on hover; the Summary and Related toggles get
+  one chevron, the same open and closed; the keyboard hints wrap between
+  two keys, never inside one; *Waiting for the first finding…* gets the
+  list's padding; *Select among 0 findings* is greyed with its checkbox;
+  in Add a lens's picker, each plugin's (or kind's) head stays at the top
+  of the list while its rows scroll.
+
+### Removed
+
+- **A lens's context skill.** Add a lens and the lens editor no longer ask
+  for one, `/tranchant import` no longer takes `--context`, and a reviewer's
+  prompt no longer has a Context block: only a lens's source decides when it
+  is cleaned again. A lens saved with a `context` still runs, without it; the
+  key is dropped at its next save.
+
+### Fixed
+
+- **A lens's new name, as it is typed.** In Settings › Lenses, the row of
+  an added lens being renamed now shows the name typed in its editor. Once
+  saved, the lens is listed under its new name (or its new scope) with its
+  editor still open, and a page opened at its link follows it instead of
+  saying it is gone.
+
 ## 0.6.0 - 2026-11-19
 
 ### Added

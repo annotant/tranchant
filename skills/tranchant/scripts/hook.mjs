@@ -39,7 +39,7 @@ import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { syncChange } from './lib/discussion.mjs'
 import { withFileLock } from './lib/filelock.mjs'
-import { currentRun, parseDecisions } from './lib/format.mjs'
+import { currentRun, parseDecisions, statusOf } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
 import { SETTINGS_FILE, loadSettings } from './lib/settings.mjs'
 import { createStore, historyPath, progressPath, reviewAgentPath } from './lib/store.mjs'
@@ -205,7 +205,7 @@ const KEPT_REDIRECTION = /^(?:&\d|\s*\/dev\/null)(?=[\s;&|]|$)/
 /**
  * A command's words, by segment, split on `;`, `|`, `&` and newlines outside
  * quotes; or why it is refused: a redirection but `2>&1` and `>/dev/null`, a
- * substitution outside single quotes, an unquoted heredoc. A quoted heredoc's
+ * substitution outside single quotes, an unquoted heredoc, a comment. A quoted heredoc's
  * body is data, skipped: the finding a review script reads.
  * @param {string} text
  * @returns {{ segments: string[][] } | { refusal: string }}
@@ -280,6 +280,8 @@ function shellWords(text) {
         }
       continue
     }
+    // The shell drops what follows: words checked here would never run.
+    if (c === '#' && !started) return { refusal: 'a comment, which hides words' }
     if (/\s/.test(c)) end()
     else {
       word += c
@@ -344,9 +346,25 @@ function reviewArgRefusal(args, review) {
 }
 
 /**
+ * Why a reviewer's add.mjs does not name its lens: `--lens` once, and `lens`.
+ * @param {string[]} args After the script.
+ * @param {string} lens
+ */
+function lensArgRefusal(args, lens) {
+  // node reads a value starting with a dash as an option: such a name goes after `=`.
+  const dashed = lens.startsWith('-')
+  const given = args.flatMap((arg, i) =>
+    arg === '--lens' ? [args[i + 1]] : arg.startsWith('--lens=') ? [arg] : [],
+  )
+  if (given.length === 1 && given[0] === (dashed ? `--lens=${lens}` : lens))
+    return undefined
+  return `a reviewer names its lens, once: add.mjs --review <folder> --lens${dashed ? '=' : ' '}${lens}`
+}
+
+/**
  * Why review agent `name` may not run `command`, or undefined when it may: a
  * chain of reading commands, and the agent's own script (a reviewer's
- * add.mjs; a verifier's verify.mjs or remove.mjs, a discussing agent's
+ * add.mjs, under its lens's name; a verifier's verify.mjs or remove.mjs, a discussing agent's
  * reply.mjs, on its own finding; the summary agent's summarize.mjs), by its
  * path, on its own review.
  * @param {string} name `rv-<lens>`, `vf-<finding id>`, `ds-<finding id>` or `sm-summary`.
@@ -382,6 +400,8 @@ function reviewerRefusal(name, command, review) {
         return `${kind === 'vf' ? 'a verifier gives its verdict' : 'it answers'} on ${name.slice(3)} only`
       const outside = reviewArgRefusal(args.slice(1), review)
       if (outside) return outside
+      const unnamed = kind === 'rv' && lensArgRefusal(args.slice(1), name.slice(3))
+      if (unnamed) return unnamed
       continue
     }
     if (!READERS.has(program)) return `${program} is not a reading command`
@@ -445,6 +465,17 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
   const log = (/** @type {string} */ message) => debug(agent, finding, message)
   const scripts = path.dirname(new URL(import.meta.url).pathname)
   const table = path.join(locksDir(lockRoot), 'table.json')
+
+  /** The review's status; undefined when review.json cannot be read. */
+  async function statusNow() {
+    try {
+      return statusOf(
+        JSON.parse(await readFile(path.join(review, 'review.json'), 'utf8')),
+      )
+    } catch {
+      return undefined
+    }
+  }
 
   /**
    * The decisions of a review; undefined when they cannot be read.
@@ -541,6 +572,8 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
   async function record(steps) {
     if (reviewer) {
       if (!steps.length) return
+      // Back to `preparing` (a reset): a review agent's late steps are dropped.
+      if ((await statusNow()) === 'preparing') return
       const file = reviewAgentPath(review, finding)
       await mkdir(path.dirname(file), { recursive: true })
       await appendFile(

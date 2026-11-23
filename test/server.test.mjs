@@ -19,6 +19,7 @@ import path from 'node:path'
 import { before, test } from 'node:test'
 import { say } from '../skills/tranchant/scripts/lib/discussion.mjs'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
+import { hashOf } from '../skills/tranchant/scripts/lib/project.mjs'
 import { buildPlayground } from './fixtures/playground.mjs'
 import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
 
@@ -1198,6 +1199,38 @@ test('a review opened before its findings grows as they land, then completes', a
   }
 })
 
+test('a finding that lands again under its id after a reset prints LANDED again', async (t) => {
+  const { findings: landing } = await fixture('ours')
+  const imported = await importReview(t, 'ours', stateDir, {
+    id: 'live-reset-1',
+    status: 'reviewing',
+    verify: true,
+    findings: [landing[1]],
+  })
+  const file = path.join(imported.dir, 'review.json')
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...JSON.parse(await readFile(file, 'utf8')),
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  assert.equal(await server.nextLine('LANDED', 0), `LANDED ${landing[1].id}`)
+  const store = createStore(imported.dir)
+  await store.halt()
+  await store.reset()
+  await store.prepared([{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }])
+  const seen = server.output().length
+  const added = await run(
+    process.execPath,
+    [path.join(SCRIPTS, 'add.mjs'), '--review', imported.dir],
+    { input: JSON.stringify(landing[1]) },
+  )
+  assert.equal(added.stdout, `ADDED ${landing[1].id}\n`, added.stderr)
+  assert.equal(await server.nextLine('LANDED', seen), `LANDED ${landing[1].id}`)
+})
+
 test('a verified review prints LANDED once per finding, and serves its review agents', async (t) => {
   const { findings: landing } = await fixture('ours')
   const imported = await importReview(t, 'ours', stateDir, {
@@ -1772,6 +1805,7 @@ const DEFAULT_SETTINGS = {
   disabledLenses: [],
   lensModels: {},
   postWith: 'auto',
+  startReview: true,
 }
 
 /** A server with a settings folder of its own, and ways to read and write its file. */
@@ -1879,7 +1913,7 @@ test('a settings change the file cannot hold is refused with its key, the file k
     [{ maxReviewAgents: 2.5 }, 'maxReviewAgents: a whole number from 1 to 8'],
     [{ fixModel: 'not a model!' }, 'fixModel: a model id, letters, digits, . : - and _'],
     [{ recipe: 'relative.json' }, 'recipe: an absolute path to a recipe file, or ~/…'],
-    [{ disabledLenses: ['ok', 'not ok'] }, /^disabledLenses: up to 12 lens names/],
+    [{ disabledLenses: ['ok', 'not ok'] }, /^disabledLenses: lens names/],
     [{ postWith: 'curl' }, 'postWith: one of auto, glab, gh'],
     [{ colour: 'red' }, 'colour: not a setting'],
     [{ version: 2 }, 'version: 1 is the only one read'],
@@ -2066,7 +2100,6 @@ test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, chang
   // Still being cleaned: nothing to add yet.
   assert.equal((await lensPost('add', { id: cleaning })).status, 409)
 
-  const { hashOf } = await import('../skills/tranchant/scripts/lib/project.mjs')
   const folder = path.join(stateDir, hashOf(server.project), 'cleanings', cleaning)
   await writeFile(path.join(folder, 'lens.md'), 'A float on a money path is a finding.\n')
   await writeFile(
@@ -2153,4 +2186,934 @@ test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, chang
   )
   assert.equal((await lensPost('remove', { scope: 'global', name: 'cents' })).status, 409)
   assert.equal((await lensPost('discard', { id: '../x' })).status, 400)
+})
+
+test("/api/lens/matches lists a glob's matches; /api/lens/import with sources cleans each checked one, a CLEAN line each", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, { env: { XDG_CONFIG_HOME: config } })
+  const agents = path.join(server.project, '.claude', 'agents')
+  await mkdir(agents, { recursive: true })
+  for (const name of ['api-review', 'i18n-review', 'perf-review'])
+    await writeFile(path.join(agents, `${name}.md`), `Review ${name}.\n`)
+  const matches = (/** @type {string} */ source) =>
+    fetch(`${server.base}/api/lens/matches?${new URLSearchParams({ source }).toString()}`)
+
+  const found = await json(await matches('.claude/agents/*-review.md'))
+  assert.deepEqual(
+    found.matches.map((/** @type {any} */ one) => [one.source, one.name]),
+    [
+      ['.claude/agents/api-review.md', 'api-review'],
+      ['.claude/agents/i18n-review.md', 'i18n-review'],
+      ['.claude/agents/perf-review.md', 'perf-review'],
+    ],
+  )
+  const none = await json(await matches('.claude/agents/*-reviewer.md'))
+  assert.deepEqual(none.matches, [])
+  assert.equal(none.folder.label, '.claude/agents/')
+  assert.equal(none.folder.count, 3)
+  assert.equal((await matches('**/*.md')).status, 409)
+  assert.equal((await matches('')).status, 400)
+
+  const from = server.output().length
+  const started = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      from: '.claude/agents/*-review.md',
+      // The unchecked match (i18n) is not sent; one source is not there.
+      sources: [
+        { source: '.claude/agents/api-review.md', name: 'api-review' },
+        { source: '.claude/agents/perf-review.md', name: 'perf' },
+        { source: '.claude/agents/gone-review.md', name: 'gone' },
+      ],
+    }),
+  })
+  assert.equal(started.status, 200)
+  const done = await json(started)
+  assert.equal(done.cleanings.length, 2)
+  assert.deepEqual(
+    done.refused.map((/** @type {any} */ one) => one.source),
+    ['.claude/agents/gone-review.md'],
+  )
+  const lines = []
+  for (const id of done.cleanings) lines.push(await server.nextLine(`CLEAN ${id}`, from))
+  assert.equal(lines.length, 2)
+  // The same glob again: the files being added say so.
+  const again = await json(await matches('.claude/agents/*-review.md'))
+  assert.deepEqual(
+    again.matches.map((/** @type {any} */ one) => one.already),
+    [
+      [{ scope: 'local', name: 'api-review', adding: true }],
+      undefined,
+      [{ scope: 'local', name: 'perf', adding: true }],
+    ],
+  )
+  assert.deepEqual(
+    done.settings.cleanings
+      .map((/** @type {any} */ one) => [one.name, one.state, one.waiting, one.from])
+      .toSorted(),
+    [
+      ['api-review', 'cleaning', true, '.claude/agents/*-review.md'],
+      ['perf', 'cleaning', true, '.claude/agents/*-review.md'],
+    ],
+  )
+
+  // A file being added already is refused, whatever name it is sent under.
+  const twice = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      sources: [{ source: '.claude/agents/api-review.md', name: 'api-again' }],
+    }),
+  })
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /api-review\.md: added already, as api-review/)
+
+  const allRefused = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      sources: [{ source: '.claude/agents/gone-review.md' }],
+    }),
+  })
+  assert.equal(allRefused.status, 409)
+  assert.match((await json(allRefused)).error, /gone-review\.md: .*no such file/)
+  assert.equal(
+    (
+      await fetch(`${server.base}/api/lens/import`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'local', sources: [] }),
+      })
+    ).status,
+    400,
+  )
+})
+
+test('a review waiting to start: Build and Start print their line with the choices, Start saves them when asked', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, {
+    overrides: { status: 'preparing', verify: true },
+    env: { XDG_CONFIG_HOME: config },
+  })
+  const send = (/** @type {string} */ route, /** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/review/${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const choices = path.join(server.dir, 'choices.json')
+  const settingsFile = path.join(config, 'tranchant', 'settings.json')
+  const rows = [
+    { name: 'bugs', source: 'tranchant:bugs', state: 'ready', files: 2 },
+    { name: 'docs', source: 'tranchant:docs', state: 'idle', files: 1, off: true },
+  ]
+  /** lenses.json waiting, as lenses.mjs writes it again after each Start or Build. */
+  const waiting = (/** @type {object} */ more = {}) =>
+    writeFile(
+      path.join(server.dir, 'lenses.json'),
+      JSON.stringify({
+        state: 'waiting',
+        wait: 'flag',
+        changed: 2,
+        lenses: rows,
+        ...more,
+      }),
+    )
+  // Its lenses still building: nothing to start.
+  const early = await send('start', { lenses: {}, remember: false })
+  assert.equal(early.status, 409)
+  await assert.rejects(readFile(choices))
+  await waiting()
+  assert.equal(
+    (await send('start', { lenses: { bugs: 'no' }, remember: false })).status,
+    400,
+  )
+  assert.equal((await send('start', { lenses: {} })).status, 400)
+  let printed = server.output().length
+  const built = await send('build', { lenses: { docs: true }, remember: false })
+  assert.equal(built.status, 200)
+  assert.equal(await server.nextLine('BUILD ', printed), `BUILD ${server.review?.id}`)
+  assert.deepEqual(JSON.parse(await readFile(choices, 'utf8')), {
+    lenses: { docs: true },
+    remember: false,
+  })
+  // That Build not taken up yet (lenses.json has not moved): no second one.
+  const twice = await send('start', { lenses: {}, remember: false })
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /being built again/)
+  // Nothing saved by a build, nor by a start that does not ask.
+  await assert.rejects(readFile(settingsFile))
+  await waiting()
+  // A settings file it cannot read: nothing saved, nothing started.
+  await mkdir(path.dirname(settingsFile), { recursive: true })
+  await writeFile(settingsFile, '{ not json')
+  const unread = await send('start', { lenses: { bugs: false }, remember: true })
+  assert.equal(unread.status, 409)
+  assert.match((await json(unread)).error, /the settings cannot be saved/)
+  assert.equal(await readFile(settingsFile, 'utf8'), '{ not json')
+  await rm(settingsFile)
+  printed = server.output().length
+  const started = await send('start', {
+    lenses: { bugs: false, docs: true },
+    remember: true,
+  })
+  assert.equal(started.status, 200)
+  assert.equal(await server.nextLine('START ', printed), `START ${server.review?.id}`)
+  const stored = async () => JSON.parse(await readFile(settingsFile, 'utf8'))
+  assert.deepEqual((await stored()).disabledLenses, ['bugs'])
+  // A run's own recipe: nothing to remember.
+  await waiting({ own: true })
+  const own = await send('start', { lenses: { bugs: true }, remember: true })
+  assert.equal(own.status, 409)
+  assert.deepEqual((await stored()).disabledLenses, ['bugs'])
+})
+
+test('/api/lens/inside lists the agents a command starts, those being added said; the command itself is refused as a lens', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  const dotClaude = path.join(server.project, '.claude')
+  await mkdir(path.join(dotClaude, 'agents'), { recursive: true })
+  await mkdir(path.join(dotClaude, 'commands'), { recursive: true })
+  for (const name of ['code-review', 'test-review'])
+    await writeFile(path.join(dotClaude, 'agents', `${name}.md`), `Review ${name}.\n`)
+  await writeFile(
+    path.join(dotClaude, 'commands', 'review-pr.md'),
+    'Run code-review, then test-review, and merge their reports.\n',
+  )
+  const inside = (/** @type {string} */ source) =>
+    fetch(`${server.base}/api/lens/inside?${new URLSearchParams({ source }).toString()}`)
+  const command = '.claude/commands/review-pr.md'
+
+  const found = (await json(await inside(command))).inside
+  assert.equal(found.kind, 'command')
+  assert.deepEqual(
+    found.starts.map((/** @type {any} */ one) => [one.source, one.name, one.already]),
+    [
+      ['.claude/agents/code-review.md', 'code-review', undefined],
+      ['.claude/agents/test-review.md', 'test-review', undefined],
+    ],
+  )
+  // A single reviewer, and a source that is not there: the usual add, with the name it gets.
+  assert.deepEqual(await json(await inside('.claude/agents/code-review.md')), {
+    inside: null,
+    name: 'code-review',
+  })
+  assert.deepEqual(await json(await inside('workflow:code-reviewer-abac')), {
+    inside: null,
+    name: 'code-reviewer-abac',
+  })
+  assert.equal((await json(await inside('.claude/agents/gone.md'))).inside, null)
+  assert.equal((await inside('')).status, 400)
+
+  const importing = (/** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/lens/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const whole = await importing({ scope: 'local', source: command })
+  assert.equal(whole.status, 409)
+  assert.match(
+    (await json(whole)).error,
+    /is a command that starts other reviewers: add the 2 reviewers it starts instead \(code-review, test-review\)/,
+  )
+  const added = await importing({
+    scope: 'local',
+    from: command,
+    sources: [{ source: '.claude/agents/code-review.md', name: 'code-review' }],
+  })
+  assert.equal(added.status, 200)
+  const again = (await json(await inside(command))).inside
+  assert.deepEqual(again.starts[0].already, [
+    { scope: 'local', name: 'code-review', adding: true },
+  ])
+
+  // A command whose read finds none: its name, and its cleaning agent looks when asked.
+  const alone = '.claude/commands/full-review.md'
+  await writeFile(
+    path.join(dotClaude, 'commands', 'full-review.md'),
+    'Read the change for missing null checks.\n',
+  )
+  assert.deepEqual(await json(await inside(alone)), {
+    inside: { kind: 'command', label: alone, starts: [] },
+    name: 'full-review',
+  })
+  const asked = await importing({ scope: 'local', source: alone })
+  assert.equal(asked.status, 200)
+  const { cleaning } = await json(asked)
+  // Its reviewers are picked once its agent found a process: not before.
+  const reviewers = (/** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/lens/reviewers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  assert.equal((await reviewers({ picks: [] })).status, 400)
+  const early = await reviewers({ id: cleaning, picks: [{ index: 0 }] })
+  assert.equal(early.status, 409)
+  assert.match((await json(early)).error, /lists no reviewers to add/)
+
+  // Its agent found a process: one reviewer being added already is locked; the checked one is cleaned.
+  await writeFile(path.join(dotClaude, 'agents', 'docs-review.md'), 'Review the docs.\n')
+  const cleaningDir = path.join(stateDir, hashOf(server.project), 'cleanings', cleaning)
+  await writeFile(
+    path.join(cleaningDir, 'report.json'),
+    JSON.stringify({
+      process: 'It starts two reviewers written beside it.',
+      reviewers: [
+        { name: 'code-review', file: path.join(dotClaude, 'agents', 'code-review.md') },
+        { name: 'docs-review', file: path.join(dotClaude, 'agents', 'docs-review.md') },
+      ],
+    }),
+  )
+  const checked = await run(
+    process.execPath,
+    [
+      path.join(SCRIPTS, 'clean.mjs'),
+      '--project',
+      server.project,
+      '--check',
+      cleaningDir,
+    ],
+    {
+      env: {
+        TRANCHANT_STATE_DIR: stateDir,
+        XDG_CONFIG_HOME: config,
+        CLAUDE_CONFIG_DIR: claude,
+      },
+    },
+  )
+  assert.match(checked.stdout, /^CLEANED process local full-review$/m, checked.stderr)
+  const settings = await json(await fetch(`${server.base}/api/settings`))
+  const card = settings.cleanings.find((/** @type {any} */ one) => one.id === cleaning)
+  assert.deepEqual(
+    card.reviewers.map((/** @type {any} */ one) => [one.name, one.already]),
+    [
+      ['code-review', [{ scope: 'local', name: 'code-review', adding: true }]],
+      ['docs-review', undefined],
+    ],
+  )
+  const printed = server.output().length
+  const picked = await reviewers({ id: cleaning, picks: [{ index: 1 }] })
+  assert.equal(picked.status, 200)
+  const [made] = (await json(picked)).cleanings
+  assert.equal(await server.nextLine('CLEAN ', printed), `CLEAN ${made}`)
+})
+
+test("/api/lens/catalog lists the plugins' skills, agents and commands, a turned-off one said, the project's and the user's .claude, names only", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const plugins = await tempDir(t, 'tranchant-plugins-')
+  const install = async (/** @type {string} */ name) => {
+    const root = path.join(plugins, name)
+    await mkdir(path.join(root, 'agents'), { recursive: true })
+    await mkdir(path.join(root, 'skills', 'code-review'), { recursive: true })
+    await mkdir(path.join(root, 'commands'), { recursive: true })
+    await writeFile(
+      path.join(root, 'agents', 'code-reviewer-api.md'),
+      'Review the API.\n',
+    )
+    await writeFile(
+      path.join(root, 'agents', 'code-review.md'),
+      'Same name as a skill.\n',
+    )
+    await writeFile(path.join(root, 'skills', 'code-review', 'SKILL.md'), 'Review.\n')
+    await writeFile(path.join(root, 'commands', 'review-mr.md'), 'Run them.\n')
+    await writeFile(path.join(root, 'agents', 'notes.txt'), 'Not an agent.\n')
+    return root
+  }
+  const roots = {
+    workflow: await install('workflow'),
+    dba: await install('dba'),
+    tranchant: await install('tranchant'),
+  }
+  await mkdir(path.join(claude, 'plugins'), { recursive: true })
+  await writeFile(
+    path.join(claude, 'plugins', 'installed_plugins.json'),
+    JSON.stringify({
+      version: 2,
+      plugins: Object.fromEntries(
+        Object.entries(roots).map(([name, root]) => [
+          `${name}@team`,
+          [{ scope: 'user', installPath: root, version: '2.5.0' }],
+        ]),
+      ),
+    }),
+  )
+  await writeFile(
+    path.join(claude, 'settings.json'),
+    JSON.stringify({ enabledPlugins: { 'dba@team': false } }),
+  )
+  await mkdir(path.join(claude, 'agents'), { recursive: true })
+  await writeFile(path.join(claude, 'agents', 'react-review.md'), 'Hooks.\n')
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  await mkdir(path.join(server.project, '.claude', 'skills', 'code-style'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(server.project, '.claude', 'skills', 'code-style', 'SKILL.md'),
+    'Style.\n',
+  )
+  const catalog = await json(await fetch(`${server.base}/api/lens/catalog`))
+  // Tranchant's own is left out: its lenses are built in.
+  assert.deepEqual(
+    catalog.plugins.map((/** @type {any} */ one) => [one.name, one.enabled, one.version]),
+    [
+      ['dba', false, '2.5.0'],
+      ['workflow', true, '2.5.0'],
+    ],
+  )
+  const workflow = catalog.plugins[1]
+  assert.deepEqual(
+    workflow.items.map((/** @type {any} */ one) => [one.kind, one.name, one.source]),
+    [
+      ['skill', 'code-review', 'workflow:code-review'],
+      // workflow:code-review is the skill's: the agent of the same name is written by its path.
+      ['agent', 'code-review', path.join(roots.workflow, 'agents', 'code-review.md')],
+      ['agent', 'code-reviewer-api', 'workflow:code-reviewer-api'],
+      ['command', 'review-mr', 'workflow:review-mr'],
+    ],
+  )
+  assert.deepEqual(catalog.project, {
+    folder: '.claude/',
+    items: [{ kind: 'skill', name: 'code-style', source: '.claude/skills/code-style' }],
+  })
+  assert.deepEqual(
+    catalog.user.items.map((/** @type {any} */ one) => one.name),
+    ['react-review'],
+  )
+  assert.equal(catalog.roots.length, 3)
+
+  // One added already, or being added, says so.
+  const added = await fetch(`${server.base}/api/lens/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: 'local',
+      source: 'workflow:code-reviewer-api',
+      name: 'api',
+    }),
+  })
+  assert.equal(added.status, 200)
+  const again = await json(await fetch(`${server.base}/api/lens/catalog`))
+  assert.deepEqual(
+    again.plugins[1].items.find(
+      (/** @type {any} */ one) => one.name === 'code-reviewer-api',
+    ).already,
+    [{ scope: 'local', name: 'api', adding: true }],
+  )
+})
+
+test('/api/lens/folder lists names under the allowed roots: hidden files, links out and unreadable folders shown, never opened; a folder outside refused', async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const outside = await tempDir(t, 'tranchant-outside-')
+  await mkdir(path.join(outside, 'checklists'))
+  await writeFile(path.join(outside, 'checklists', 'secret.md'), 'Outside.\n')
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  const docs = path.join(server.project, 'docs')
+  await mkdir(path.join(docs, 'checklists'), { recursive: true })
+  await mkdir(path.join(docs, 'private'))
+  // Empty: the project's folder is removed after the test whatever its rights.
+  await chmod(path.join(docs, 'private'), 0o000)
+  await writeFile(path.join(docs, 'review-checklist.md'), 'Check.\n')
+  await writeFile(path.join(docs, 'notes.txt'), 'Notes.\n')
+  await writeFile(path.join(docs, '.env'), 'TOKEN=1\n')
+  await symlink(path.join(outside, 'checklists'), path.join(docs, 'shared'))
+  await symlink(path.join(docs, 'checklists'), path.join(docs, 'here'))
+  const folder = (/** @type {Record<string, string>} */ query) =>
+    fetch(`${server.base}/api/lens/folder?${new URLSearchParams(query).toString()}`)
+
+  const listed = await json(await folder({ root: 'project', path: 'docs' }))
+  assert.equal(listed.label, 'docs/')
+  const byName = Object.fromEntries(
+    listed.entries.map((/** @type {any} */ one) => [one.name, one]),
+  )
+  assert.equal(byName.checklists.kind, 'folder')
+  // A link that stays in its root is followed: a folder like any other.
+  assert.equal(byName.here.kind, 'folder')
+  assert.equal(byName.shared.kind, 'link')
+  assert.equal(byName['.env'].kind, 'hidden')
+  assert.equal(byName['notes.txt'].kind, 'other')
+  assert.deepEqual(byName['review-checklist.md'], {
+    name: 'review-checklist.md',
+    kind: 'file',
+    source: 'docs/review-checklist.md',
+  })
+  // Root runs as root in some CI containers: it reads every folder.
+  if (process.getuid?.() !== 0) assert.equal(byName.private.kind, 'unreadable')
+  // Nothing of a file's text: names only.
+  assert.doesNotMatch(JSON.stringify(listed), /TOKEN|Check\./)
+
+  for (const query of /** @type {Record<string, string>[]} */ ([
+    { root: 'project', path: 'docs/shared' },
+    { root: 'project', path: '../' },
+    { root: 'project', path: 'docs/../..' },
+    { root: 'project', path: '.git' },
+    { go: outside },
+    { go: path.join(outside, 'missing') },
+    { go: path.join(docs, 'shared') },
+    { go: '../..' },
+  ])) {
+    const refused = await folder(query)
+    assert.equal(refused.status, 409, JSON.stringify(query))
+    const body = await json(refused)
+    assert.equal(body.roots.length, 3)
+    assert.doesNotMatch(JSON.stringify(body), /secret/)
+  }
+  assert.match(
+    (await json(await folder({ go: outside }))).error,
+    /is not listed: it lies outside the folders Tranchant may list/,
+  )
+  // A folder typed from the project, `~/`-free, lands in its root.
+  const typed = await json(await folder({ go: 'docs/checklists/' }))
+  assert.deepEqual([typed.root, typed.path], ['project', 'docs/checklists'])
+  const user = await json(await folder({ go: claude }))
+  assert.deepEqual([user.root, user.path], ['user', ''])
+  assert.equal((await folder({ root: 'elsewhere' })).status, 400)
+  const plugins = await json(await folder({ root: 'plugins', path: '' }))
+  assert.deepEqual(plugins.entries, [])
+})
+
+test("/api/lens/folder browses a plugin's folder, its own files written plugin:name; a link into a hidden place, a hidden path or a link out answer the same whether what lies past them is there or not", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const claude = await tempDir(t, 'tranchant-claude-')
+  const plugins = await tempDir(t, 'tranchant-plugins-')
+  const outside = await tempDir(t, 'tranchant-outside-')
+  await mkdir(path.join(outside, 'exists'))
+  const workflow = path.join(plugins, 'workflow')
+  await mkdir(path.join(workflow, 'agents'), { recursive: true })
+  await mkdir(path.join(workflow, 'skills', 'x'), { recursive: true })
+  await writeFile(path.join(workflow, 'agents', 'rev.md'), 'Review.\n')
+  await writeFile(path.join(workflow, 'agents', 'x.md'), 'Shadowed by the skill.\n')
+  await writeFile(path.join(workflow, 'skills', 'x', 'SKILL.md'), 'Skill.\n')
+  await mkdir(path.join(claude, 'plugins'), { recursive: true })
+  const register = path.join(claude, 'plugins', 'installed_plugins.json')
+  await writeFile(
+    register,
+    JSON.stringify({
+      version: 2,
+      plugins: {
+        'workflow@team': [{ scope: 'user', installPath: workflow }],
+        'tranchant@team': [{ scope: 'user', installPath: plugins }],
+        'gone@team': [{ scope: 'user', installPath: path.join(plugins, 'gone') }],
+      },
+    }),
+  )
+  const server = await startServer(t, {
+    env: { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: claude },
+  })
+  const folder = (/** @type {Record<string, string>} */ query) =>
+    fetch(`${server.base}/api/lens/folder?${new URLSearchParams(query).toString()}`)
+
+  const roots = await json(await folder({ root: 'plugins', path: '' }))
+  assert.deepEqual(
+    roots.entries.map((/** @type {any} */ one) => one.name),
+    ['gone', 'workflow'],
+  )
+  const agents = await json(await folder({ root: 'plugins', path: 'workflow/agents' }))
+  assert.equal(agents.path, 'workflow/agents')
+  assert.deepEqual(
+    agents.entries.map((/** @type {any} */ one) => [one.name, one.source]),
+    [
+      ['rev.md', 'workflow:rev'],
+      // workflow:x is the skill's: the agent of the same name keeps its path.
+      ['x.md', path.join(workflow, 'agents', 'x.md')],
+    ],
+  )
+  const went = await json(await folder({ go: path.join(workflow, 'agents') }))
+  assert.deepEqual([went.root, went.path], ['plugins', 'workflow/agents'])
+  for (const one of ['tranchant', 'nope/x'])
+    assert.equal((await folder({ root: 'plugins', path: one })).status, 409, one)
+  const catalog = await json(await fetch(`${server.base}/api/lens/catalog`))
+  assert.match(
+    catalog.plugins.find((/** @type {any} */ one) => one.name === 'gone').problem,
+    /install folder is missing/,
+  )
+
+  const project = server.project
+  await mkdir(path.join(project, '.git'))
+  await writeFile(path.join(project, '.git', 'config'), '[core]\n')
+  await mkdir(path.join(project, '.secret'))
+  await writeFile(path.join(project, '.secret', 'key'), 'k\n')
+  await symlink(path.join(project, '.git'), path.join(project, 'g'))
+  await symlink(outside, path.join(project, 'out'))
+  await writeFile(path.join(project, 'what?.md'), 'Glob-like.\n')
+  const top = await json(await folder({ root: 'project', path: '' }))
+  const byName = Object.fromEntries(
+    top.entries.map((/** @type {any} */ one) => [one.name, one]),
+  )
+  assert.equal(top.label, './')
+  assert.deepEqual(
+    [byName.g.kind, byName.g.reason],
+    ['link', 'leads to a hidden place: not followed'],
+  )
+  assert.equal(byName['what?.md'].kind, 'other')
+  const error = async (/** @type {Record<string, string>} */ query) => {
+    const answer = await folder(query)
+    assert.equal(answer.status, 409, JSON.stringify(query))
+    return (await json(answer)).error.replace(/^\S+/, '…')
+  }
+  assert.match(await error({ root: 'project', path: 'g' }), /hidden folder/)
+  assert.match(await error({ go: 'g/hooks' }), /hidden folder/)
+  // Past a hidden name, or a link out, the answer says nothing of what lies there.
+  assert.equal(await error({ go: '.secret/key' }), await error({ go: '.secret/nokey' }))
+  assert.equal(await error({ go: 'out/exists' }), await error({ go: 'out/nothere' }))
+  assert.equal(
+    await error({ root: 'project', path: 'out/exists' }),
+    await error({ root: 'project', path: 'out/nothere' }),
+  )
+
+  // A register that cannot be read: the catalog and the project's folders still answer.
+  await writeFile(register, '{')
+  const broken = await json(await fetch(`${server.base}/api/lens/catalog`))
+  assert.match(broken.pluginsError, /cannot be read/)
+  assert.deepEqual(broken.plugins, [])
+  assert.equal((await folder({ root: 'project', path: '' })).status, 200)
+  assert.match(
+    (await json(await folder({ root: 'plugins', path: '' }))).error,
+    /plugins cannot be listed/,
+  )
+})
+
+test("/api/lens/group/* makes, renames and deletes a project's groups; a lens renamed stays in them, removed leaves them; Start saves a group's switches in it", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, {
+    overrides: { status: 'preparing', verify: true },
+    env: { XDG_CONFIG_HOME: config },
+  })
+  const send = (/** @type {string} */ route, /** @type {unknown} */ body) =>
+    fetch(`${server.base}/api/${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const first = await json(await fetch(`${server.base}/api/settings`))
+  assert.deepEqual(first.groups.list, [])
+  assert.equal(first.groups.default, undefined)
+  assert.ok(first.groups.file.startsWith(path.join(config, 'tranchant', 'projects')))
+  // A lens of the project's, as Add a lens leaves it.
+  const money = path.join(first.lensSet.dirs.local, 'money')
+  await mkdir(money, { recursive: true })
+  await writeFile(path.join(money, 'lens.md'), 'Amounts are in cents.\n')
+  await writeFile(
+    path.join(money, 'lens.json'),
+    JSON.stringify({
+      version: 1,
+      name: 'money',
+      source: 'money.md',
+      on: true,
+      paths: ['**'],
+      rules: '',
+      cleaned: { at: '2026-11-18T09:12:00Z', sourceHash: 'x', removed: [], added: [] },
+    }),
+  )
+  const bugs = { scope: 'recipe', name: 'bugs' }
+  const made = await send('lens/group/save', {
+    group: { name: 'A', lenses: [bugs, { scope: 'local', name: 'money' }] },
+  })
+  assert.equal(made.status, 200)
+  assert.deepEqual((await json(made)).settings.groups.list, [
+    { name: 'A', lenses: [bugs, { scope: 'local', name: 'money' }] },
+  ])
+  const twice = await send('lens/group/save', { group: { name: 'A', lenses: [bugs] } })
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /already named A/)
+  assert.equal((await send('lens/group/save', { name: '../x', group: {} })).status, 400)
+  assert.equal((await send('lens/group/default', { name: 'nope' })).status, 409)
+  assert.equal((await send('lens/group/default', { name: 'A' })).status, 200)
+  // Renamed, the group stays the default.
+  const renamed = await json(
+    await send('lens/group/save', {
+      name: 'A',
+      group: { name: 'B', lenses: [bugs, { scope: 'local', name: 'money' }] },
+    }),
+  )
+  assert.equal(renamed.settings.groups.default, 'B')
+  // A lens renamed stays in its groups; removed, it leaves them, and says which.
+  await send('lens/save', { scope: 'local', name: 'money', lens: { name: 'cents' } })
+  const after = await json(await fetch(`${server.base}/api/settings`))
+  assert.deepEqual(after.groups.list[0].lenses, [bugs, { scope: 'local', name: 'cents' }])
+  const removed = await json(await send('lens/remove', { scope: 'local', name: 'cents' }))
+  assert.deepEqual(removed.removedFrom, ['B'])
+  assert.deepEqual(removed.settings.groups.list[0].lenses, [bugs])
+  const stored = JSON.parse(await readFile(after.groups.file, 'utf8'))
+  assert.deepEqual(stored.groups[0].removed, [{ scope: 'local', name: 'cents' }])
+
+  // A review of B waiting to start: Start saves its switches in B, never in the settings.
+  await writeFile(
+    path.join(server.dir, 'lenses.json'),
+    JSON.stringify({
+      state: 'waiting',
+      wait: 'flag',
+      group: 'B',
+      changed: 2,
+      lenses: [
+        { name: 'bugs', source: 'tranchant:bugs', state: 'ready', files: 2 },
+        { name: 'docs', source: 'tranchant:docs', state: 'idle', files: 1, off: true },
+      ],
+    }),
+  )
+  // Another group picked: built first, never started on B's rows.
+  const other = await send('review/start', { lenses: {}, remember: false, group: null })
+  assert.equal(other.status, 409)
+  assert.match((await json(other)).error, /not built yet/)
+  assert.equal(
+    (await send('review/start', { lenses: {}, remember: false, group: '../x' })).status,
+    400,
+  )
+  const started = await send('review/start', {
+    lenses: { bugs: false, docs: true },
+    remember: true,
+    group: 'B',
+  })
+  assert.equal(started.status, 200, await started.clone().text())
+  const saved = await json(await fetch(`${server.base}/api/settings`))
+  assert.deepEqual(saved.groups.list[0].lenses, [{ scope: 'recipe', name: 'docs' }])
+  assert.deepEqual(saved.settings, {})
+  // Deleted, the default is every lens that is on again.
+  const deleted = await json(await send('lens/group/remove', { name: 'B' }))
+  assert.deepEqual(deleted.settings.groups.list, [])
+  assert.equal(deleted.settings.groups.default, undefined)
+  assert.equal((await send('lens/group/remove', { name: 'B' })).status, 409)
+})
+
+test("the review's controls write its pause or stop, then print the hooks' lines", async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'reviewing',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const id = imported.review.id
+  /** @param {string} name @param {unknown} [body] */
+  const control = (name, body = {}) =>
+    fetch(`${server.base}/api/review/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  let printed = server.output().length
+  const paused = await control('pause')
+  assert.equal(paused.status, 200)
+  assert.equal(typeof (await json(paused)).review.paused.at, 'string')
+  assert.equal(await server.nextLine('PAUSE ', printed), `PAUSE ${id}`)
+  printed = server.output().length
+  assert.equal((await control('pause', { now: true })).status, 200)
+  assert.equal(await server.nextLine('PAUSE_NOW ', printed), `PAUSE_NOW ${id}`)
+  assert.equal((await control('pause', { now: 'yes' })).status, 400)
+  printed = server.output().length
+  assert.equal((await control('resume')).status, 200)
+  assert.equal(await server.nextLine('RESUME ', printed), `RESUME ${id}`)
+  const again = await control('resume')
+  assert.equal(again.status, 409)
+  assert.match((await json(again)).error, /not paused/)
+  // Nothing to reset before a stop.
+  assert.equal((await control('reset')).status, 409)
+
+  // Stop and reset with a fix under way: refused whole, the review still runs.
+  const store = createStore(imported.dir)
+  await store.decide('f-01', { action: 'fix' })
+  const waiting = await control('halt', { reset: true })
+  assert.equal(waiting.status, 409)
+  assert.match((await json(waiting)).error, /f-01 still under way/)
+  assert.equal((await store.readReview()).stopped, undefined)
+  // Stop alone goes through: the fix runs on.
+  printed = server.output().length
+  assert.equal((await control('halt', { reset: false })).status, 200)
+  assert.equal(await server.nextLine('HALT ', printed), `HALT ${id}`)
+  const refusedReset = await control('reset')
+  assert.equal(refusedReset.status, 409)
+  assert.match((await json(refusedReset)).error, /f-01 still under way/)
+  await store.stop('f-01')
+
+  printed = server.output().length
+  assert.equal((await control('reset')).status, 200)
+  assert.equal(await server.nextLine('RESET ', printed), `RESET ${id}`)
+  const twice = await control('reset')
+  assert.equal(twice.status, 409)
+  assert.match((await json(twice)).error, /being reset/)
+  assert.equal((await control('halt')).status, 409)
+  const shown = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(typeof shown.review.stopped.at, 'string')
+})
+
+/** One step's line in a run file. */
+const line = (/** @type {object} */ step) => `${JSON.stringify(step)}\n`
+
+test('a stuck agent noted before this server, in its session, still refuses Reset', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'complete',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+      stopped: { at: '2026-11-20T10:00:00.000Z' },
+    }),
+  )
+  const noted = Date.now()
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  await writeFile(
+    path.join(reviewers, 'rv-bugs.jsonl'),
+    line({ at: noted, kind: 'start', label: 'Reviewing', state: 'done' }) +
+      line({
+        at: noted,
+        kind: 'note',
+        label: 'Could not be stopped: runs until its turn ends',
+        state: 'failed',
+      }),
+  )
+  // Started again in the same session (a reload, /tranchant stop then open): the agent runs on.
+  const server = await startServer(t, {
+    dir: imported.dir,
+    env: { TRANCHANT_SESSION_SINCE: String(noted - 1000) },
+  })
+  const shown = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(shown.reviewers[0].stuck, true)
+  const refused = await fetch(`${server.base}/api/review/reset`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert.equal(refused.status, 409)
+})
+
+test('Stop and reset is refused whole for a stuck review agent; a discussing one, or a discussion unread, says why', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'reviewing',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const control = (/** @type {string} */ name, /** @type {unknown} */ body = {}) =>
+    fetch(`${server.base}/api/review/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  const stuckSteps =
+    line({ at: Date.now(), kind: 'start', label: 'Reviewing', state: 'done' }) +
+    line({
+      at: Date.now(),
+      kind: 'note',
+      label: 'Could not be stopped: runs until its turn ends',
+      state: 'failed',
+    })
+  // A discussing agent belongs to its finding: it refuses nothing.
+  await writeFile(path.join(reviewers, 'ds-f-05.jsonl'), stuckSteps)
+  await writeFile(path.join(reviewers, 'rv-bugs.jsonl'), stuckSteps)
+  const refused = await control('halt', { reset: true })
+  assert.equal(refused.status, 409)
+  const { error } = await json(refused)
+  assert.match(error, /rv-bugs still running/)
+  assert.doesNotMatch(error, /ds-f-05/)
+  const store = createStore(imported.dir)
+  assert.equal((await store.readReview()).stopped, undefined)
+  await rm(path.join(reviewers, 'rv-bugs.jsonl'))
+  // A discussion it cannot read: 500, its code, never its path.
+  await mkdir(path.join(imported.dir, 'discussions', 'f-01.json'), { recursive: true })
+  const unread = await control('halt', { reset: true })
+  assert.equal(unread.status, 500)
+  const said = (await json(unread)).error
+  assert.match(said, /the review's files cannot be read \(EISDIR\)/)
+  assert.doesNotMatch(said, /discussions/)
+  await rm(path.join(imported.dir, 'discussions'), { recursive: true })
+  assert.equal((await control('halt', { reset: true })).status, 200)
+})
+
+test('Reset on a review stopped prints RESET, then waits for it before asking again', async (t) => {
+  const imported = await importReview(t, 'ours', stateDir, { verify: true })
+  const file = path.join(imported.dir, 'review.json')
+  const envelope = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...envelope,
+      status: 'complete',
+      lenses: [{ name: 'bugs', source: 'tranchant:bugs', hash: 'b'.repeat(64) }],
+      stopped: { at: '2026-11-20T10:00:00.000Z' },
+    }),
+  )
+  const server = await startServer(t, { dir: imported.dir })
+  const reset = () =>
+    fetch(`${server.base}/api/review/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+  // A fix under way: Reset is refused until it ends.
+  const store = createStore(imported.dir)
+  await store.decide('f-02', { action: 'fix' })
+  const waiting = await reset()
+  assert.equal(waiting.status, 409)
+  assert.match((await json(waiting)).error, /f-02 still under way/)
+  await store.stop('f-02')
+  // A review agent TaskStop did not end: Reset is refused until its end step.
+  const reviewers = path.join(imported.dir, 'reviewers')
+  await mkdir(reviewers, { recursive: true })
+  const runFile = path.join(reviewers, 'rv-bugs.jsonl')
+  await writeFile(
+    runFile,
+    line({ at: 1, kind: 'start', label: 'Reviewing: bugs', state: 'done' }) +
+      line({
+        at: 2,
+        kind: 'note',
+        label: 'Could not be stopped: runs until its turn ends',
+        state: 'failed',
+      }),
+  )
+  // Noted before this server's session: the agent ended with the session that ran it.
+  assert.equal(
+    (await json(await fetch(`${server.base}/api/review`))).reviewers[0].stuck,
+    undefined,
+  )
+  await writeFile(
+    runFile,
+    `${await readFile(runFile, 'utf8')}${line({ at: Date.now(), kind: 'note', label: 'Could not be stopped: runs until its turn ends', state: 'failed' })}`,
+  )
+  assert.equal(
+    (await json(await fetch(`${server.base}/api/review`))).reviewers[0].stuck,
+    true,
+  )
+  const stuck = await reset()
+  assert.equal(stuck.status, 409)
+  assert.match((await json(stuck)).error, /rv-bugs still running/)
+  await writeFile(
+    runFile,
+    `${await readFile(runFile, 'utf8')}${line({ at: 3, kind: 'end', label: 'Ended', state: 'done' })}`,
+  )
+  const printed = server.output().length
+  assert.equal((await reset()).status, 200)
+  assert.equal(await server.nextLine('RESET ', printed), `RESET ${imported.review.id}`)
+  assert.equal((await reset()).status, 409)
 })

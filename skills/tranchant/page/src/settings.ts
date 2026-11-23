@@ -20,6 +20,8 @@ export interface SettingsValues {
   /** By lens of the recipe, its reviewer's model. */
   lensModels: Record<string, string>
   postWith: PostWith
+  /** Whether `/tranchant review` starts its reviewers once the lenses are built. */
+  startReview: boolean
 }
 
 export type SettingKey = keyof SettingsValues
@@ -46,6 +48,8 @@ export interface SettingsPayload {
   lensSet?: LensSet
   /** The lenses being cleaned, or cleaned and waiting to be added. */
   cleanings?: CleaningEntry[]
+  /** The project's groups of lenses, and its default one. */
+  groups?: GroupsPayload
   /** Why the file reads as none: not JSON, another version, a wrong value. The server then writes nothing. */
   problem?: string
 }
@@ -59,7 +63,6 @@ export type LensScope = 'local' | 'global' | 'recipe'
 interface Cleaned {
   at: string
   sourceHash: string
-  contextHash?: string
   version?: string
   removed: { what: string; why: string }[]
   added: string[]
@@ -76,12 +79,19 @@ export interface LensEntry {
   replaces?: boolean
   source: string
   version?: string
+  /** An added lens's: picked up from an agent, a skill or a command, or custom (a checklist). */
+  origin?: 'picked' | 'custom'
+  /** With `picked`, what its source's path says it is, when it says. */
+  sourceKind?: 'agent' | 'skill' | 'command'
   paths: string[]
   otherwise?: boolean
   topics?: string[]
+  /** Its model: `auto` (Auto-detect), an id; absent, the reviewers'. */
   model?: string
-  /** An added lens's. */
-  context?: string
+  /** What Auto-detect finds in its source, whatever its model. */
+  detected?: Detected
+  /** Its source's frontmatter's name, tools and model: Auto-detect reads the model. */
+  frontmatter?: { name?: string; tools?: string; model?: string }
   rules?: string
   rulesEdited?: boolean
   cleaned?: Cleaned
@@ -93,13 +103,49 @@ export interface LensEntry {
   fix?: string
 }
 
+/** A lens of a group: which one, by its scope and its name. */
+export interface GroupMember {
+  scope: LensScope
+  name: string
+}
+
+/** A group of lenses: one review runs one (`--group <name>`). */
+export interface LensGroup {
+  name: string
+  lenses: GroupMember[]
+}
+
+/** The project's groups, as `GET /api/settings` answers them. */
+export interface GroupsPayload {
+  file: string
+  /** What a review runs with no --group; absent, every lens that is on. */
+  default?: string
+  list: LensGroup[]
+  /** Why the groups file reads as none: nothing is written over it. */
+  problem?: string
+}
+
 interface LensSet {
   /** The folders the added lenses live in: every project's, and this one's. */
   dirs: { global: string; local: string }
   lenses: LensEntry[]
 }
 
-/** A lens's cleaning: being cleaned, cleaned and waiting to be added, or failed. */
+/** The lenses made from a reviewer already, and those being added from it. */
+type Already = { scope: 'local' | 'global'; name: string; adding?: true }[]
+
+/**
+ * One reviewer a whole process starts: a file, as Add a lens takes it; one
+ * written inline in the process (its instructions stay on the server); or
+ * an entry its agent gave that Tranchant refuses, with why. A pick names it
+ * by its index in the whole list, refused ones included.
+ */
+type ProcessReviewer =
+  | { name: string; kind: 'file'; source: string; already?: Already }
+  | { name: string; kind: 'inline'; label: string; already?: Already }
+  | { name: string; kind: 'refused'; file: string; reason: string }
+
+/** A lens's cleaning: being cleaned, cleaned and waiting to be added, a process to pick from, or failed. */
 export interface CleaningEntry {
   id: string
   createdAt: string
@@ -109,11 +155,21 @@ export interface CleaningEntry {
   again: boolean
   source: string
   version?: string
-  context?: string
-  state: 'cleaning' | 'ready' | 'failed'
+  /** A reviewer written inline in the source, by name: the lens is that one alone. */
+  reviewer?: string
+  /** `process`: a whole review process, its reviewers to pick the lenses of. */
+  state: 'cleaning' | 'ready' | 'process' | 'failed'
+  /** With `cleaning`: no agent reads it yet, it waits for a free one. */
+  waiting?: boolean
+  /** The glob, or the process, it came from with others. */
+  from?: string
   reason?: string
-  /** A whole process's reviewers, to add one by one. */
-  instead?: string[]
+  /** With `process`: how it routes its review, in its agent's words. */
+  process?: string
+  /** With `process`: the reviewers it starts, each to make a lens of. */
+  reviewers?: ProcessReviewer[]
+  /** With `process`: those past the most listed. */
+  more?: number
   /** With `ready`: what the agent found, and the lens's domain. */
   report?: {
     paths: string[]
@@ -128,6 +184,21 @@ export interface CleaningEntry {
 
 /** The most agents of a kind the settings allow at a time. */
 export const MAX_AGENTS = 8
+
+/**
+ * What Auto-detect finds in a lens's source: the model its frontmatter
+ * names when it is Claude's (`id` the id it stands for today), else the
+ * session's, and why.
+ */
+export type Detected = { file: string } & (
+  | { why: 'source'; model: string; id: string; asked: string }
+  | { why: 'none' }
+  | { why: 'inherit' | 'foreign'; asked: string }
+  | { why: 'unreadable'; problem: string }
+)
+
+/** A lens's model that asks for its source's, else the session's. */
+export const AUTO_MODEL = 'auto'
 
 /** Model ids the page suggests; any id or alias Claude Code takes may be typed. */
 export const KNOWN_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']

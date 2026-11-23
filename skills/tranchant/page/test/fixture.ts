@@ -399,6 +399,7 @@ const SETTINGS_DEFAULTS: SettingsValues = {
   disabledLenses: [],
   lensModels: {},
   postWith: 'auto',
+  startReview: true,
 }
 
 export const LENSES = [

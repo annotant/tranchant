@@ -21,7 +21,10 @@ export type Lens = {
   prompt: string
   /** The changed files it reviews, or the globs they match. */
   paths: string[]
-  /** The model the recipe asks for: TRANCHANT_MODEL still wins, the settings' come after. */
+  /**
+   * The model the lens asks for, `inherit` on Auto-detect when its source
+   * names no Claude model: TRANCHANT_MODEL still wins, the settings' come after.
+   */
   model?: string
   /** The topics its findings file under, when the recipe declares them. */
   topics?: string[]
@@ -34,7 +37,8 @@ export type Lens = {
  */
 export type ReviewJob =
   | { kind: 'summarizer' }
-  | { kind: 'reviewer'; lens: Lens }
+  /** `again`: queued again after Pause now, its findings so far landed. */
+  | { kind: 'reviewer'; lens: Lens; again?: true }
   | { kind: 'verifier'; id: string }
   | { kind: 'discusser'; id: string }
 
@@ -49,7 +53,13 @@ export type ReviewRun = {
    * While lenses whose source changed are cleaned again: the plan the Lenses
    * step builds once they end, and their cleanings' folders still at work.
    */
-  waiting?: { plan: string; cleanings: string[] }
+  waiting?: { plan: string; cleanings: string[]; mode?: '--start' | '--replan' }
+  /** Waiting for the page's Start the review: the plan lenses.mjs starts. */
+  ready?: { plan: string }
+  /** The page's Start or Build the lenses again at work: its plan, until lenses.mjs ends. */
+  starting?: { plan: string }
+  /** The page's Pause: no agent of the queue starts until Resume, and the review does not complete. */
+  paused?: true
 }
 
 /**
@@ -71,6 +81,12 @@ export type ReviewAgent = {
   model?: string
   /** A reviewer's: the model its lens asks for, registered again after a reload. */
   lensModel?: string
+  /** What started it: queued again from the start when Pause now ends it. */
+  job?: ReviewJob
+  /** TaskStop under way: still running, in its place, until the stop reads what came meanwhile. */
+  stopping?: true
+  /** While `stopping`: its turn's end came, so the stop ends it as finished. */
+  turnEnded?: true
 }
 
 /**
@@ -91,6 +107,12 @@ export type Cleaning = {
   /** The two files it writes: the lens's domain and its report. */
   writes: string[]
   running: boolean
+}
+
+/** A cleaning the page asked for, waiting for a free cleaning agent. */
+export type QueuedCleaning = {
+  project: string
+  id: string
 }
 
 /** A review the hooks serve: its folder and the project it lies in. */
@@ -115,14 +137,16 @@ declare module 'claude-code' {
       run?: boolean
       target?: string
       recipe?: string
+      /** With run: false waits for the page's Start, true starts at once; absent, the settings say. */
+      start?: boolean
       /** A reviewer to add as a lens, cleaned first; empty, the project's are listed. */
       import?: string
       /** With import: `global` or `local`. */
       to?: string
       /** With import: the lens's name; absent, one from its source. */
       name?: string
-      /** With import: a skill that frames the lens's run. */
-      context?: string
+      /** Removed: refused, as /tranchant import refuses --context. */
+      context?: unknown
     }
   }
   interface PluginState {
@@ -141,12 +165,16 @@ declare module 'claude-code' {
       handed: Record<string, string>
       /** The reviews `/tranchant review` runs, by review folder, until they complete. */
       reviewRuns: Record<string, ReviewRun>
+      /** When this session first served a review, in ms: a stuck agent noted before ended with an earlier session. */
+      sessionSince: number
       /** By `<name>@<review folder>`: the review agents started, running or ended. */
       reviewAgents: Record<string, ReviewAgent>
       /** By review folder, the findings whose question waits for a free agent, in order. */
       discussing: Record<string, string[]>
       /** By cleaning folder: the cleanings started, running or ended. */
       cleaning: Record<string, Cleaning>
+      /** The page's cleanings waiting for a free agent, in order: `maxReviewAgents` clean at a time. */
+      cleanQueue: QueuedCleaning[]
     }
   }
 }

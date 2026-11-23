@@ -4,16 +4,19 @@
     {
       "name": "correctness",
       "prompt": "correctness.md",
+      "topics": ["Bugs"],
       "paths": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.vue", "**/*.svelte"]
     },
     {
       "name": "types",
       "prompt": "types.md",
+      "topics": ["Bugs", "Code Quality"],
       "paths": ["**/*.ts", "**/*.tsx", "**/*.vue", "**/*.svelte"]
     },
     {
       "name": "accessibility",
       "prompt": "accessibility.md",
+      "topics": ["Bugs"],
       "paths": [
         "**/*.ts",
         "**/*.tsx",
@@ -29,6 +32,7 @@
     {
       "name": "performance",
       "prompt": "performance.md",
+      "topics": ["Bugs", "Code Quality"],
       "paths": [
         "**/*.ts",
         "**/*.tsx",
@@ -58,6 +62,7 @@
     {
       "name": "security",
       "prompt": "security.md",
+      "topics": ["Security & Permissions"],
       "paths": [
         "**/*.ts",
         "**/*.tsx",
@@ -71,11 +76,13 @@
     {
       "name": "tests",
       "prompt": "tests.md",
+      "topics": ["Tests"],
       "paths": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.vue", "**/*.svelte"]
     },
     {
       "name": "conventions",
       "prompt": "conventions.md",
+      "topics": ["Conventions"],
       "paths": [
         "**/*.ts",
         "**/*.tsx",
@@ -91,11 +98,13 @@
     {
       "name": "bugs",
       "prompt": "bugs.md",
+      "topics": ["Bugs", "Security & Permissions", "Breaking Changes"],
       "paths": ["**"]
     },
     {
       "name": "silent-failures",
       "prompt": "silent-failures.md",
+      "topics": ["Bugs", "Code Quality"],
       "paths": [
         "**/*.ts",
         "**/*.tsx",
@@ -123,6 +132,7 @@
     {
       "name": "docs",
       "prompt": "docs.md",
+      "topics": ["Code Quality", "Breaking Changes"],
       "paths": ["**"]
     }
   ]

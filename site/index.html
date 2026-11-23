@@ -1,0 +1,244 @@
+---
+layout: default
+root: ''
+---
+
+<section class="hero">
+  <div class="mark-wrap">
+    <svg
+      class="mark"
+      viewBox="0 0 64 64"
+      fill="none"
+      role="img"
+      aria-label="Tranchant's mark, a disc cut in two along a blade"
+    >
+      <path d="M10 40 A22 22 0 0 1 40 10 Z" fill="currentColor" opacity=".35" />
+      <path d="M24 54 A22 22 0 0 0 54 24 Z" fill="currentColor" />
+      <path
+        d="M6 58 L58 6"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+      />
+    </svg>
+  </div>
+  <h1>
+    Settle a code review,<br />
+    one finding at a time.
+  </h1>
+  <p class="lede">
+    A <a href="https://claude.com/claude-code">Claude Code</a> plugin: run
+    <code>/tranchant review</code> and Claude reviews your branch. Each finding shows on a
+    local page, with the code it points at and why it matters. Fix it, post it or drop it:
+    a background agent makes each fix on your working tree, and commits nothing.
+  </p>
+  <p class="actions">
+    <a class="button" href="#install">Get started</a>
+    <a class="button secondary" href="docs/">Read the docs</a>
+  </p>
+</section>
+
+<script>
+  // The mark's halo leans toward the pointer: --mx and --my run from -1 to 1.
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    addEventListener(
+      'pointermove',
+      (event) => {
+        const root = document.documentElement.style
+        root.setProperty('--mx', (event.clientX / innerWidth) * 2 - 1)
+        root.setProperty('--my', (event.clientY / innerHeight) * 2 - 1)
+      },
+      { passive: true },
+    )
+  }
+</script>
+
+<section class="demo" aria-label="A finding settled from the page">
+  <figure class="page">
+    <div class="page-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+    <!-- The page on test/fixtures/review-ours.json, f-01 working with its steps,
+         its diagram hidden: one moment near its real size. -->
+    <div class="page-poster">
+      <img
+        src="assets/demo-poster.png"
+        width="1760"
+        height="1556"
+        alt="Tranchant's page on the finding “Undefined tenantId crashes the people hook”: the code it points at, its problem, why and fix, and its agent at work, its steps showing live: the files it read and edited, then the tests it runs."
+      />
+    </div>
+    <figcaption>
+      One review, one page: the findings stream in as Claude reads the change, a verifier
+      confirms each one, and every fix runs in its own agent.
+    </figcaption>
+  </figure>
+</section>
+
+<section class="guide" id="install" aria-labelledby="install-title">
+  <h2 id="install-title">Get started</h2>
+  <p class="guide-lede">From nothing to a first finding settled, in four steps.</p>
+
+  <ol class="steps-list">
+    <li>
+      <h3>Check the requirements</h3>
+      <ul>
+        <li>
+          <strong>Claude Code 2.1.287 or later</strong>: <code>claude --version</code>,
+          and <code>claude update</code> when it is older.
+        </li>
+        <li><strong>Node.js 22.12 or later</strong>: <code>node --version</code>.</li>
+        <li>
+          <strong>On GitLab</strong>, to post on a merge request: <code>glab</code> logged
+          in. <strong>On GitHub</strong>, to reply on a pull request's threads or open an
+          issue: <code>gh</code> logged in.
+        </li>
+      </ul>
+    </li>
+    <li>
+      <h3>Install the plugin</h3>
+      <p>Straight from GitHub, no clone needed:</p>
+      <pre><code>claude plugin marketplace add annotant/tranchant#stable
+claude plugin install tranchant@tranchant</code></pre>
+    </li>
+    <li>
+      <h3>Review your branch</h3>
+      <p>Start Claude Code in the repository, on the branch to review, and run:</p>
+      <pre><code>/tranchant review</code></pre>
+      <p>
+        The page opens at once. Claude summarizes the change, one reviewer runs per
+        concern it touches (bugs, types, accessibility, security, tests…), and a verifier
+        confirms each finding as it lands. Someone else's GitLab merge request:
+        <code>/tranchant review &lt;merge request url&gt;</code>.
+      </p>
+    </li>
+    <li>
+      <h3>Settle the findings</h3>
+      <p>
+        Open a finding, read the code it points at and why, then pick one of the six
+        actions below. Or select several and act in one go. Each fix's agent reports under
+        its finding; reply when it asks.
+      </p>
+    </li>
+  </ol>
+</section>
+
+<section class="guide" id="use" aria-labelledby="use-title">
+  <h2 id="use-title">Settle each finding your way</h2>
+
+  <ul class="tools">
+    <li class="lead">
+      <h3>Fix now</h3>
+      <p>
+        A background agent makes the change on your working tree, with the context you
+        add. It commits nothing.
+      </p>
+    </li>
+    <li>
+      <h3>Post</h3>
+      <p>
+        On a GitLab merge request, a comment on its line, as written or edited first,
+        under your name.
+      </p>
+    </li>
+    <li>
+      <h3>Open an issue</h3>
+      <p>
+        Real, but not for this change: an issue prefilled from the finding, yours to edit
+        first.
+      </p>
+    </li>
+    <li>
+      <h3>Discuss</h3>
+      <p>Ask an agent whether the finding holds before you decide.</p>
+    </li>
+    <li>
+      <h3>Drop</h3>
+      <p>With your reason, kept with the review.</p>
+    </li>
+    <li>
+      <h3>Skip</h3>
+      <p>And come back to it later.</p>
+    </li>
+  </ul>
+
+  <h3 class="guide-sub">Then let Claude work</h3>
+  <ul class="flow">
+    <li>
+      <strong>One agent per fix</strong>, in the background: up to three at a time, never
+      two on the same file.
+    </li>
+    <li>
+      <strong>Its steps show live</strong> under the finding, with
+      <strong>Stop</strong> at hand.
+    </li>
+    <li>
+      <strong>It answers under the finding</strong>, or asks when the finding leaves a
+      choice open. Your answer starts it again.
+    </li>
+    <li>
+      <strong>See what it changed</strong>: <em>View changes</em> shows the diff of the
+      files its run wrote.
+    </li>
+    <li>
+      <strong>Your team's reviewers</strong>: bring one your team already wrote (a skill,
+      a command, a prompt) with <code>/tranchant import</code>; it runs beside Tranchant's
+      own.
+    </li>
+    <li>
+      <strong>Nothing in your repository</strong>: the review lives in
+      <code>~/.cache/tranchant</code>, the page on 127.0.0.1.
+    </li>
+  </ul>
+
+  <h3 class="guide-sub">Commands</h3>
+  <dl class="commands">
+    <dt><code>/tranchant review</code></dt>
+    <dd>Review the current branch, and its open merge request.</dd>
+    <dt><code>/tranchant review &lt;mr url&gt;</code></dt>
+    <dd>Review someone else's GitLab merge request.</dd>
+    <dt><code>/tranchant comments</code></dt>
+    <dd>
+      Bring the unresolved threads of your pull request (GitHub) or merge request (GitLab)
+      to the page, to fix or reply.
+    </dd>
+    <dt><code>/tranchant import</code></dt>
+    <dd>Bring your team's reviewer in, shown to you before it runs.</dd>
+    <dt><code>/tranchant &lt;review.json&gt;</code></dt>
+    <dd>Open a review file another tool wrote.</dd>
+    <dt><code>/tranchant status</code></dt>
+    <dd>The server, the agents at work and the reviews open.</dd>
+    <dt><code>/tranchant stop</code></dt>
+    <dd>Stop the server and every agent.</dd>
+  </dl>
+
+  <p class="guide-more">
+    Your own review rules, the settings and troubleshooting:
+    <a href="docs/">the full guide</a>.
+  </p>
+</section>
+
+<script>
+  for (const pre of document.querySelectorAll('.guide pre')) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'copy'
+    button.textContent = 'Copy'
+    button.addEventListener('click', async () => {
+      const command = pre.querySelector('code').textContent
+      // No Clipboard API (an http page, some webviews): the fallback label too.
+      const copied = await Promise.resolve()
+        .then(() => navigator.clipboard.writeText(command))
+        .then(
+          () => true,
+          () => false,
+        )
+      button.textContent = copied ? 'Copied' : 'Select and copy'
+      setTimeout(() => (button.textContent = 'Copy'), 1500)
+      // Only the published site loads PostHog (_layouts/default.html).
+      if (copied) window.posthog?.capture('command copied', { command })
+    })
+    const block = document.createElement('div')
+    block.className = 'code-block'
+    pre.replaceWith(block)
+    block.append(pre, button)
+  }
+</script>

@@ -16,7 +16,7 @@ what it lists. Read against the code at 0.5.1:
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A short lens, wrapped by Tranchant | Shipped for a team's lens: a recipe's `source` is wrapped in `agents/review/contract.md` at every review (`lib/lens.mjs`, `buildLens`). Not for the plugin's ten lenses, still whole prompts.                                                       |
 | `PATHS` as the only file list      | Shipped in the contract ("PATHS is the only file filter"). The plugin's ten prompts never mention `PATHS`: each has a sentence of its own on which files to review. Six restrict to front-end files ("Review only the files that…"), `bugs` takes every file, and `docs`, `performance` and `silent-failures` each name their own set. |
-| The topic declared                 | A lens's `topics` exist in the recipe and reach the prompt as `TOPICS`. Nothing checks them: `add.mjs` accepts any of the seven topics. The plugin's recipe declares none. A finding has no `lens` field; the list groups by bucket, then topic.    |
+| The topic declared                 | A lens's `topics` exist in the recipe and reach the prompt as `TOPICS`. Nothing checks them: `add.mjs` accepts any of the seven topics. The plugin's recipe declares none. A finding records its `lens` (`add.mjs --lens`, held by the hook) and the list shows it; the list groups by bucket, then topic.    |
 | A recipe in the project            | Shipped: `.tranchant/recipe.json`, read at BASE with every path inside the repository, after `--recipe` and the local recipe.                                                                                                                       |
 | The excerpt filled for producers   | Not started: `excerpt` is required by `open.mjs` and `add.mjs`, with a `hunk` or without.                                                                                                                                                           |
 
@@ -109,7 +109,8 @@ sentences on which files to review go with the whole prompts.
   each prompt states today.
 - The reviewer calls `add.mjs --lens LENS`; `hook.mjs` refuses another lens
   than its own, as it already holds `--review` to its own review.
-- The store stamps `lens` on the finding (the agent never writes it), and
+- The store stamps `lens` on the finding (from `--lens`, never from the
+  finding's text), and
   checks `topic` against the lens's `topics`, recorded in
   `review.json`'s `lenses`: one topic declared sets it; several refuse a
   topic outside them, naming them. A lens with no `topics` is checked as

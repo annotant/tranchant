@@ -27,7 +27,14 @@ interface Refusal {
 export interface LensRow {
   name: string
   source: string
-  state: 'resolving' | 'ready' | 'failed'
+  /** `idle`: not built, a waiting review's lens that does not run (off, or no changed file in its paths). */
+  state: 'resolving' | 'ready' | 'failed' | 'idle'
+  /** In a review waiting to start: the changed files it reads. */
+  files?: number
+  /** In a review waiting to start: off in the settings; in a group's, not one of the group. */
+  off?: true
+  /** In a group's review: off in the settings, run by the group. */
+  offInSettings?: true
   /** With `ready`: against the project's previous review. */
   change?: 'unchanged' | 'updated' | 'new'
   version?: string
@@ -38,12 +45,42 @@ export interface LensRow {
   scope?: 'global' | 'local'
   /** Its source changed: being cleaned again, cleaned again, its cleaning failed, or held: the change under review changed it. */
   cleaning?: 'running' | 'again' | 'failed' | 'held'
+  /** With `ready`: the model its reviewer runs on, an alias's id as it stands today; absent, the session's. */
+  model?: string
+  /** What chose it: TRANCHANT_MODEL, Auto-detect, the lens's own, or Settings › Agents. */
+  modelFrom?: 'forced' | 'auto' | 'lens' | 'reviewers'
+  /** On Auto-detect, why the session's: no model in its source, `inherit`, not a Claude model, a frontmatter that cannot be read, or a source the change under review changes. */
+  autoWhy?: 'none' | 'inherit' | 'foreign' | 'unreadable' | 'held'
+}
+
+/** The page's choices on a review waiting to start: by lens name, on or off for this review. */
+export interface StartChoices {
+  lenses: Record<string, boolean>
+  /** Start saves them as Settings › Lenses does; in a group's review, in the group. */
+  remember: boolean
+  /** The group picked before Start, `null` for every lens that is on; absent, the plan's. */
+  group?: string | null
 }
 
 /** The Lenses step's progress: lenses.json. */
 export interface LensesProgress {
-  state: 'resolving' | 'ready' | 'refused'
+  /** `waiting`: built, the review waits for Start the review. */
+  state: 'resolving' | 'ready' | 'refused' | 'waiting'
   lenses: LensRow[]
+  /** While it waits: why (the settings' Start the review by itself, --no-start, or Reset the review). */
+  wait?: 'setting' | 'flag' | 'reset'
+  /** Its own recipe (--recipe): no lens added, none turned off, nothing to save. */
+  own?: true
+  /** The change's files. */
+  changed?: number
+  /** The choices of the last Start or Build the lenses again. */
+  choices?: StartChoices
+  /** Why the plan could not be made again (the settings or the recipe unreadable): the last one stands. */
+  problem?: string
+  /** The group of lenses the plan runs, when it runs one. */
+  group?: string
+  /** What the group's review says of its lenses that do not run: removed, or gone. */
+  notes?: string[]
 }
 
 /** The seven topics, in the order the page lists them within a bucket. */
@@ -132,6 +169,8 @@ export interface Finding {
   addedAt?: string
   /** A verifier confirmed it; read only when the review's `verify` is true. */
   verified?: boolean
+  /** The lens that found it (`/tranchant review`); absent, none did. */
+  lens?: string
   /** The PR/MR thread it comes from (`/tranchant comments`). */
   thread?: Thread
 }
@@ -168,6 +207,8 @@ export interface Review {
   status?: Status
   /** The lenses `/tranchant review` ran. */
   lenses?: LensRecord[]
+  /** The group of lenses it ran, when it ran one. */
+  group?: string
   /** With `refused`. */
   refusal?: Refusal
   title: string
@@ -179,6 +220,10 @@ export interface Review {
   sources?: { codeReview?: number; reviewPr?: number; both?: number }
   /** Findings land unverified and a verifier confirms each: `/tranchant review` sets it. */
   verify?: boolean
+  /** The page's Pause: no agent of the review's queue starts; `now` once Pause now ended those at work. */
+  paused?: { at: string; now?: true }
+  /** The page's Stop the review: no Resume, only Reset the review. */
+  stopped?: { at: string }
   findings: Finding[]
 }
 
@@ -318,7 +363,10 @@ export interface Step {
 export interface ReviewAgent {
   name: string
   running: boolean
-  outcome?: 'done' | 'failed'
+  /** `interrupted`: Pause now ended it; it runs again from the start on Resume. */
+  outcome?: 'done' | 'failed' | 'interrupted'
+  /** Running, though the hooks could not stop it (TaskStop): Reset is refused until its end. */
+  stuck?: true
   /** Its last 50 steps. */
   steps: Step[]
 }
@@ -752,6 +800,23 @@ export const discussable = (state: State, finding?: Pick<Finding, 'thread'>) =>
 /** The reviewer's last message waits for the agent's answer, or for the change it asked for. */
 export const isWaiting = (discussion: Discussion | undefined) =>
   discussion?.messages.at(-1)?.by === 'reviewer'
+
+// As lib/store.mjs's `underWay`: a fix, a post or an issue holds the finding.
+const UNDER_WAY = new Set<State>(['queued', 'working', 'asking'])
+
+/** The findings that refuse a reset (lib/store.mjs's `underWay`): held, or a question awaiting its answer. */
+export const underWayIds = (
+  review: Pick<Review, 'findings'>,
+  records: Records,
+  discussions: Record<string, Discussion> | undefined,
+) =>
+  review.findings
+    .map((one) => one.id)
+    .filter(
+      (id) =>
+        UNDER_WAY.has(stateOf(records, id)) ||
+        (isWaiting(discussions?.[id]) && !waitsForChange(discussions?.[id])),
+    )
 
 /** The reviewer's last message waits for the change it asked for. */
 export const waitsForChange = (discussion: Discussion | undefined) =>

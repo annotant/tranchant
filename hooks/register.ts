@@ -38,6 +38,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type {
   Cleaning,
+  QueuedCleaning,
   Lens,
   ReviewAgent,
   ReviewJob,
@@ -101,6 +102,10 @@ const noDiscussing: Record<string, string[]> = {}
 const discussing = atom({ plugin: 'tranchant', key: 'discussing' } as const, noDiscussing)
 const noCleaning: Record<string, Cleaning> = {}
 const cleaning = atom({ plugin: 'tranchant', key: 'cleaning' } as const, noCleaning)
+/** When this session first served a review: an agent noted stuck before it ended with an earlier session. */
+const sessionSince = atom({ plugin: 'tranchant', key: 'sessionSince' } as const, 0)
+const noCleanQueue: QueuedCleaning[] = []
+const cleanQueue = atom({ plugin: 'tranchant', key: 'cleanQueue' } as const, noCleanQueue)
 
 /** The plugin's agent file, whose instructions every finding's agent gets. */
 const WORKER = 'tranchant:worker'
@@ -171,6 +176,34 @@ const clipReport = (text: string) => short(text.trim(), MAX_REPORT)
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 const ignore = () => undefined
+
+/** The statuses of an agent whose loop may still run. */
+const ALIVE = new Set(['pending', 'running', 'waiting', 'idle'])
+
+/**
+ * Ends agent `id` with TaskStop: `stopped` (TaskStop ended it, or erred on one
+ * the list says failed or killed, or no longer lists), `finished` (it erred on
+ * one the list says completed), or `failed`, why it may still run (alive in
+ * the list, or the list unread).
+ */
+async function stopAgent(
+  $: $,
+  id: string,
+): Promise<{ stopped: true } | { finished: true } | { failed: string }> {
+  const failed = await $.tool.call({ tool: 'TaskStop', task_id: id }).then(
+    (answer) =>
+      answer.deny ?? (answer.isError ? answer.text || 'TaskStop failed' : undefined),
+    (error: unknown) => message(error),
+  )
+  if (failed === undefined) return { stopped: true }
+  const agents = await $.agent.list().catch(() => undefined)
+  // The list unread: it may still run.
+  if (!agents) return { failed }
+  const agent = agents.find((one) => one.id === id)
+  // Completed: its work done. Gone from the list, failed or killed: none finished (one that did left its turn's end).
+  if (agent?.status === 'completed') return { finished: true }
+  return agent && ALIVE.has(agent.status) ? { failed } : { stopped: true }
+}
 const skillDir = ($: $) => `${$.plugin.root}/skills/tranchant`
 /** A finding's id as the person reads it. */
 const tag = (id: string) => short(id, 16)
@@ -266,10 +299,11 @@ function soundSettings(raw: unknown): raw is Record<string, unknown> {
         value.length <= 1024 &&
         /^(?:\/|~(?:\/|$))/.test(value.trim())
       )
+    // Read by prepare.mjs alone: a review that waits says so on its WAITING line.
+    if (key === 'startReview') return typeof value === 'boolean'
     if (key === 'disabledLenses')
       return (
         Array.isArray(value) &&
-        value.length <= 12 &&
         value.every((one) => typeof one === 'string' && /^[\w-]{1,40}$/.test(one))
       )
     // Read by prepare.mjs alone: the lens's model reaches the hooks on its LENS line.
@@ -277,7 +311,6 @@ function soundSettings(raw: unknown): raw is Record<string, unknown> {
       return (
         typeof value === 'object' &&
         !Array.isArray(value) &&
-        Object.keys(value).length <= 12 &&
         Object.entries(value).every(
           ([lens, model]) =>
             /^[\w-]{1,40}$/.test(lens) &&
@@ -726,14 +759,25 @@ async function isQueued($: $, dir: string, id: string) {
   }
 }
 
-/** Ends the finding's agent and tells hook.mjs, so the page shows it ended. */
+/**
+ * Ends the finding's agent and tells hook.mjs, so the page shows it ended;
+ * one TaskStop did not end runs on, still shown running, and the toast says so.
+ */
 async function endWorker($: $, id: string, worker: Worker, why: string) {
-  await $.tool.call({ tool: 'TaskStop', task_id: worker.agent }).catch(ignore)
+  const stop = await stopAgent($, worker.agent)
+  if ('failed' in stop) {
+    $.ui.toast(
+      `Tranchant could not stop the agent of ${tag(id)} (${worker.agent}): ${short(stop.failed, 200)}. It runs until its turn ends.`,
+    )
+    await debug($, `${tag(id)}: agent ${worker.agent} not stopped: ${stop.failed}`)
+    return false
+  }
   await setWorker($, id, { ...worker, running: false })
   await forgetHandOver($, id)
   await ended($, id, worker)
   await debug($, `${tag(id)}: agent ${worker.agent} stopped: ${why}`)
   await dispatchAfterTurn($, id)
+  return true
 }
 
 async function stopWorker($: $, watched: Watch, id: string) {
@@ -787,6 +831,18 @@ async function onLine(
       return discussLater($, watched.dir, id)
     case 'CLEAN':
       return cleanFromPage($, watched, id)
+    case 'START':
+    case 'BUILD':
+      return startWaiting($, watched, kind)
+    case 'PAUSE':
+    case 'PAUSE_NOW':
+      return pauseReview($, watched.dir, kind === 'PAUSE_NOW')
+    case 'RESUME':
+      return resumeReview($, watched.dir)
+    case 'HALT':
+      return haltReview($, watched.dir)
+    case 'RESET':
+      return resetReview($, watched)
     default:
       // POSTED, POST_FAILED, MOVED, ISSUE_FAILED, AGENT_ENDED: the server's own doing.
       return debug($, `${tag(id)}: ${kind}`)
@@ -830,9 +886,11 @@ function serve($: $, dir: string, opensBrowser: boolean): Watch {
       await forgetServed($, dir)
       return
     }
+    let since = 0
+    await update($, sessionSince, (known) => (since = known || Date.now()))
     const stream = $.process.spawn({
       argv: ['node', `${skillDir($)}/scripts/server.mjs`, '--review', dir],
-      env: { TRANCHANT_HOOKS: '1' },
+      env: { TRANCHANT_HOOKS: '1', TRANCHANT_SESSION_SINCE: String(since) },
     })
     const pieces = stream[Symbol.asyncIterator]()
     watched.stop = () => {
@@ -987,14 +1045,22 @@ async function stopServing($: $) {
   await update($, serving, () => noServing)
   const reviewing = await stopReviewing($)
   const running = Object.entries(await read($, workers)).filter(([, one]) => one.running)
-  for (const [id, worker] of running) await endWorker($, id, worker, '/tranchant stop')
+  let fixes = 0
+  for (const [id, worker] of running)
+    if (await endWorker($, id, worker, '/tranchant stop')) fixes += 1
   await showStatus($)
-  if (!titles.length && !running.length && !reviewing)
+  const left = reviewing.left + running.length - fixes
+  if (!titles.length && !running.length && !reviewing.ended && !left)
     return 'Tranchant is not serving any review in this session.'
   return [
     ...(titles.length ? [`Tranchant stopped serving ${titles.join(', ')}.`] : []),
-    ...(reviewing ? [`Ended ${reviewing} agent(s) reviewing.`] : []),
-    ...(running.length ? [`Ended ${running.length} agent(s) at work on fixes.`] : []),
+    ...(reviewing.ended ? [`Ended ${reviewing.ended} agent(s) reviewing.`] : []),
+    ...(fixes ? [`Ended ${fixes} agent(s) at work on fixes.`] : []),
+    ...(left
+      ? [
+          `${left} agent(s) still running: TaskStop did not end them, they run until their turn ends.`,
+        ]
+      : []),
   ].join(' ')
 }
 
@@ -1101,14 +1167,16 @@ async function openCommand($: $, args: string) {
     return rest.length > 1 ? COMMENTS_USAGE : startComments($, rest[0])
   if (first === 'review') {
     const parsed = reviewArgs(rest)
-    return 'error' in parsed ? parsed.error : startReview($, parsed.target, parsed.recipe)
+    return 'error' in parsed
+      ? parsed.error
+      : startReview($, parsed.target, parsed.recipe, parsed.start, parsed.group)
   }
   if (first === 'import') {
     const parsed = importArgs(rest)
     return 'error' in parsed ? parsed.error : startImport($, parsed)
   }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file>] | import [<skill, agent or path>] [--to global | local] [--name <lens>] [--context <skill>] | comments [<pull request or merge request url>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file> | --group <name>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] | comments [<pull request or merge request url>] | status | stop'
   return openReview($, word)
 }
 
@@ -1214,13 +1282,29 @@ async function workerDone($: $, agent: string, answer: string) {
 // at a time (or as the settings say), started
 // with no model turn; once every one ended, the review completes.
 
-/** Review agents starting, by key: their review folder, and whether a stop came meanwhile. */
-const startingReview = new Map<string, { dir: string; since: number; stop: boolean }>()
+/**
+ * Review agents being started, by key: `end` once a stop came meanwhile, which
+ * starts none still loading and ends one already spawning; `requeue` (Pause
+ * now) queues it again too. A reviewer, verifier or summary agent also reads
+ * its run once loaded: gone, no agent starts; paused, it is queued again.
+ */
+const startingReview = new Map<
+  string,
+  {
+    dir: string
+    since: number
+    kind: ReviewJob['kind']
+    end?: 'stop' | 'requeue'
+    /** Spawned, its id known, not recorded yet: its turn's end, if it comes now, is kept in `done`. */
+    agent?: string
+    done?: { said: string }
+  }
+>()
 let reviewDispatching: Promise<void> = Promise.resolve()
 let completing: Promise<void> = Promise.resolve()
 
 const REVIEW_USAGE =
-  'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json>]'
+  'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json> | --group <name>] [--start | --no-start]'
 const COMMENTS_USAGE = 'Usage: /tranchant comments [<pull request or merge request url>]'
 
 const AGENT_PREFIX = {
@@ -1363,8 +1447,13 @@ function reviewPrompt($: $, review: Review, job: ReviewJob) {
     ...paths,
     `PATHS=${job.lens.paths.join(' ')}`,
     ...(job.lens.topics?.length ? [`TOPICS=${job.lens.topics.join(', ')}`] : []),
+    ...(job.again ? [AGAIN] : []),
   ].join('\n')
 }
+
+/** A reviewer run again after Pause now: the run it interrupted may have added findings already. */
+const AGAIN =
+  'This lens ran before and was interrupted: the findings whose `lens` is yours in REVIEW/findings/ are its own, already added. Read them first, add none of them again, and number yours after the highest of their ids.'
 
 /**
  * A discussing agent's prompt: the review agents' lines, then the finding and
@@ -1410,7 +1499,10 @@ async function startReviewQueued($: $) {
   while ((await busyReviewing($)) < cap) {
     let next: { dir: string; job: ReviewJob } | undefined
     await update($, reviewRuns, (all) => {
-      const dir = Object.keys(all).find((one) => all[one]?.queue.length)
+      // A paused review keeps its queue for Resume.
+      const dir = Object.keys(all).find(
+        (one) => all[one]?.queue.length && !all[one]?.paused,
+      )
       const run = dir === undefined ? undefined : all[dir]
       if (dir === undefined || !run) return all
       const [job, ...queue] = run.queue
@@ -1444,8 +1536,31 @@ function pumpReviews($: $) {
 }
 
 async function startReviewAgent($: $, dir: string, job: ReviewJob) {
+  const name = reviewAgentName(job)
+  const key = agentKey(name, dir)
+  const kind = job.kind
+  // Off the queue, and not yet an agent: Pause now and Stop find it here, from now on.
+  startingReview.set(key, { dir, since: Date.now(), kind })
   const loaded = await loadReview($, dir).catch((error: unknown) => message(error))
+  // A stop or a pause of its run that came while it loaded, or while it left the queue: no agent starts (a discussing agent belongs to its finding: only `end` stops it).
+  const run = kind === 'discusser' ? undefined : (await read($, reviewRuns))[dir]
+  const early =
+    startingReview.get(key)?.end ??
+    (kind === 'discusser'
+      ? undefined
+      : !run
+        ? 'stop'
+        : run.paused
+          ? 'requeue'
+          : undefined)
+  if (early) {
+    startingReview.delete(key)
+    if (early === 'requeue') await requeue($, dir, [job])
+    else if (job.kind === 'discusser') await unanswered($, dir, job.id)
+    return
+  }
   if (typeof loaded === 'string') {
+    startingReview.delete(key)
     $.ui.toast(
       `Tranchant could not start the ${job.kind} ${reviewAgentName(job)}: ${dir}/review.json: ${loaded}`,
     )
@@ -1454,11 +1569,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     return
   }
   const review = loaded
-  const name = reviewAgentName(job)
-  const key = agentKey(name, dir)
-  const kind = job.kind
   const instructions = reviewInstructions($, job)
-  startingReview.set(key, { dir, since: Date.now(), stop: false })
   const label = spawnName(name, dir)
   const lensModel = job.kind === 'reviewer' ? job.lens.model : undefined
   const started = await (async () =>
@@ -1488,9 +1599,10 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     (started.deny === undefined
       ? (await $.agent.list().catch(() => [])).findLast((one) => one.name === label)?.id
       : undefined)
-  const meanwhile = startingReview.get(key)
-  startingReview.delete(key)
+  const pending = startingReview.get(key)
+  if (pending && agent) pending.agent = agent
   if (!agent) {
+    startingReview.delete(key)
     const why = started.deny ?? 'no agent started'
     $.ui.toast(`Tranchant could not start the ${kind} ${tag(name)}: ${why}`)
     await debug($, `${tag(name)}: could not start: ${short(why, 160)}`)
@@ -1510,11 +1622,12 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     review: dir,
     project: review.project,
     running: true,
-    since: meanwhile?.since ?? Date.now(),
+    since: startingReview.get(key)?.since ?? Date.now(),
     model,
     ...(lensModel && { lensModel }),
+    job,
   }
-  await setReviewAgent($, key, one)
+  // Its start before it is recorded: an end written meanwhile always comes after it.
   await reviewNote($, one, agent, [
     {
       at: Date.now(),
@@ -1529,32 +1642,117 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
       model,
     },
   ])
+  await setReviewAgent($, key, one)
+  // Recorded: Pause now and Stop find it among the agents; one that came while it started ends it here.
+  const meanwhile = startingReview.get(key)
+  startingReview.delete(key)
   await debug($, `${tag(name)}: agent ${agent} started`)
-  if (meanwhile?.stop) await endReviewAgent($, key, one, 'stopped', 'Stopped')
+  // Its turn ended before it was recorded: ended now, as reviewAgentDone would have.
+  // Started by the pump, which goes on to the next job: no pump of its own here.
+  if (meanwhile?.done) {
+    await endReviewAgent($, key, one, 'ended', 'Ended')
+    if (meanwhile.done.said)
+      $.ui.toast(`${tag(name)}: ${short(meanwhile.done.said, 200)}`)
+    void checkComplete($, dir)
+    return
+  }
+  if (!meanwhile?.end) return
+  const cut = await endReviewAgent(
+    $,
+    key,
+    one,
+    'stopped',
+    meanwhile.end === 'requeue' ? INTERRUPTED : 'Stopped',
+  )
+  // Not ended here: it runs on (stuck), it ended on its own (finished: never queued again), or another end claimed it.
+  if (cut === 'ended' && meanwhile.end === 'requeue')
+    await requeue($, dir, [againOf(job)])
 }
 
-/** A review agent ended, or was ended: its last step, and what comes next. */
+/**
+ * Ending a review agent: `ended` here (its turn's end, or stopped), `finished`
+ * (it ended on its own while stopped, its work done), `kept` (its turn's end,
+ * kept for the stop under way), `gone` (another end claimed it first), `stuck`
+ * (TaskStop did not end it).
+ */
+type EndOutcome = 'ended' | 'finished' | 'kept' | 'gone' | 'stuck'
+
+/**
+ * A review agent ended, or was ended: its last step, and what comes next.
+ * One TaskStop did not end runs on, still shown running, and the toast says so.
+ */
 async function endReviewAgent(
   $: $,
   key: string,
   one: ReviewAgent,
   how: 'ended' | 'stopped',
   label: string,
-) {
-  if (how === 'stopped')
-    await $.tool.call({ tool: 'TaskStop', task_id: one.agent }).catch(ignore)
-  await setReviewAgent($, key, { ...one, running: false })
+): Promise<EndOutcome> {
+  const ours = (now: ReviewAgent | undefined) => !!now?.running && now.agent === one.agent
+  let claimed = false
+  let kept = false
+  await update($, reviewAgents, (all) => {
+    const now = all[key]
+    if (!now || !ours(now)) return all
+    // Being stopped, still running and in its place: its turn's end is kept for the stop to read.
+    if (now.stopping) {
+      if (how !== 'ended' || now.turnEnded) return all
+      kept = true
+      return { ...all, [key]: { ...now, turnEnded: true as const } }
+    }
+    claimed = true
+    return {
+      ...all,
+      [key]:
+        how === 'stopped'
+          ? { ...now, stopping: true as const }
+          : { ...now, running: false },
+    }
+  })
+  if (kept) return 'kept'
+  // Another end claimed it first (its own turn's end, a stop under way): that one writes the step.
+  if (!claimed) return 'gone'
+  const stop = how === 'stopped' ? await stopAgent($, one.agent) : undefined
+  let turned = false
+  if (stop)
+    await update($, reviewAgents, (all) => {
+      const now = all[key]
+      if (!now || now.agent !== one.agent) return all
+      turned = !!now.turnEnded
+      const { stopping: _stopping, turnEnded: _turnEnded, ...rest } = now
+      // Still running only if TaskStop failed and no turn's end came meanwhile.
+      return { ...all, [key]: { ...rest, running: 'failed' in stop && !turned } }
+    })
+  if (stop && 'failed' in stop && !turned) {
+    const failed = stop.failed
+    $.ui.toast(
+      `Tranchant could not stop ${tag(one.name)} (${one.agent}): ${short(failed, 200)}. It runs until its turn ends.`,
+    )
+    // The server reads it (`stuck`): the agent shown running, and Reset refused, until its end step.
+    await reviewNote($, one, one.agent, [
+      { at: Date.now(), kind: 'note', label: NOT_STOPPED, state: 'failed' },
+    ])
+    await debug($, `${tag(one.name)}: agent ${one.agent} not stopped: ${failed}`)
+    return 'stuck'
+  }
+  // Its turn's end, one that came while it was stopped, or TaskStop found it completed: its work done, never queued again.
+  const finished = how === 'ended' || turned || (!!stop && 'finished' in stop)
+  await showStatus($)
   await reviewNote($, one, one.agent, [
-    { at: Date.now(), kind: 'end', label, state: how === 'stopped' ? 'failed' : 'done' },
+    finished
+      ? { at: Date.now(), kind: 'end', label: 'Ended', state: 'done' }
+      : { at: Date.now(), kind: 'end', label, state: 'failed' },
   ])
-  await debug($, `${tag(one.name)}: agent ${one.agent} ${how}`)
-  if (one.kind !== 'discusser') return
+  await debug($, `${tag(one.name)}: agent ${one.agent} ${finished ? 'ended' : how}`)
+  const outcome = how === 'stopped' && finished ? 'finished' : 'ended'
+  if (one.kind !== 'discusser') return outcome
   const id = one.name.slice(3)
-  // Asked again after its answer, while its turn ended: a new agent, not a failure.
+  // Asked again after its answer, while its turn ended: a new agent, not a failure; a stop starts none.
   const again = reasked.delete(key) && how === 'ended'
   if (again && (await waitsForAnswer($, one.review, id)))
     await discussLater($, one.review, id)
   else await unanswered($, one.review, id)
+  return outcome
 }
 
 /**
@@ -1627,8 +1825,10 @@ async function verifyLanded($: $, dir: string, id: string) {
     queued = true
     return {
       ...all,
+      // The whole run kept: a finding that lands while it pauses leaves it paused.
       [dir]: {
-        queue: [...run.queue, { kind: 'verifier', id }],
+        ...run,
+        queue: [...run.queue, { kind: 'verifier' as const, id }],
         verifying: [...run.verifying, id],
       },
     }
@@ -1654,8 +1854,9 @@ async function unverified($: $, dir: string) {
  */
 async function completeIfDone($: $, dir: string) {
   const run = (await read($, reviewRuns))[dir]
-  // Waiting for a lens's cleaning: no reviewer started yet.
-  if (!run || run.queue.length || run.waiting) return
+  // Waiting for a lens's cleaning, or for Start: no reviewer started yet; paused, for Resume.
+  if (!run || run.queue.length || run.waiting || run.ready || run.starting || run.paused)
+    return
   if ([...startingReview.values()].some((one) => one.dir === dir)) return
   const agents = Object.values(await read($, reviewAgents))
   if (agents.some((one) => one.review === dir && one.running)) return
@@ -1695,7 +1896,7 @@ async function sayNoSummary($: $, dir: string, agents: ReviewAgent[]) {
   )
 }
 
-/** Ends review `dir`'s run: complete.mjs, and the toast; `stopped` by /tranchant stop. */
+/** Ends review `dir`'s run: complete.mjs, and the toast; `stopped` by /tranchant stop or the page's Stop the review. */
 async function finishReview($: $, dir: string, why: string, stopped = false) {
   await update($, reviewRuns, (all) => {
     if (!(dir in all)) return all
@@ -1732,39 +1933,79 @@ function checkComplete($: $, dir: string) {
 /** A review agent ended its turn: its last step, its one line, and what comes next. */
 async function reviewAgentDone($: $, agent: string, answer: string) {
   const found = await reviewAgentOf($, agent)
-  if (!found?.one.running) return
-  await endReviewAgent($, found.key, found.one, 'ended', 'Ended')
+  if (!found) {
+    // Spawned, not recorded yet: its start ends it once recorded.
+    const said = answer.trim().split('\n')[0] ?? ''
+    for (const pending of startingReview.values())
+      if (pending.agent === agent) pending.done = { said }
+    return
+  }
+  if (!found.one.running) return
+  const outcome = await endReviewAgent($, found.key, found.one, 'ended', 'Ended')
+  // Its report and its turn's end both come here: the first one said it.
+  if (outcome === 'gone') return
   const said = answer.trim().split('\n')[0] ?? ''
   if (said) $.ui.toast(`${tag(found.one.name)}: ${short(said, 200)}`)
+  // Kept for the stop under way, which ends it and frees its place.
+  if (outcome === 'kept') return
   await pumpReviews($)
   await checkComplete($, found.one.review)
 }
 
 /** Ends every review agent and empties the queues: `/tranchant stop`. */
 async function stopReviewing($: $) {
-  for (const pending of startingReview.values()) pending.stop = true
+  for (const pending of startingReview.values()) pending.end = 'stop'
   // The questions waiting for an agent get none: each is answered as failed.
   const asked = await read($, discussing)
   await update($, discussing, () => noDiscussing)
   for (const [dir, ids] of Object.entries(asked))
     for (const id of ids) await unanswered($, dir, id)
   const runsNow = await read($, reviewRuns)
-  const waiting = Object.keys(runsNow).filter((dir) => runsNow[dir]?.waiting)
+  const waiting = Object.keys(runsNow).filter(
+    (dir) => runsNow[dir]?.waiting || runsNow[dir]?.ready || runsNow[dir]?.starting,
+  )
   // Out of the runs and not running first: a cleaner ending meanwhile starts no reviewer.
   await update($, reviewRuns, (all) =>
     Object.fromEntries(Object.entries(all).filter(([dir]) => !waiting.includes(dir))),
   )
+  // The cleanings waiting for an agent get none: each fails as stopped.
+  const queuedCleanings = await read($, cleanQueue)
+  await update($, cleanQueue, () => noCleanQueue)
+  for (const one of queuedCleanings) await runClean($, one.project, ['--drop', one.id])
+  // One being started meanwhile is running once this settles: stopped below with the others.
+  await cleanDispatching
   const cleaners = Object.values(await read($, cleaning)).filter((one) => one.running)
+  // Each one's turn's end, until its own stop reads it: kept from now, for all of them.
+  for (const one of cleaners) cleanersStopping.set(one.agent, undefined)
   await update($, cleaning, (every) => ({
     ...every,
     ...Object.fromEntries(cleaners.map((one) => [one.dir, { ...one, running: false }])),
   }))
+  let cleanersEnded = 0
   for (const one of cleaners) {
-    await $.tool.call({ tool: 'TaskStop', task_id: one.agent }).catch(ignore)
+    const stop = await stopAgent($, one.agent)
+    const said = cleanersStopping.get(one.agent)
+    cleanersStopping.delete(one.agent)
+    // Its turn ended meanwhile, or before the stop: what it wrote is checked, as any cleaning's end.
+    if (said !== undefined || 'finished' in stop) {
+      await update($, cleaning, (every) => ({ ...every, [one.dir]: one }))
+      await cleanDone($, one.agent, said ?? '')
+      cleanersEnded += 1
+      continue
+    }
+    if ('failed' in stop) {
+      // Still running: its end checks what it wrote, as any cleaning's.
+      await update($, cleaning, (every) => ({ ...every, [one.dir]: one }))
+      $.ui.toast(
+        `Tranchant could not stop the cleaning of ${one.lens} (${one.agent}): ${short(stop.failed, 200)}. It runs until its turn ends.`,
+      )
+      continue
+    }
+    cleanersEnded += 1
     // Stopped: its lens keeps its last version, and no failure on its source.
     await runClean($, one.project, ['--check', one.dir, '--stopped'])
   }
-  // A review waiting for its lenses' cleaning never reached its reviewers: refused, said why.
+  // A review waiting for its lenses' cleaning, or for Start, never reached its reviewers: refused, said why.
   for (const dir of waiting) {
     const ran = await $.process
       .run([
@@ -1773,7 +2014,11 @@ async function stopReviewing($: $) {
         '--review',
         dir,
         '--abandon',
-        'stopped while its lenses were cleaned again (/tranchant stop)',
+        runsNow[dir]?.ready
+          ? 'stopped while it waited to start (/tranchant stop)'
+          : runsNow[dir]?.starting
+            ? 'stopped while its lenses were built to start (/tranchant stop)'
+            : 'stopped while its lenses were cleaned again (/tranchant stop)',
       ])
       .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
     if (!ran.stdout.includes('REVIEW_REFUSED '))
@@ -1791,15 +2036,254 @@ async function stopReviewing($: $) {
   const running = Object.entries(await read($, reviewAgents)).filter(
     ([, one]) => one.running,
   )
-  for (const [key, one] of running)
-    await endReviewAgent($, key, one, 'stopped', 'Stopped')
+  let reviewersEnded = 0
+  let reviewersStuck = 0
+  for (const [key, one] of running) {
+    const outcome = await endReviewAgent($, key, one, 'stopped', 'Stopped')
+    if (outcome === 'ended' || outcome === 'finished') reviewersEnded += 1
+    if (outcome === 'stuck') reviewersStuck += 1
+  }
   // Nothing more lands: the page stops showing the review in progress.
   for (const dir of runs) await finishReview($, dir, '/tranchant stop', true)
-  return running.length + cleaners.length
+  return {
+    ended: reviewersEnded + cleanersEnded,
+    left: reviewersStuck + cleaners.length - cleanersEnded,
+  }
 }
 
-/** After a reload, the review agents at work get their hooks back. */
+/** The `end` step's label of an agent Pause now ended: readReviewAgents reads it (lib/store.mjs's INTERRUPTED). */
+const INTERRUPTED = 'Interrupted'
+
+/** The note of an agent TaskStop did not end: the server reads it (lib/store.mjs's NOT_STOPPED). */
+const NOT_STOPPED = 'Could not be stopped: runs until its turn ends'
+
+/** Review `dir`'s agents at work that its controls end: the discussing agents belong to their findings. */
+async function reviewAgentsAtWork($: $, dir: string) {
+  return Object.entries(await read($, reviewAgents)).filter(
+    ([, one]) => one.review === dir && one.running && one.kind !== 'discusser',
+  )
+}
+
+/**
+ * Ends review `dir`'s agents at work with `label`, each read again first:
+ * one whose turn ended meanwhile is left as it ended. Answers those it ended,
+ * not one TaskStop left running.
+ */
+async function endAtWork($: $, dir: string, label: string) {
+  const cut: ReviewAgent[] = []
+  for (const [key] of await reviewAgentsAtWork($, dir)) {
+    const one = (await read($, reviewAgents))[key]
+    if (!one?.running) continue
+    // An agent with no job (started before this version) cannot run again: stopped, not interrupted.
+    const why = label === INTERRUPTED && !one.job ? 'Stopped' : label
+    if ((await endReviewAgent($, key, one, 'stopped', why)) === 'ended') cut.push(one)
+  }
+  return cut
+}
+
+/** `jobs` back at the head of review `dir`'s queue, in order: they run again from the start. */
+async function requeue($: $, dir: string, jobs: ReviewJob[]) {
+  if (!jobs.length) return
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run) return all
+    return { ...all, [dir]: { ...run, queue: [...jobs, ...run.queue] } }
+  })
+}
+
+/**
+ * The page's Pause (`PAUSE`): no agent of the queue starts, those at work
+ * finish theirs. Pause now (`PAUSE_NOW`) ends them, and queues each again
+ * first, to run from the start on Resume.
+ */
+async function pauseReview($: $, dir: string, now: boolean) {
+  let found = false
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run) return all
+    found = true
+    return { ...all, [dir]: { ...run, paused: true as const } }
+  })
+  if (!found) {
+    $.ui.toast(
+      'Tranchant did not pause the review: this session holds no run of it. Stop the review on the page, then reset it.',
+    )
+    return
+  }
+  await debug($, `${dir}: paused${now ? ' now' : ''}`)
+  if (!now) return
+  for (const pending of startingReview.values())
+    if (pending.dir === dir && pending.kind !== 'discusser' && !pending.end)
+      pending.end = 'requeue'
+  const cut = await endAtWork($, dir, INTERRUPTED)
+  const lost = cut.filter((one) => !one.job).map((one) => one.name)
+  if (lost.length)
+    $.ui.toast(
+      `Tranchant stopped ${lost.join(', ')} for good: started before this version, ${lost.length > 1 ? 'they do' : 'it does'} not run again on Resume.`,
+    )
+  await requeue(
+    $,
+    dir,
+    cut.flatMap((one) => (one.job ? [againOf(one.job)] : [])),
+  )
+  // Their places are free: a question, or another review's agent, waits for one.
+  await pumpReviews($)
+}
+
+/** A job queued again after Pause now: a reviewer is told its findings landed already. */
+const againOf = (job: ReviewJob): ReviewJob =>
+  job.kind === 'reviewer' ? { ...job, again: true } : job
+
+/** The page's Resume: the queue starts where it stopped; nothing left, the review completes. */
+async function resumeReview($: $, dir: string) {
+  let found = false
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run) return all
+    found = true
+    const { paused: _paused, ...rest } = run
+    return { ...all, [dir]: rest }
+  })
+  if (!found) {
+    $.ui.toast(
+      'Tranchant did not resume the review: this session holds no run of it. Stop the review on the page, then reset it.',
+    )
+    return
+  }
+  await pumpReviews($)
+  await checkComplete($, dir)
+}
+
+/**
+ * Ends review `dir`'s agents at work, and those being started, and empties
+ * its queue: out of the runs first, so an agent that ends meanwhile starts
+ * and completes nothing.
+ */
+async function endReviewRun($: $, dir: string) {
+  for (const pending of startingReview.values())
+    if (pending.dir === dir && pending.kind !== 'discusser') pending.end = 'stop'
+  await update($, reviewRuns, (all) => {
+    if (!(dir in all)) return all
+    const { [dir]: _gone, ...rest } = all
+    return rest
+  })
+  await endAtWork($, dir, 'Stopped')
+}
+
+/** The page's Stop the review (`HALT`): its agents end now, its queue never starts, and it completes, stopped. */
+async function haltReview($: $, dir: string) {
+  await endReviewRun($, dir)
+  await finishReview($, dir, 'stopped from the page', true)
+  // Their places are free: a question, or another review's agent, waits for one.
+  await pumpReviews($)
+}
+
+/**
+ * The page's Reset the review (`RESET`), on a review stopped: reset.mjs
+ * removes its findings, then the Lenses step builds its lenses again
+ * (`--replan`), and it waits for Start the review, as with `--no-start`.
+ */
+async function resetReview($: $, watched: Watch) {
+  const dir = watched.dir
+  const run = (await read($, reviewRuns))[dir]
+  if (run?.ready || run?.starting || run?.waiting) {
+    await debug($, `${dir}: reset already under way`)
+    return
+  }
+  // Every review agent but a discussing one ends before its findings go: none lands on the reset review.
+  await endReviewRun($, dir)
+  void pumpReviews($)
+  const left = (await reviewAgentsAtWork($, dir)).map(([, one]) => tag(one.name))
+  if (left.length) {
+    $.ui.toast(
+      `Tranchant did not reset the review: ${left.join(', ')} still ${left.length > 1 ? 'run' : 'runs'}. Reset it again once ${left.length > 1 ? 'they' : 'it'} ended.`,
+    )
+    return
+  }
+  const ran = await $.process
+    .run(['node', `${skillDir($)}/scripts/reset.mjs`, '--review', dir])
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const lines = linesOf(ran.stdout)
+  const plan = lines.find((line) => line.startsWith('RESET '))?.slice('RESET '.length)
+  if (!plan) {
+    const refused = lines.find((line) => line.startsWith('RESET_REFUSED '))
+    $.ui.toast(
+      `Tranchant did not reset the review: ${refused ? refused.slice('RESET_REFUSED '.length) : short(crashOf(ran.stderr) || `reset.mjs exited ${ran.exitCode}`, 300)}`,
+    )
+    return
+  }
+  await update($, reviewRuns, (all) => ({
+    ...all,
+    [dir]: { queue: [], verifying: [], starting: { plan } },
+  }))
+  const [said = ''] = await checkThenBuild(
+    $,
+    dir,
+    plan,
+    watched.review?.project ?? '',
+    '--replan',
+  )
+  $.ui.toast(short(said, 300))
+}
+
+/** A script's crash in one line: Node prints the source excerpt first, the error after it. */
+const crashOf = (stderr: string) =>
+  stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => /^\w*Error\b/.test(line)) ?? stderr.trim()
+
+/**
+ * After a reload, the review agents at work get their hooks back. A stop the
+ * reload cut short: a turn's end it kept ends the agent; else the list tells.
+ * Not alive (or gone), it ends through endReviewAgent (completed: finished;
+ * else stopped, queued again on a paused run). Alive, it runs on, said stuck
+ * when its review's run is gone (Stop the review). The list unread, it runs on.
+ */
 async function registerReviewAgentsAgain($: $) {
+  const cut = Object.entries(await read($, reviewAgents)).filter(
+    ([, one]) => one.stopping,
+  )
+  const agents = cut.length
+    ? await $.agent.list().catch(async (error: unknown) => {
+        await debug(
+          $,
+          `after a reload, the agent list could not be read: ${message(error)}`,
+        )
+        return undefined
+      })
+    : undefined
+  for (const [key, cutShort] of cut) {
+    const { stopping: _stopping, turnEnded, ...one } = cutShort
+    await update($, reviewAgents, (all) =>
+      all[key]?.agent === one.agent ? { ...all, [key]: one } : all,
+    )
+    const listed = agents?.find((agent) => agent.id === one.agent)
+    const run = (await read($, reviewRuns))[one.review]
+    // A job queued again only for Pause now's run; one with no job (an older version's) cannot run again.
+    const again = !!run?.paused && !!one.job
+    if (turnEnded) await endReviewAgent($, key, one, 'ended', 'Ended')
+    else if (agents && !(listed && ALIVE.has(listed.status))) {
+      const outcome = await endReviewAgent(
+        $,
+        key,
+        one,
+        'stopped',
+        again ? INTERRUPTED : 'Stopped',
+      )
+      if (outcome === 'ended' && again && one.job)
+        await requeue($, one.review, [againOf(one.job)])
+    } else if (!run) {
+      // Its review stopped (its run gone), and it runs on: said, as a TaskStop that failed.
+      $.ui.toast(
+        `Tranchant could not finish stopping ${tag(one.name)} (${one.agent}): a reload cut its stop short. It runs until its turn ends.`,
+      )
+      await reviewNote($, one, one.agent, [
+        { at: Date.now(), kind: 'note', label: NOT_STOPPED, state: 'failed' },
+      ])
+    }
+    void checkComplete($, one.review)
+  }
   for (const one of Object.values(await read($, reviewAgents))) {
     if (!one.running) continue
     const review = await loadReview($, one.review).catch(() => undefined)
@@ -1820,14 +2304,34 @@ async function registerReviewAgentsAgain($: $) {
   }
 }
 
-/** The words of `/tranchant review`: its target and `--recipe <file>`, or what is wrong. */
+/**
+ * The words of `/tranchant review`: its target, `--recipe <file>` or
+ * `--group <name>`, and `--start` or `--no-start` (absent, the settings
+ * say), or what is wrong.
+ */
 function reviewArgs(words: string[]) {
-  const at = words.indexOf('--recipe')
-  const recipe = at === -1 ? undefined : words[at + 1]
-  if (at !== -1 && !recipe) return { error: REVIEW_USAGE }
-  const rest = at === -1 ? words : words.filter((_, i) => i !== at && i !== at + 1)
+  /** The value after `flag`, its two places, or an error when it has none. */
+  const valueOf = (flag: string) => {
+    const at = words.indexOf(flag)
+    if (at === -1) return { at: [] as number[] }
+    const value = words[at + 1]
+    if (!value || value.startsWith('--') || words.indexOf(flag, at + 1) !== -1)
+      return { error: REVIEW_USAGE }
+    return { at: [at, at + 1], value }
+  }
+  const recipe = valueOf('--recipe')
+  const group = valueOf('--group')
+  if ('error' in recipe || 'error' in group) return { error: REVIEW_USAGE }
+  if (recipe.value && group.value) return { error: REVIEW_USAGE }
+  const flags = words.filter((one) => one === '--start' || one === '--no-start')
+  if (flags.length > 1) return { error: REVIEW_USAGE }
+  const taken = new Set([...recipe.at, ...group.at])
+  const rest = words.filter(
+    (one, i) => !taken.has(i) && one !== '--start' && one !== '--no-start',
+  )
   if (rest.length > 1) return { error: REVIEW_USAGE }
-  return { target: rest[0], recipe }
+  const start = flags[0] === undefined ? undefined : flags[0] === '--start'
+  return { target: rest[0], recipe: recipe.value, group: group.value, start }
 }
 
 const linesOf = (stdout: string) =>
@@ -1841,9 +2345,16 @@ const linesOf = (stdout: string) =>
  * plan; it opens through the same path as a review file, so the server and
  * the page start first; then lenses.mjs builds each lens of the plan, the
  * page showing its progress, and refuses the review when one cannot be
- * built; then the summary agent and the reviewers queue, one per lens.
+ * built; then the summary agent and the reviewers queue, one per lens. A
+ * review that waits to start stops once they are built, refusing nothing.
  */
-async function startReview($: $, target: string | undefined, recipe: string | undefined) {
+async function startReview(
+  $: $,
+  target: string | undefined,
+  recipe: string | undefined,
+  start?: boolean,
+  group?: string,
+) {
   const cwd = normalize(await $.session.cwd())
   // A path names another repository, its current branch: no branch starts with `.` or `/`.
   const folder = target && /^[./]/.test(target) ? resolve(cwd, target) : undefined
@@ -1856,6 +2367,8 @@ async function startReview($: $, target: string | undefined, recipe: string | un
         `${skillDir($)}/scripts/prepare.mjs`,
         ...(target && !folder ? [target] : []),
         ...(recipe ? ['--recipe', resolve(cwd, recipe)] : []),
+        ...(group ? ['--group', group] : []),
+        ...(start === undefined ? [] : [start ? '--start' : '--no-start']),
       ],
       { cwd: folder ?? cwd },
     )
@@ -1891,29 +2404,57 @@ async function startReview($: $, target: string | undefined, recipe: string | un
     await abandon("Tranchant's server did not start")
     return served
   }
-  // The lenses whose source changed are cleaned again first: the reviewers wait for them.
-  const checked = await $.process
-    .run(['node', lensesScript, '--review', dir, '--plan', plan, '--check'])
-    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
-  const checkSaid = linesOf(checked.stdout)
-  const checkRefused = checkSaid.find((line) => line.startsWith('REVIEW_REFUSED '))
-  if (checkRefused)
-    return [
-      `Tranchant cannot review: ${checkRefused.slice('REVIEW_REFUSED '.length)}`,
-      served,
-    ].join('\n')
   const notes = settingsNote
     ? [`The settings were not read, the defaults apply: ${short(settingsNote, 300)}`]
     : []
-  // An added lens prepare.mjs could not read: not run, said here as well as on stderr.
+  // An added lens prepare.mjs could not read, a group's notes or its unreadable file: said here as well as on stderr.
   for (const line of ran.stderr.split('\n'))
-    if (/^lens \S+ \(\w+\) not run: /.test(line.trim()))
+    if (/^(?:lens \S+ \(\w+\) not run|groups?): /.test(line.trim()))
       notes.push(short(line.trim(), 300))
+  const project = watched.review?.project ?? folder ?? cwd
+  const [first = '', ...more] = await checkThenBuild($, dir, plan, project)
+  return [first, ...notes, ...more, served].join('\n')
+}
+
+/**
+ * The lenses whose source changed are cleaned again first, the build
+ * waiting for them; else the build at once (buildAndQueue). Its lines, the
+ * first one what the person reads first.
+ */
+async function checkThenBuild(
+  $: $,
+  dir: string,
+  plan: string,
+  project: string,
+  mode?: '--start' | '--replan',
+) {
+  const lensesScript = `${skillDir($)}/scripts/lenses.mjs`
+  const checked = await $.process
+    .run([
+      'node',
+      lensesScript,
+      '--review',
+      dir,
+      '--plan',
+      plan,
+      '--check',
+      ...(mode ? [mode] : []),
+    ])
+    .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
+  const checkSaid = linesOf(checked.stdout)
+  const checkRefused = checkSaid.find((line) => line.startsWith('REVIEW_REFUSED '))
+  if (checkRefused) {
+    await update($, reviewRuns, (all) => {
+      const { [dir]: _gone, ...rest } = all
+      return rest
+    })
+    return [`Tranchant cannot review: ${checkRefused.slice('REVIEW_REFUSED '.length)}`]
+  }
+  const notes: string[] = []
   if (checked.exitCode !== 0)
     notes.push(
       `The lenses' sources were not checked, none is cleaned again: ${short(checked.stderr.trim() || `lenses.mjs --check exited ${checked.exitCode}`, 300)}`,
     )
-  const project = watched.review?.project ?? folder ?? cwd
   const made: Prepared[] = []
   for (const line of checkSaid) {
     if (!line.startsWith('STALE ')) continue
@@ -1932,15 +2473,14 @@ async function startReview($: $, target: string | undefined, recipe: string | un
       notes.push(`The lens ${stale.name} was not cleaned again: ${prepared.refused}`)
     else made.push(prepared.made)
   }
-  if (!made.length)
-    return [await buildAndQueue($, dir, plan), ...notes, served].join('\n')
+  if (!made.length) return [await buildAndQueue($, dir, plan, mode), ...notes]
   // Waiting first: a cleaner that ends at once still finds the review waiting on it.
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
       queue: [],
       verifying: [],
-      waiting: { plan, cleanings: made.map((one) => one.dir) },
+      waiting: { plan, cleanings: made.map((one) => one.dir), ...(mode && { mode }) },
     },
   }))
   for (const one of made) {
@@ -1951,18 +2491,24 @@ async function startReview($: $, target: string | undefined, recipe: string | un
     }
   }
   return [
-    `Cleaning ${made.length} lens(es) again, their source changed: the reviewers start once they end.`,
+    `Cleaning ${made.length} lens(es) again, their source changed: ${mode === '--replan' ? 'the lenses are built' : 'the reviewers start'} once they end.`,
     ...notes,
-    served,
-  ].join('\n')
+  ]
 }
 
 /**
  * The Lenses step's build, once no lens waits for its cleaning: lenses.mjs
  * builds each lens of the plan, and refuses the review when one cannot be
- * built; then the summary agent and the reviewers queue, one per lens.
+ * built; then the summary agent and the reviewers queue, one per lens. A
+ * review that waits to start says `WAITING`: its plan kept for the page's
+ * Start (`--start`) or Build the lenses again (`--replan`).
  */
-async function buildAndQueue($: $, dir: string, plan: string) {
+async function buildAndQueue(
+  $: $,
+  dir: string,
+  plan: string,
+  mode?: '--start' | '--replan',
+) {
   const lensesScript = `${skillDir($)}/scripts/lenses.mjs`
   const abandon = (why: string) =>
     $.process
@@ -1971,9 +2517,21 @@ async function buildAndQueue($: $, dir: string, plan: string) {
         debug($, `${dir}: lenses.mjs --abandon failed: ${message(error)}`),
       )
   const built = await $.process
-    .run(['node', lensesScript, '--review', dir, '--plan', plan])
+    .run(['node', lensesScript, '--review', dir, '--plan', plan, ...(mode ? [mode] : [])])
     .catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: message(error) }))
   const said = linesOf(built.stdout)
+  // A start /tranchant stop ended meanwhile: nothing queued, nothing waits.
+  const stopped = mode !== undefined && !(await read($, reviewRuns))[dir]?.starting
+  if (said.includes('WAITING')) {
+    if (stopped) return 'Tranchant stopped: the review did not start.'
+    await update($, reviewRuns, (all) => ({
+      ...all,
+      [dir]: { queue: [], verifying: [], ready: { plan } },
+    }))
+    return mode === '--start'
+      ? `Tranchant did not start the review: ${short(built.stderr.trim() || 'a lens that is on cannot be built', 300)}. The page says which.`
+      : 'The lenses are built: the review starts when you click Start the review on the page.'
+  }
   const notBuilt = said.find((line) => line.startsWith('REVIEW_REFUSED '))
   // The page shows the lens and the fix; the terminal says it in one line.
   if (notBuilt) {
@@ -1999,12 +2557,19 @@ async function buildAndQueue($: $, dir: string, plan: string) {
     await abandon(`lenses.mjs printed no lens: ${why}`)
     return `Tranchant could not build the lenses: ${why}`
   }
+  if (stopped) {
+    // Built before the stop reached it: complete, with no reviewer.
+    await finishReview($, dir, '/tranchant stop', true)
+    return 'Tranchant stopped: the review did not start.'
+  }
   await update($, reviewRuns, (all) => ({
     ...all,
     [dir]: {
+      // A Pause clicked while the lenses were built holds the queue.
+      ...(all[dir]?.paused && { paused: true as const }),
       // The summary first: the page shows it while the lenses still run.
       queue: [
-        { kind: 'summarizer' },
+        { kind: 'summarizer' as const },
         ...lenses.map((lens): ReviewJob => ({ kind: 'reviewer', lens })),
       ],
       verifying: [],
@@ -2030,6 +2595,7 @@ async function reviewWaitingOn($: $, cleaningDir: string) {
 /** One of a review's cleanings ended: the last one builds the lenses, and the reviewers start. */
 async function cleaningEnded($: $, dir: string, cleaningDir: string) {
   let plan: string | undefined
+  let mode: '--start' | '--replan' | undefined
   await update($, reviewRuns, (all) => {
     const run = all[dir]
     if (!run?.waiting) return all
@@ -2037,12 +2603,45 @@ async function cleaningEnded($: $, dir: string, cleaningDir: string) {
     if (left.length)
       return { ...all, [dir]: { ...run, waiting: { ...run.waiting, cleanings: left } } }
     plan = run.waiting.plan
+    mode = run.waiting.mode
     const { waiting: _done, ...rest } = run
-    return { ...all, [dir]: rest }
+    return { ...all, [dir]: { ...rest, ...(mode && { starting: { plan } }) } }
   })
   if (!plan) return
-  const said = await buildAndQueue($, dir, plan)
+  const said = await buildAndQueue($, dir, plan, mode)
   $.ui.toast(short(said.split('\n')[0] ?? said, 300))
+}
+
+/**
+ * The page's Start the review (`START`), or Build the lenses again
+ * (`BUILD`), on a review waiting to start: its plan moved from `ready` to
+ * `starting` first, so a second click meanwhile starts nothing and
+ * /tranchant stop finds it; the lenses whose source changed are cleaned
+ * again first; a start a lens refuses waits again.
+ */
+async function startWaiting($: $, watched: Watch, kind: 'START' | 'BUILD') {
+  const dir = watched.dir
+  let plan: string | undefined
+  await update($, reviewRuns, (all) => {
+    const run = all[dir]
+    if (!run?.ready) return all
+    plan = run.ready.plan
+    return { ...all, [dir]: { queue: [], verifying: [], starting: { plan } } }
+  })
+  if (!plan) {
+    $.ui.toast(
+      `Tranchant did not ${kind === 'START' ? 'start the review' : 'build the lenses again'}: this session holds no review waiting for it. Run /tranchant review again.`,
+    )
+    return
+  }
+  const [said = ''] = await checkThenBuild(
+    $,
+    dir,
+    plan,
+    watched.review?.project ?? '',
+    kind === 'START' ? '--start' : '--replan',
+  )
+  $.ui.toast(short(said, 300))
 }
 
 // ---------------------------------------------------------------------------
@@ -2053,7 +2652,7 @@ async function cleaningEnded($: $, dir: string, cleaningDir: string) {
 // whose lens's source changed, which waits for it.
 
 const IMPORT_USAGE =
-  'Usage: /tranchant import [<skill, agent or path>] [--to global | local] [--name <lens>] [--context <skill>]'
+  'Usage: /tranchant import [<skill, agent or path>] [--to global | local] [--name <lens>]'
 
 /** The words of `/tranchant import`: its source and its flags, or what is wrong. */
 function importArgs(words: string[]) {
@@ -2061,7 +2660,7 @@ function importArgs(words: string[]) {
   const rest: string[] = []
   for (let i = 0; i < words.length; i++) {
     const word = words[i] ?? ''
-    if (word === '--to' || word === '--name' || word === '--context') {
+    if (word === '--to' || word === '--name') {
       const value = words[i + 1]
       if (!value || value.startsWith('--')) return { error: IMPORT_USAGE }
       flags[word.slice(2)] = value
@@ -2070,7 +2669,7 @@ function importArgs(words: string[]) {
     else rest.push(word)
   }
   if (rest.length > 1) return { error: IMPORT_USAGE }
-  return { source: rest[0], to: flags.to, name: flags.name, context: flags.context }
+  return { source: rest[0], to: flags.to, name: flags.name }
 }
 
 /** A word the tool was given, trimmed; undefined when blank or not a text. */
@@ -2089,9 +2688,9 @@ type Prepared = {
   file: string
   folder: string
   version?: string
-  context?: string
-  contextFile?: string
   rules?: string
+  reviewer?: string
+  extract?: string
   lens: string
   report: string
 }
@@ -2184,12 +2783,11 @@ async function spawnCleaner($: $, made: Prepared) {
         `SOURCE=${made.source}`,
         `SOURCE_FILE=${made.file}`,
         `SOURCE_FOLDER=${made.folder}`,
-        ...(made.contextFile
-          ? [`CONTEXT=${made.context ?? ''}`, `CONTEXT_FILE=${made.contextFile}`]
-          : []),
         `PROJECT=${made.project}`,
         `NAME=${made.name}`,
         ...(made.rules ? [`RULES=${made.rules}`] : []),
+        ...(made.reviewer ? [`REVIEWER=${made.reviewer}`] : []),
+        ...(made.extract ? [`EXTRACT=${made.extract}`] : []),
         `LENS=${made.lens}`,
         `REPORT=${made.report}`,
       ].join('\n'),
@@ -2221,10 +2819,7 @@ async function spawnCleaner($: $, made: Prepared) {
  * in the background. The lens waits in Settings › Lenses until the user adds
  * it: nothing picks one for them.
  */
-async function startImport(
-  $: $,
-  given: { source?: string; to?: string; name?: string; context?: string },
-) {
+async function startImport($: $, given: { source?: string; to?: string; name?: string }) {
   const project = normalize(
     (await gitTop($, normalize(await $.session.cwd()))) ?? (await $.session.cwd()),
   )
@@ -2259,11 +2854,18 @@ async function startImport(
       '--to',
       to,
       ...(given.name ? ['--name', given.name] : []),
-      ...(given.context ? ['--context', given.context] : []),
     ]),
   )
   if ('refused' in prepared)
-    return `Tranchant cannot import ${source}: ${prepared.refused}`
+    return [
+      `Tranchant cannot import ${source}: ${prepared.refused}`,
+      // Named after its source, the user may not know --name gives another.
+      ...(/is (?:global|this project's) already: edit it, or choose another name$/.test(
+        prepared.refused,
+      )
+        ? [`Give it another name: /tranchant import ${source} --to ${to} --name <lens>.`]
+        : []),
+    ].join('\n')
   const { made } = prepared
   const spawned = await spawnCleaner($, made)
   if ('error' in spawned)
@@ -2277,18 +2879,69 @@ async function startImport(
   ].join('\n')
 }
 
-/** The page asked for a cleaning (Add a lens, Clean it again): its agent, in the background. */
+/**
+ * The page asked for a cleaning (Add a lens, a glob's matches, Clean it
+ * again): queued, its agent started in the background once one is free.
+ */
 async function cleanFromPage($: $, watched: Watch, id: string) {
   const project = watched.review?.project
   if (!project) {
     $.ui.toast(`Tranchant could not start the cleaning ${id}: its review is not loaded.`)
     return
   }
-  const prepared = preparedOf(await runClean($, project, ['--start', id]))
+  await update($, cleanQueue, (all) =>
+    all.some((one) => one.id === id) ? all : [...all, { project, id }],
+  )
+  await pumpCleanings($)
+}
+
+/** One round of cleaning starts at a time: two CLEAN lines at once start no more than the cap. */
+let cleanDispatching: Promise<void> = Promise.resolve()
+
+function pumpCleanings($: $) {
+  cleanDispatching = cleanDispatching
+    .then(() => startCleanQueued($))
+    .catch((error: unknown) =>
+      debug($, `starting cleaning agents failed: ${message(error)}`),
+    )
+  return cleanDispatching
+}
+
+/**
+ * The queued cleanings' agents, while fewer than the settings'
+ * `maxReviewAgents` clean: a glob's matches clean that many at a time.
+ */
+async function startCleanQueued($: $) {
+  const cap = (await settingsOf($)).maxReviewAgents
+  for (;;) {
+    const running = Object.values(await read($, cleaning)).filter(
+      (one) => one.running,
+    ).length
+    if (running >= cap) return
+    let next: QueuedCleaning | undefined
+    await update($, cleanQueue, (all) => {
+      next = all[0]
+      return all.slice(1)
+    })
+    if (!next) return
+    await startQueuedCleaning($, next).catch(async (error: unknown) => {
+      $.ui.toast(`Tranchant could not start the cleaning agent: ${message(error)}`)
+      // Off the queue already: failed, else its card waits for an agent that never comes.
+      if (next) await runClean($, next.project, ['--drop', next.id])
+    })
+  }
+}
+
+/** One queued cleaning's agent; refused, it was discarded, or started by another session. */
+async function startQueuedCleaning($: $, next: QueuedCleaning) {
+  const prepared = preparedOf(await runClean($, next.project, ['--start', next.id]))
   if ('refused' in prepared) {
+    const gone = /^(?:no cleaning|the cleaning \S+ is )/.test(prepared.refused)
+    if (gone) return debug($, `cleaning ${next.id}: ${prepared.refused}`)
     $.ui.toast(
       `Tranchant could not start the cleaning agent: ${short(prepared.refused, 200)}`,
     )
+    await runClean($, next.project, ['--drop', next.id])
     return
   }
   const spawned = await spawnCleaner($, prepared.made)
@@ -2296,8 +2949,15 @@ async function cleanFromPage($: $, watched: Watch, id: string) {
     $.ui.toast(`Tranchant could not start the cleaning agent: ${spawned.error}`)
 }
 
-/** A cleaning agent ended: what it wrote checked, and said; a review waiting on it goes on. */
+/** Cleaning agents /tranchant stop is stopping, by agent: the answer of a turn that ended meanwhile. */
+const cleanersStopping = new Map<string, string | undefined>()
+
+/** A cleaning agent ended: what it wrote checked, and said; a review waiting on it goes on. While /tranchant stop stops it, only its answer kept. */
 async function cleanDone($: $, agent: string, answer: string) {
+  if (cleanersStopping.has(agent)) {
+    cleanersStopping.set(agent, answer)
+    return
+  }
   const found = Object.values(await read($, cleaning)).find(
     (one) => one.agent === agent && one.running,
   )
@@ -2317,6 +2977,7 @@ async function cleanDone($: $, agent: string, answer: string) {
     : lines.some((line) => line.startsWith('CLEANED '))
       ? undefined
       : short(ran.stderr.trim() || `clean.mjs exited ${ran.exitCode}`, 200)
+  const wholeProcess = lines.some((line) => line.startsWith('CLEANED process '))
   const waiting = await reviewWaitingOn($, found.dir)
   // A review's own cleanings show in its Lenses step: no toast of their own, the reason kept.
   if (waiting && why !== undefined) await debug($, `cleaning ${found.lens}: ${why}`)
@@ -2325,12 +2986,15 @@ async function cleanDone($: $, agent: string, answer: string) {
       $.ui.toast(
         found.again
           ? `Tranchant cleaned the lens ${found.lens} again: the next review runs it.`
-          : `Tranchant cleaned the lens ${found.lens}${said ? ` (${said})` : ''}: check it in Settings › Lenses, then Add this lens.`,
+          : wholeProcess
+            ? `Tranchant read ${short(found.source, 80)}: a whole review process. Pick the lenses to make of the reviewers it starts in Settings › Lenses.`
+            : `Tranchant cleaned the lens ${found.lens}${said ? ` (${said})` : ''}: check it in Settings › Lenses, then Add this lens.`,
       )
     else
       $.ui.toast(`Tranchant could not clean the lens ${found.lens}: ${short(why, 200)}`)
   }
   if (waiting) await cleaningEnded($, waiting, found.dir)
+  await pumpCleanings($)
 }
 
 /** After a reload, the cleaning agents at work get their hooks back. */
@@ -2402,9 +3066,10 @@ async function reviewStatus($: $, dir: string) {
   const queue = (run?.queue ?? []).map(
     (job, index) => `${index + 1}. ${reviewAgentName(job)}`,
   )
+  if (run?.ready) return ['  Lenses built: waiting for Start the review on the page.']
   const cap = (await settingsOf($)).maxReviewAgents
   return [
-    `  Reviewing${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${cap} review agents at work.`,
+    `  ${run?.paused ? 'Paused' : 'Reviewing'}${run ? '' : ' (ended)'}: ${agents.length + pending.length} of ${cap} review agents at work.`,
     ...lines.map((line) => `    ${line}`),
     ...(queue.length
       ? ['  Review agents waiting, in order:', ...queue.map((one) => `    ${one}`)]
@@ -2453,6 +3118,16 @@ export const register: Register = (on) => {
             description:
               "With run: a recipe file to use instead of the plugin's default one.",
           },
+          group: {
+            type: 'string',
+            description:
+              "With run: the project's group of lenses to run (Settings › Lenses › Groups), whatever their switches; absent, the project's default group. Not with recipe.",
+          },
+          start: {
+            type: 'boolean',
+            description:
+              'With run: false builds the lenses and waits for the user to start the review on the page; true starts it at once. Absent, the settings say. Never saved.',
+          },
           import: {
             type: 'string',
             description:
@@ -2467,11 +3142,6 @@ export const register: Register = (on) => {
           name: {
             type: 'string',
             description: "With import: the lens's name; absent, one from its source.",
-          },
-          context: {
-            type: 'string',
-            description:
-              "With import: a skill that frames the lens's run (the project's domain, its rules), by name or path.",
           },
           comments: {
             type: 'boolean',
@@ -2488,7 +3158,7 @@ export const register: Register = (on) => {
       description:
         'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, the comments of a PR/MR, status, or stop)',
       argumentHint:
-        '<review.json> | review [<branch> | <mr url>] | import [<source>] [--to global|local] | comments [<pr/mr url>] | status | stop',
+        '<review.json> | review [<branch> | <mr url>] [--group <name>] [--no-start] | import [<source>] [--to global|local] | comments [<pr/mr url>] | status | stop',
       immediate: true,
     })
     await registerRunning($)
@@ -2496,6 +3166,7 @@ export const register: Register = (on) => {
     await registerCleanersAgain($)
     // The review agents queued before a reload start once places free.
     void pumpReviews($)
+    void pumpCleanings($)
     await rearm($)
     return next(e)
   })
@@ -2508,6 +3179,8 @@ export const register: Register = (on) => {
     if (e.stop === true) return { result: await stopServing($) }
     if (e.status === true) return { result: await statusText($) }
     if (typeof e.import === 'string') {
+      // As /tranchant import refuses --context: a caller from before its removal is told.
+      if (e.context !== undefined) return { result: IMPORT_USAGE }
       const source = e.import.trim() || undefined
       const to = typeof e.to === 'string' && e.to.trim() ? e.to.trim() : undefined
       return {
@@ -2515,7 +3188,6 @@ export const register: Register = (on) => {
           ...(source && { source }),
           ...(to && { to }),
           ...(word(e.name) && { name: word(e.name) }),
-          ...(word(e.context) && { context: word(e.context) }),
         }),
       }
     }
@@ -2529,7 +3201,11 @@ export const register: Register = (on) => {
         typeof e.target === 'string' && e.target.trim() ? e.target.trim() : undefined
       const recipe =
         typeof e.recipe === 'string' && e.recipe.trim() ? e.recipe.trim() : undefined
-      return { result: await startReview($, target, recipe) }
+      const start = typeof e.start === 'boolean' ? e.start : undefined
+      const group =
+        typeof e.group === 'string' && e.group.trim() ? e.group.trim() : undefined
+      if (recipe && group) return { result: REVIEW_USAGE }
+      return { result: await startReview($, target, recipe, start, group) }
     }
     const { review } = e
     if (typeof review !== 'string' || !review.trim())

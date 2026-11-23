@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type DiffState,
   postAnswer,
   postDiscuss,
   postDecisions,
+  postHalt,
+  postPause,
+  postReset,
+  postResume,
+  postStart,
   postStop,
   useDiff,
   useUnfold,
@@ -19,8 +24,10 @@ import {
   canPost,
   changeRef,
   commentedIds,
+  underWayIds,
   counts,
   type DecisionInput,
+  type LensesProgress,
   groupFindings,
   hasComment,
   isReviewing,
@@ -30,13 +37,15 @@ import {
   orderedFindings,
   plural,
   type Review,
+  type StartChoices,
   stateOf,
   unverifiedIds,
 } from './domain'
 import { FindingDetail } from './FindingDetail'
 import { FindingList } from './FindingList'
-import { LensesStep } from './LensesStep'
-import { ReviewAgents } from './ReviewAgents'
+import { LensesCenter, LensesControl, ReadyCenter } from './LensesStep'
+import { phaseOf } from './progress'
+import { ReviewAgents, type ReviewControl } from './ReviewAgents'
 import type { View } from './settings'
 import { LensesView } from './LensesView'
 import { SettingsView } from './SettingsView'
@@ -46,25 +55,37 @@ import { SettingsLink, ThemeToggle } from './ThemeToggle'
 
 const NO_SECTIONS: readonly Section[] = []
 
-/** What the page shows: the review, the Settings (`#settings`) or their Lenses (`#settings/lenses`). */
+/** What the page shows: the review, the Settings (`#settings`) or their Lenses (`#settings/lenses`, `/<lens>` opening its editor). */
 type Route = 'review' | 'settings' | 'lenses'
+
+const LENSES_HASH = '#settings/lenses'
 
 const readRoute = (): Route =>
   location.hash === '#settings'
     ? 'settings'
-    : location.hash === '#settings/lenses'
+    : location.hash === LENSES_HASH || location.hash.startsWith(`${LENSES_HASH}/`)
       ? 'lenses'
       : 'review'
 
-/** The route the URL's hash names, following the gear and the browser's back. */
-function useRoute(): Route {
-  const [route, setRoute] = useState<Route>(readRoute)
+/** The lens `#settings/lenses/<lens>` names, as LensesView keys it. */
+function readLens() {
+  if (!location.hash.startsWith(`${LENSES_HASH}/`)) return undefined
+  try {
+    return decodeURIComponent(location.hash.slice(LENSES_HASH.length + 1))
+  } catch {
+    return undefined
+  }
+}
+
+/** The route the URL's hash names, and the lens it opens, following the gear and the browser's back. */
+function useRoute(): { route: Route; lens: string | undefined } {
+  const [at, setAt] = useState(() => ({ route: readRoute(), lens: readLens() }))
   useEffect(() => {
-    const onChange = () => setRoute(readRoute())
+    const onChange = () => setAt({ route: readRoute(), lens: readLens() })
     window.addEventListener('hashchange', onChange)
     return () => window.removeEventListener('hashchange', onChange)
   }, [])
-  return route
+  return at
 }
 
 const isEditing = (target: EventTarget | null) =>
@@ -73,6 +94,7 @@ const isEditing = (target: EventTarget | null) =>
 
 function Header({
   review,
+  lenses,
   tally,
   moved,
   settingsOpen,
@@ -80,6 +102,8 @@ function Header({
   onTheme,
 }: {
   review: Review
+  /** The Lenses step of a `/tranchant review` review. */
+  lenses: LensesProgress | undefined
   tally: ReturnType<typeof counts>
   moved: boolean
   /** The Settings are shown: the gear leads back. */
@@ -142,22 +166,45 @@ function Header({
               checkout moved
             </span>
           )}
-          {isReviewing(review) && (
-            <span
-              className="tr-chip tr-chip--live"
-              role="status"
-              aria-label="Review in progress"
-            >
-              <span className="tr-spinner" aria-hidden="true" />
-              {review.status === 'preparing'
-                ? 'building the lenses'
-                : `review in progress · ${plural(review.findings.length, 'finding')} so far`}
+          {review.status === 'preparing' && lenses?.state === 'waiting' ? (
+            <span className="tr-chip tr-chip--ready" role="status">
+              ready to start
             </span>
+          ) : review.stopped ? (
+            <span className="tr-chip tr-chip--danger" role="status">
+              review stopped · {plural(review.findings.length, 'finding')}
+            </span>
+          ) : review.paused && review.status === 'reviewing' ? (
+            <span className="tr-chip tr-chip--warn" role="status">
+              review paused · {plural(review.findings.length, 'finding')}
+            </span>
+          ) : (
+            isReviewing(review) && (
+              <span
+                className="tr-chip tr-chip--live"
+                role="status"
+                aria-label="Review in progress"
+              >
+                <span className="tr-spinner" aria-hidden="true" />
+                {review.status === 'preparing'
+                  ? 'building the lenses'
+                  : `review in progress · ${plural(review.findings.length, 'finding')} so far`}
+              </span>
+            )
           )}
           {review.status === 'refused' && (
             <span className="tr-chip tr-chip--warn" role="status">
               review refused
             </span>
+          )}
+          {(review.group ?? lenses?.group) && (
+            <span className="tr-chip" title="The group of lenses this review runs">
+              group {review.group ?? lenses?.group}
+            </span>
+          )}
+          {/* While they build, or refused, the page's center shows them. */}
+          {lenses && review.status !== 'preparing' && review.status !== 'refused' && (
+            <LensesControl step={lenses} />
           )}
         </div>
       </div>
@@ -258,7 +305,7 @@ export default function App() {
     [reloadSettings, reloadTracker],
   )
   const { payload, reachable, loaded, reload } = useReview(onSettings)
-  const route = useRoute()
+  const { route, lens: focusedLens } = useRoute()
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [cursorState, setCursor] = useState<string>()
   const [openState, setOpenId] = useState<string>()
@@ -272,6 +319,32 @@ export default function App() {
     if (theme) applyTheme(theme)
   }, [theme])
   const [notice, setNotice] = useState<string>()
+  // A review waiting to start: the switches of its ready screen, kept while the Settings show.
+  const [choicesPick, setChoices] = useState<StartChoices>()
+  const savedChoices = payload?.lenses?.choices
+  const startChoices: StartChoices = useMemo(
+    () => choicesPick ?? savedChoices ?? { lenses: {}, remember: false },
+    [choicesPick, savedChoices],
+  )
+  const waiting =
+    payload?.review.status === 'preparing' && payload.lenses?.state === 'waiting'
+  // The settings changed while away from the review: its lenses are built again on the way back.
+  const seenSettings = useRef(settings.payload)
+  const buildOnReturn = useRef(false)
+  useEffect(() => {
+    if (settings.payload === seenSettings.current) return
+    seenSettings.current = settings.payload
+    if (route !== 'review' && waiting) buildOnReturn.current = true
+  }, [settings.payload, route, waiting])
+  useEffect(() => {
+    if (route !== 'review' || !waiting || !buildOnReturn.current) return
+    buildOnReturn.current = false
+    postStart(startChoices, true).catch((error: unknown) =>
+      setNotice(
+        `The lenses were not built again: ${error instanceof Error ? error.message : 'the server did not answer'}`,
+      ),
+    )
+  }, [route, waiting, startChoices])
   // A decision left no open finding to move to: the detail says so until the reviewer opens one.
   const [settled, setSettled] = useState(false)
 
@@ -295,6 +368,10 @@ export default function App() {
   const commented = useMemo(
     () => (review ? commentedIds(review) : new Set<string>()),
     [review],
+  )
+  const underWay = useMemo(
+    () => (review ? underWayIds(review, records, payload?.discussions) : []),
+    [review, records, payload?.discussions],
   )
   const { diff, retry } = useDiff(payload?.head.reviewed, reachable)
   const [diffPane, setDiffPane] = useState<HTMLElement | null>(null)
@@ -400,6 +477,29 @@ export default function App() {
       }
       await reload()
       return sent
+    },
+    [reload],
+  )
+
+  // Pause, Resume, Stop and Reset: what the server refuses is said, and the page reads the review again.
+  const control = useCallback(
+    async (which: ReviewControl) => {
+      let done = false
+      try {
+        if (which === 'pause' || which === 'pauseNow')
+          await postPause(which === 'pauseNow')
+        else if (which === 'resume') await postResume()
+        else if (which === 'reset') await postReset()
+        else await postHalt(which === 'haltReset')
+        setNotice(undefined)
+        done = true
+      } catch (failure) {
+        setNotice(
+          failure instanceof Error ? failure.message : 'The server did not answer.',
+        )
+      }
+      await reload()
+      return done
     },
     [reload],
   )
@@ -524,6 +624,7 @@ export default function App() {
   const header = (
     <Header
       review={review}
+      lenses={payload?.lenses}
       tally={tally}
       moved={moved}
       settingsOpen={route !== 'review'}
@@ -554,6 +655,8 @@ export default function App() {
         )}
         {header}
         <LensesView
+          key={focusedLens ?? ''}
+          focus={focusedLens}
           settings={settings.payload}
           offline={!reachable}
           error={settings.error}
@@ -585,11 +688,58 @@ export default function App() {
       </div>
     )
   }
+  // No reviewer yet, or none ever: the lenses take the page.
+  if (review.status === 'preparing' || review.status === 'refused') {
+    return (
+      <div className="tr-app">
+        {!reachable && (
+          <div className="tr-banner" role="alert">
+            Tranchant stopped serving this review. Retrying every 5 seconds…
+          </div>
+        )}
+        {header}
+        {settingsNotice}
+        {notice && (
+          <p className="tr-notice" role="status">
+            {notice}
+          </p>
+        )}
+        {payload?.lenses?.state === 'waiting' && review.status === 'preparing' ? (
+          <ReadyCenter
+            step={payload.lenses}
+            review={review}
+            choices={startChoices}
+            cap={values?.maxReviewAgents}
+            model={values?.reviewModel}
+            groups={settings.payload?.groups}
+            onChoices={setChoices}
+            onStart={(build, next) =>
+              postStart(next ?? startChoices, build).then(() => undefined)
+            }
+          />
+        ) : (
+          <LensesCenter step={payload?.lenses} review={review} />
+        )}
+      </div>
+    )
+  }
   const current = ordered.find((finding) => finding.id === openId)
   const keys = (
     <p className="tr-keys tr-muted">
-      j/k move · Enter open · x select · f fix · {canPost(review) ? 'p post · ' : ''}d
-      drop · s skip
+      {[
+        'j/k move',
+        'Enter open',
+        'x select',
+        'f fix',
+        ...(canPost(review) ? ['p post'] : []),
+        'd drop',
+        's skip',
+      ].map((key, index) => (
+        <Fragment key={key}>
+          {index > 0 && ' · '}
+          <span>{key}</span>
+        </Fragment>
+      ))}
     </p>
   )
   const viewToggle = (
@@ -605,8 +755,18 @@ export default function App() {
       }}
     />
   )
-  const reviewing = isReviewing(review)
-  const refused = review?.status === 'refused'
+  // Stopped from the page, nothing more lands: no longer in progress, whatever its status.
+  const reviewing = isReviewing(review) && !review.stopped
+  const phase = phaseOf(review, payload?.reviewers ?? [])
+  const agents = (payload?.reviewers ?? []).flatMap((agent) => {
+    // An interrupted agent runs again once resumed (a reviewer's lens shows queued meanwhile); ended without it, its lens is not covered.
+    if (agent.outcome === 'interrupted' && phase === 'running') return []
+    // One the hooks could not stop does run: shown so, until its end step.
+    if (reviewing || agent.stuck) return [agent]
+    // An agent whose end step was never written ended with its review all the same; stopped, before it finished.
+    const cut = (review.stopped && agent.running) || agent.outcome === 'interrupted'
+    return [{ ...agent, running: false, ...(cut && { outcome: 'failed' as const }) }]
+  })
   const detail = current ? (
     <FindingDetail
       key={current.id}
@@ -628,23 +788,15 @@ export default function App() {
       onDiscuss={discuss}
     />
   ) : (
-    <p className="tr-muted">
-      {refused
-        ? 'No reviewer ran: the review was refused.'
-        : reviewing
-          ? 'Waiting for the first finding…'
-          : 'No finding.'}
+    <p className="tr-empty tr-muted">
+      {reviewing ? 'Waiting for the first finding…' : 'No finding.'}
     </p>
   )
   const empty = (
     <p className="tr-empty tr-muted">
-      {refused
-        ? 'No reviewer ran: a lens could not be built. The Lenses step above says why.'
-        : review?.status === 'preparing'
-          ? 'Building the lenses: findings appear here once the reviewers start.'
-          : reviewing
-            ? 'The review is running: findings appear here as they land.'
-            : 'No findings.'}
+      {reviewing
+        ? 'The review is running: findings appear here as they land.'
+        : 'No findings.'}
     </p>
   )
 
@@ -656,16 +808,23 @@ export default function App() {
         </div>
       )}
       {header}
-      <LensesStep step={payload?.lenses} review={review} />
       <ReviewAgents
-        agents={(refused ? [] : (payload?.reviewers ?? [])).map((agent) =>
-          // An agent whose end step was never written ended with its review all the same.
-          reviewing ? agent : { ...agent, running: false },
-        )}
-        reviewing={reviewing}
+        agents={agents}
+        phase={phase}
+        planned={review.lenses?.map((lens) => lens.name) ?? []}
+        onControl={review.lenses ? control : undefined}
+        underWay={underWay}
+        stuck={(payload?.reviewers ?? [])
+          // As the server's resetRefusal: a discussing agent belongs to its finding.
+          .filter((agent) => agent.stuck && !agent.name.startsWith('ds-'))
+          .map((agent) => agent.name)}
         findings={review?.findings ?? []}
         verify={review?.verify === true}
         project={review?.project ?? ''}
+        lensGroup={review?.group}
+        others={(settings.payload?.groups?.list ?? [])
+          .map((group) => group.name)
+          .filter((name) => name !== review?.group)}
         onOpen={open}
       />
       <Summary

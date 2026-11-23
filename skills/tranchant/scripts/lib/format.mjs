@@ -227,6 +227,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Diagram} [diagram]
  * @property {Related[]} [related] Up to 4.
  * @property {string} [addedAt] When it joined the review: set by add.mjs, or by the import for inline findings.
+ * @property {string} [lens] The name of the lens that found it: set by add.mjs for a reviewer of `/tranchant review`, or by a producer's file; absent, no lens found it.
  * @property {boolean} [verified] Set by verify.mjs once a verifier confirmed or amended it; read only when the review's `verify` is true.
  * @property {Thread} [thread] The PR/MR thread it comes from: a post replies on it.
  */
@@ -266,8 +267,17 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {Record<string, number>} [sources]
  * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.
  * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
+ * @property {string} [group] The group of lenses `/tranchant review` ran, when it ran one.
  * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
+ * @property {Paused} [paused] While `reviewing`: the page's Pause; no agent of the review's queue starts.
+ * @property {{ at: string }} [stopped] The page's Stop the review: its agents ended, no Resume; only Reset runs it again.
  * @property {Finding[]} findings At least one, unless the review is not `complete`.
+ */
+
+/**
+ * A review the page paused: when, and `now` once Pause now ended its agents
+ * at work, which run again from the start on Resume.
+ * @typedef {{ at: string, now?: true }} Paused
  */
 
 /**
@@ -492,6 +502,8 @@ export class FormatError extends Error {}
 const ID = /^[\w-]{1,64}$/
 /** An id safe in a file name and on a protocol line. @param {unknown} value */
 const isId = (value) => typeof value === 'string' && ID.test(value)
+/** A lens's name: a recipe's, a user's, and the one a finding records. */
+export const LENS_NAME = /^[\w-]{1,40}$/
 const SHA = /^[0-9a-f]{7,64}$/
 // A tab is the only control character a line of code may hold.
 const CONTROL = /[^\P{Cc}\t]/u
@@ -714,6 +726,12 @@ function checkFinding(finding, where, theirs, problems, forge) {
   if (finding.addedAt !== undefined && !isText(finding.addedAt, 100)) {
     problems.push(`${where}.addedAt: a date is required`)
   }
+  if (
+    finding.lens !== undefined &&
+    !(typeof finding.lens === 'string' && LENS_NAME.test(finding.lens))
+  ) {
+    problems.push(`${where}.lens: a lens's name, up to 40 letters, digits, - and _`)
+  }
   if (finding.verified !== undefined && typeof finding.verified !== 'boolean') {
     problems.push(`${where}.verified: true or false`)
   }
@@ -883,6 +901,11 @@ export function validateEnvelope(review) {
     problems.push('lenses: an array of { name, source, version?, hash }')
   }
   if (
+    review.group !== undefined &&
+    (typeof review.group !== 'string' || !LENS_NAME.test(review.group))
+  )
+    problems.push('group: a group name, letters, digits, - and _')
+  if (
     review.refusal !== undefined &&
     (!isObject(review.refusal) ||
       !isText(review.refusal.lens, 100) ||
@@ -894,6 +917,18 @@ export function validateEnvelope(review) {
   if (review.status === 'refused' && review.refusal === undefined) {
     problems.push('refusal: a refused review says why')
   }
+  if (
+    review.paused !== undefined &&
+    (!isObject(review.paused) ||
+      !isText(review.paused.at, 100) ||
+      (review.paused.now !== undefined && review.paused.now !== true))
+  )
+    problems.push('paused: { at, now? }')
+  if (
+    review.stopped !== undefined &&
+    (!isObject(review.stopped) || !isText(review.stopped.at, 100))
+  )
+    problems.push('stopped: { at }')
   if (!isText(review.title, 300)) problems.push('title: a text is required')
   if (typeof review.summary !== 'string')
     problems.push('summary: a Markdown text is required')
@@ -1004,16 +1039,20 @@ export function envelopeOf(review) {
 
 /**
  * What tells a review from another with the same id, as JSON: its envelope,
- * status, `verify` and what its Lenses step recorded left out. A review that
- * grew, or completed, is still the same one, opened again without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, refusal?: unknown }} review
+ * status, `verify`, what its Lenses step recorded and its pause or stop left
+ * out. A review that grew, or completed, is still the same one, opened again
+ * without `--verify` too.
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, refusal?: unknown, paused?: unknown, stopped?: unknown }} review
  */
 export function identityOf(review) {
   const {
     status: _status,
     verify: _verify,
     lenses: _lenses,
+    group: _group,
     refusal: _refusal,
+    paused: _paused,
+    stopped: _stopped,
     ...identity
   } = envelopeOf(review)
   return JSON.stringify(canonical(identity))

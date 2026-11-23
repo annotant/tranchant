@@ -73,6 +73,36 @@ export class StoreRefusal extends Error {}
 /** @param {State} state */
 const isWorking = (state) => state === 'working'
 
+/**
+ * Refuses `what` (Pause, Resume, Stop) unless the review's agents run: a
+ * `/tranchant review` (its `lenses` recorded), `reviewing`, not stopped.
+ * @param {Omit<Review, 'findings'>} envelope
+ * @param {string} what
+ */
+function refuseUnlessRunning(envelope, what) {
+  if (!envelope.lenses)
+    throw new StoreRefusal(`${what} refused: only a /tranchant review runs agents`)
+  if (envelope.stopped) throw new StoreRefusal(`${what} refused: the review is stopped`)
+  if (statusOf(envelope) !== 'reviewing')
+    throw new StoreRefusal(`${what} refused: the review is ${statusOf(envelope)}`)
+}
+
+/**
+ * What holds the findings `busy` names, in one line for a refusal.
+ * @param {{ id: string, what: 'fix' | 'answer' }[]} busy
+ */
+export function busyText(busy) {
+  const ids = (/** @type {'fix' | 'answer'} */ what) =>
+    busy.filter((one) => one.what === what).map((one) => one.id)
+  const [held, asked] = [ids('fix'), ids('answer')]
+  return [
+    held.length && `${held.join(', ')} still under way (a fix, a post or an issue)`,
+    asked.length && `${asked.join(', ')} waiting for an answer`,
+  ]
+    .filter(Boolean)
+    .join('; ')
+}
+
 /** The step file of finding `id`'s run in progress. */
 export const progressPath = (/** @type {string} */ dir, /** @type {string} */ id) =>
   path.join(dir, 'runs', `${id}.jsonl`)
@@ -149,17 +179,27 @@ export const readProgress = (dir, id, limit, { history = false } = {}) =>
 
 /**
  * One review agent, the summary agent (`sm-summary`), a lens's reviewer
- * (`rv-<lens>`) or a finding's verifier (`vf-<id>`), as its run file tells it: running until its `end` step.
- * @typedef {{ name: string, running: boolean, outcome?: 'done' | 'failed', steps: Step[] }} ReviewAgent
+ * (`rv-<lens>`), a finding's verifier (`vf-<id>`) or its discussing agent (`ds-<id>`), as its run file tells it: running until the `end` after its last `start`.
+ * `interrupted`: Pause now ended it, and it runs again from the start on Resume.
+ * `stuck`: running, though the hooks' TaskStop did not end it: a reset is refused until its end (never for a discussing agent, `ds-<id>`, which belongs to its finding).
+ * A note older than the `since` option is not: the agent ended with the session that ran it.
+ * @typedef {{ name: string, running: boolean, stuck?: true, outcome?: 'done' | 'failed' | 'interrupted', steps: Step[] }} ReviewAgent
  */
+
+/** The label of the `end` step of an agent Pause now ended: the hooks write it, readReviewAgents reads it. */
+const INTERRUPTED = 'Interrupted'
+
+/** The label of the note the hooks write on an agent TaskStop did not end. */
+const NOT_STOPPED = 'Could not be stopped: runs until its turn ends'
 
 /**
  * The review agents of the review, in the order they started.
  * @param {string} dir The review folder.
  * @param {number} [limit] The last steps of each.
+ * @param {{ since?: number }} [options] `since`: when the Claude Code session that runs the server first served a review, in ms.
  * @returns {Promise<ReviewAgent[]>}
  */
-export async function readReviewAgents(dir, limit = PROGRESS_SHOWN) {
+export async function readReviewAgents(dir, limit = PROGRESS_SHOWN, { since = 0 } = {}) {
   const names = await readdir(path.join(dir, 'reviewers')).catch(() => [])
   /** @type {(ReviewAgent & { since: number })[]} */
   const agents = []
@@ -167,12 +207,28 @@ export async function readReviewAgents(dir, limit = PROGRESS_SHOWN) {
     const name = AGENT_FILE.exec(file)?.[1]
     if (!name) continue
     const all = await readSteps(reviewAgentPath(dir, name))
-    const end = all.findLast((step) => step.kind === 'end')
+    // An agent interrupted then started again: its last start opens the run that counts.
+    const last = all.findLastIndex((step) => step.kind === 'start')
+    const run = all.slice(Math.max(last, 0))
+    const end = run.findLast((step) => step.kind === 'end')
+    const stuck =
+      !end &&
+      run.some(
+        (step) => step.kind === 'note' && step.label === NOT_STOPPED && step.at >= since,
+      )
     agents.push({
       name,
       since: all[0]?.at ?? 0,
       running: !end,
-      ...(end && { outcome: end.state === 'failed' ? 'failed' : 'done' }),
+      ...(stuck && { stuck: /** @type {const} */ (true) }),
+      ...(end && {
+        outcome:
+          end.state !== 'failed'
+            ? 'done'
+            : end.label === INTERRUPTED
+              ? 'interrupted'
+              : 'failed',
+      }),
       steps: all.slice(-limit),
     })
   }
@@ -233,6 +289,43 @@ export function createStore(dir) {
   const findingsDir = path.join(dir, 'findings')
   /** The finding files found unsound, each said once on stderr. @type {Set<string>} */
   const warned = new Set()
+
+  /**
+   * The findings of `findings` a fix, a post or an issue holds, or whose
+   * discussion waits for its answer. A discussion that is not JSON waits for
+   * nothing: no agent can read it either; one it cannot read throws, its reason said.
+   * @param {{ id: string }[]} findings
+   * @param {{ findings: Record<string, { state: string }> }} decisions
+   */
+  async function busyIn(findings, decisions) {
+    /** @type {{ id: string, what: 'fix' | 'answer' }[]} */
+    const busy = []
+    for (const { id } of findings) {
+      const state = decisions.findings[id]?.state
+      if (state === 'queued' || state === 'working' || state === 'asking')
+        busy.push({ id, what: 'fix' })
+      else if (await waitsForAnswer(id)) busy.push({ id, what: 'answer' })
+    }
+    return busy
+  }
+
+  /** @param {string} id */
+  async function waitsForAnswer(id) {
+    let text
+    try {
+      text = await readFile(path.join(dir, 'discussions', `${id}.json`), 'utf8')
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return false
+      throw error
+    }
+    try {
+      const last = JSON.parse(text)?.messages?.at(-1)
+      // A change asked for waits for its fix, not for an answer (lib/discussion.mjs's waitsForAnswer).
+      return last?.by === 'reviewer' && !last.change
+    } catch {
+      return false
+    }
+  }
 
   /**
    * The review's envelope, as review.json holds it: its findings, if any
@@ -552,6 +645,13 @@ export function createStore(dir) {
         if (statusOf(review) === 'refused') {
           throw new StoreRefusal('the review was refused: nothing can be added')
         }
+        if (review.stopped) {
+          throw new StoreRefusal('the review was stopped: nothing can be added')
+        }
+        // Back from a reset, before Start: only an agent of the run before it would add.
+        if (statusOf(review) === 'preparing') {
+          throw new StoreRefusal('the review waits to start: nothing can be added')
+        }
         // Only a verifier verifies: a finding lands unverified, whatever it says.
         const { verified: _verified, ...landed } = finding
         await writeFinding({ ...landed, addedAt: new Date().toISOString() })
@@ -635,6 +735,10 @@ export function createStore(dir) {
         if (isSettled(envelope)) {
           throw new StoreRefusal(`the review is ${statusOf(envelope)}: its summary stays`)
         }
+        if (envelope.stopped || statusOf(envelope) === 'preparing')
+          throw new StoreRefusal(
+            `the review is ${envelope.stopped ? 'stopped' : 'preparing'}: its summary stays`,
+          )
         await writeEnvelope({
           ...envelope,
           summary,
@@ -660,22 +764,32 @@ export function createStore(dir) {
         if (statusOf(envelope) === 'preparing') {
           throw new StoreRefusal('the review is still building its lenses')
         }
-        await writeEnvelope({ ...envelope, status: 'complete' })
+        // A pause that landed as the last agent ended pauses nothing any more.
+        const { paused: _paused, ...rest } = envelope
+        await writeEnvelope({ ...rest, status: 'complete' })
       })
     },
 
     /**
      * The Lenses step built every lens: the review runs, `reviewing`, and
-     * records the lenses it runs. Refused unless it is `preparing`.
+     * records the lenses it runs, and the group they are, when one is.
+     * Refused unless it is `preparing`.
      * @param {import('./format.mjs').LensRecord[]} lenses
+     * @param {string} [group]
      * @returns {Promise<void>}
      */
-    prepared(lenses) {
+    prepared(lenses, group) {
       return withFileLock(reviewFile, async () => {
         const envelope = await readEnvelope()
         if (statusOf(envelope) !== 'preparing')
           throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
-        await writeChecked({ ...envelope, status: 'reviewing', lenses })
+        const { group: _was, ...rest } = envelope
+        await writeChecked({
+          ...rest,
+          status: 'reviewing',
+          lenses,
+          ...(group && { group }),
+        })
       })
     },
 
@@ -695,6 +809,114 @@ export function createStore(dir) {
     },
 
     /**
+     * The page's Pause: no agent of the review's queue starts; with `now`, Pause now:
+     * the hooks end those at work. Refused unless it runs, `reviewing` and not
+     * stopped. A pause keeps its time; Pause now while it pauses adds `now`.
+     * @param {boolean} [now]
+     * @returns {Promise<import('./format.mjs').Paused>}
+     */
+    pause(now = false) {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        refuseUnlessRunning(envelope, 'pause')
+        const paused = {
+          at: envelope.paused?.at ?? new Date().toISOString(),
+          ...((now || envelope.paused?.now) && { now: /** @type {const} */ (true) }),
+        }
+        await writeChecked({ ...envelope, paused })
+        return paused
+      })
+    },
+
+    /**
+     * The page's Resume: the queue starts where it stopped. Refused unless
+     * the review is paused.
+     * @returns {Promise<void>}
+     */
+    resume() {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        refuseUnlessRunning(envelope, 'resume')
+        if (!envelope.paused)
+          throw new StoreRefusal('resume refused: the review is not paused')
+        const { paused: _paused, ...rest } = envelope
+        await writeChecked(rest)
+      })
+    },
+
+    /**
+     * The page's Stop the review, paused or not: `stopped`, no Resume; the
+     * hooks end its agents, then complete it. Refused unless it runs.
+     * @returns {Promise<{ at: string }>}
+     */
+    halt() {
+      return withFileLock(reviewFile, async () => {
+        const envelope = await readEnvelope()
+        refuseUnlessRunning(envelope, 'stop')
+        const { paused: _paused, ...rest } = envelope
+        const stopped = { at: new Date().toISOString() }
+        await writeChecked({ ...rest, stopped })
+        return stopped
+      })
+    },
+
+    /**
+     * What a reset of the review would cut short: each finding a fix, a post
+     * or an issue holds (`queued`, `working`, `asking`), or whose discussion
+     * waits for its answer, by id, with what holds it.
+     * @returns {Promise<{ id: string, what: 'fix' | 'answer' }[]>}
+     */
+    async underWay() {
+      return busyIn((await readReview()).findings, await readDecisions())
+    },
+
+    /**
+     * Reset a stopped review: back to `preparing`, its summary, its findings,
+     * their decisions, runs and discussions, and its review agents' run files
+     * all gone. Refused unless stopped, and while a finding is under way
+     * (`underWay`): never cut short, the user resets again once it ends.
+     * @returns {Promise<{ removed: string[] }>}
+     */
+    reset() {
+      return withFileLock(reviewFile, async () => {
+        const known = await readReview()
+        if (!known.stopped)
+          throw new StoreRefusal('reset refused: the review is not stopped')
+        return exclusive(async () => {
+          const decisions = await readDecisions()
+          const busy = await busyIn(known.findings, decisions)
+          if (busy.length) throw new StoreRefusal(`reset refused: ${busyText(busy)}`)
+          const removed = known.findings.map((one) => one.id)
+          for (const id of removed) {
+            await rm(findingPath(dir, id), { force: true })
+            await rm(progressPath(dir, id), { force: true })
+            await rm(historyPath(dir, id), { force: true })
+          }
+          await rm(path.join(dir, 'discussions'), { recursive: true, force: true })
+          await writeDecisions({ ...decisions, findings: {} })
+          const agents = path.join(dir, 'reviewers')
+          for (const name of await readdir(agents).catch(() => []))
+            if (AGENT_FILE.test(name)) await rm(path.join(agents, name), { force: true })
+          const envelope = await readEnvelope()
+          const {
+            stopped: _stopped,
+            paused: _paused,
+            refusal: _refusal,
+            ...rest
+          } = envelope
+          await writeChecked({
+            ...rest,
+            status: 'preparing',
+            summary: '',
+            strengths: [],
+            ...(Array.isArray(envelope.findings) && { findings: [] }),
+          })
+          return { removed }
+        })
+      })
+    },
+
+    /**
      * A verifier confirms finding `id` (`verified: true`), or replaces it with
      * `amended`, the same id, confirmed. Amending is refused once the person
      * decided on it.
@@ -705,6 +927,9 @@ export function createStore(dir) {
     verify(id, amended) {
       return withFileLock(reviewFile, async () => {
         const review = await readReview()
+        // A verifier of the run before a reset never confirms one of the next run's.
+        if (statusOf(review) === 'preparing')
+          throw new StoreRefusal('the review waits to start: nothing is verified')
         const known = review.findings.find((one) => one.id === id)
         if (!known) throw new StoreRefusal(`no finding ${id} in the review`)
         if (amended === undefined) {
@@ -722,7 +947,14 @@ export function createStore(dir) {
         // Under the decisions' lock: no decision lands between the check and the write.
         await exclusive(async () => {
           await refuseDecided(id, 'amend')
-          await writeFinding({ ...amended, addedAt: known.addedAt, verified: true })
+          // The lens that found it stays: a verifier corrects a finding, it finds none.
+          const { lens: _lens, ...content } = amended
+          await writeFinding({
+            ...content,
+            ...(known.lens !== undefined && { lens: known.lens }),
+            addedAt: known.addedAt,
+            verified: true,
+          })
         })
       })
     },

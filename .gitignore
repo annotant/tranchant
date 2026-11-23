@@ -14,3 +14,7 @@ skills/tranchant/page/dist/
 
 # The throwaway repository test/fixtures/playground.mjs builds to try the plugin on.
 /.playground/
+
+# The website, staged and built by `npm run site`.
+/_site-src/
+/_site/

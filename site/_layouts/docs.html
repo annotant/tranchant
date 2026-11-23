@@ -1,0 +1,19 @@
+---
+layout: default
+---
+
+<article class="docs">
+  <nav class="pages" aria-label="Docs">
+    {% for item in page.nav %}<a href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.title }}</a>
+    {% endfor %}
+  </nav>
+  <h1>{{ page.title }}</h1>
+  {{ content }}
+  <p class="source"><a href="{{ page.source }}">This page on GitHub</a></p>
+  {% if page.previous or page.next %}
+  <nav class="pager" aria-label="Previous and next page">
+    {% if page.previous %}<a class="pager-prev" href="{{ page.previous.href }}"><span>Previous</span>← {{ page.previous.title }}</a>{% endif %}
+    {% if page.next %}<a class="pager-next" href="{{ page.next.href }}"><span>Next</span>{{ page.next.title }} →</a>{% endif %}
+  </nav>
+  {% endif %}
+</article>

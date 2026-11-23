@@ -16,15 +16,33 @@
 // one write at a time, with every lens that could run on the project, the
 // recipe's and those the user added (lib/userlens.mjs), and the lenses being
 // cleaned (lib/cleaning.mjs); /api/lens/* adds, changes, removes and cleans
-// them again, and prints CLEAN for each cleaning the hooks start an agent on;
+// them again, lists a glob's matches (lib/glob.mjs) and the reviewers a
+// command, or an agent that starts others, holds (lib/inside.mjs); makes
+// the lenses picked of those a cleaning agent found a process starts; lists
+// what the source's picker offers, names only (lib/picker.mjs); imports
+// several at once, and prints CLEAN for each cleaning the hooks start an
+// agent on; /api/lens/group/* creates, changes and deletes the project's
+// groups of lenses and sets its default one (lib/groups.mjs);
 // it pushes `settings` when the file, a lens or a cleaning changes. It serves
-// the Lenses step's progress (lenses.json) with the review.
+// the Lenses step's progress (lenses.json) with the review, and prints START
+// or BUILD when the page starts a review waiting to start, or builds its
+// lenses again, the page's choices in choices.json.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync, watch } from 'node:fs'
-import { lstat, mkdir, readdir, readFile, realpath, stat } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -36,18 +54,46 @@ import {
   findReview,
   lockRoot,
 } from './lib/project.mjs'
-import { oneLine, postBlocker, replyPending, statusOf } from './lib/format.mjs'
+import {
+  envelopeOf,
+  oneLine,
+  postBlocker,
+  replyPending,
+  statusOf,
+} from './lib/format.mjs'
 import { readDiscussions, say, syncChange, waitsForAnswer } from './lib/discussion.mjs'
 import {
   CleaningRefusal,
   addCleaned,
+  addReviewers,
   cleanAgain,
   cleaningsDir,
   createCleaning,
+  createCleanings,
   discardCleaning,
   listCleanings,
 } from './lib/cleaning.mjs'
+import { GlobRefusal, MAX_MATCHES, matchSources, withAlready } from './lib/glob.mjs'
+import { insideOf, nameOfSource } from './lib/inside.mjs'
+import {
+  FolderRefusal,
+  catalogOf,
+  goToFolder,
+  isRoot,
+  listFolder,
+} from './lib/picker.mjs'
 import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
+import {
+  GroupRefusal,
+  forgetLens,
+  groupsFile,
+  moveLens,
+  readGroups,
+  removeGroup,
+  saveGroup,
+  setDefaultGroup,
+  switchLenses,
+} from './lib/groups.mjs'
 import {
   LensFileRefusal,
   describeLenses,
@@ -71,6 +117,7 @@ import {
   MAX_ISSUE_TITLE,
   StoreRefusal,
   WRITE_KINDS,
+  busyText,
   createStore,
   readProgress,
   readReviewAgents,
@@ -362,13 +409,15 @@ function trackerOnce(values) {
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
-  const [described, cleanings] = await Promise.all([
+  const [described, listed, groups] = await Promise.all([
     describeLenses({ project: lensRoot, base: review.base, values }),
     listCleanings(lensRoot).catch((error) => {
       console.error(`tranchant server: cleanings unreadable: ${oneLine(String(error))}`)
       return []
     }),
+    readGroups(lensRoot),
   ])
+  const cleanings = withProcessAlready(listed, [...described.lenses, ...adding(listed)])
   return {
     path: SETTINGS_FILE,
     settings,
@@ -382,6 +431,12 @@ async function settingsPayload() {
       .map((lens) => lens.name),
     lensSet: { dirs: described.dirs, lenses: described.lenses },
     cleanings,
+    groups: {
+      file: groups.file,
+      ...(groups.groups.default && { default: groups.groups.default }),
+      list: groups.groups.groups.map(({ name, lenses }) => ({ name, lenses })),
+      ...(groups.problem && { problem: groups.problem }),
+    },
     ...(described.base.problem && { recipeProblem: described.base.problem }),
     ...(problem && { problem }),
   }
@@ -398,7 +453,11 @@ async function lensChange(res, change) {
   try {
     done = await change()
   } catch (error) {
-    if (error instanceof CleaningRefusal || error instanceof LensFileRefusal)
+    if (
+      error instanceof CleaningRefusal ||
+      error instanceof LensFileRefusal ||
+      error instanceof GroupRefusal
+    )
       return send(res, 409, { error: error.message })
     throw error
   }
@@ -406,6 +465,116 @@ async function lensChange(res, change) {
   // Done already: a settings payload that fails now is the page's to ask again.
   const settings = await settingsPayload().catch(() => undefined)
   return send(res, 200, { ...done, ...(settings && { settings }) })
+}
+
+/**
+ * The cleanings that add a lens: a failed one adds nothing, its file free to
+ * add again, nor a process, whose reviewers are the lenses.
+ * @param {Awaited<ReturnType<typeof listCleanings>>} cleanings
+ */
+const adding = (cleanings) =>
+  cleanings
+    .filter((one) => !one.again && one.state !== 'failed' && one.state !== 'process')
+    .map((one) => ({ ...one, adding: true }))
+
+/**
+ * A process's reviewers, each with the lenses made from it already: a file
+ * by its path, an inline one by its source and its name.
+ * @param {Awaited<ReturnType<typeof listCleanings>>} cleanings
+ * @param {Parameters<typeof withAlready>[2]} known
+ */
+function withProcessAlready(cleanings, known) {
+  return cleanings.map((one) => {
+    if (!one.reviewers) return one
+    const offered = one.reviewers.flatMap((reviewer, i) =>
+      reviewer.kind === 'refused'
+        ? []
+        : [
+            {
+              i,
+              source: reviewer.kind === 'file' ? reviewer.source : one.source,
+              name: reviewer.name,
+              // As its lens records it: its agent's own words.
+              ...(reviewer.kind === 'inline' && {
+                reviewer: reviewer.label ?? reviewer.name,
+              }),
+            },
+          ],
+    )
+    const marked = withAlready(lensRoot, offered, known)
+    const already = new Map(offered.map((match, at) => [match.i, marked[at]?.already]))
+    return {
+      ...one,
+      reviewers: one.reviewers.map((reviewer, i) => {
+        const lenses = already.get(i)
+        return lenses ? { ...reviewer, already: lenses } : reviewer
+      }),
+    }
+  })
+}
+
+/** The lenses added and those being added, by source: what a glob's matches are held against. */
+async function knownLenses() {
+  const { values } = await loadSettings()
+  const [described, cleanings] = await Promise.all([
+    describeLenses({ project: lensRoot, base: review.base, values }),
+    listCleanings(lensRoot).catch(() => []),
+  ])
+  return [...described.lenses, ...adding(cleanings)]
+}
+
+/**
+ * A glob's checked matches (`sources`, each `{ source, name? }`), one
+ * cleaning each, queued: a CLEAN line for each one made; those refused said
+ * with theirs, a file that is a lens already, or being added, among them.
+ * All refused is a refusal (409).
+ * @param {http.ServerResponse} res
+ * @param {any} input
+ */
+function importSeveral(res, input) {
+  /** @type {{ source: string, name?: string }[]} */
+  const sources = input.sources
+    .filter((/** @type {any} */ one) => typeof one?.source === 'string')
+    .map((/** @type {any} */ one) => ({
+      source: one.source,
+      ...(typeof one.name === 'string' && one.name.trim() && { name: one.name }),
+    }))
+  if (
+    !sources.length ||
+    sources.length > MAX_MATCHES ||
+    sources.length !== input.sources.length
+  )
+    return send(res, 400, {
+      error: `sources: 1 to ${MAX_MATCHES} of { source, name? }`,
+    })
+  return lensChange(res, async () => {
+    const present = withAlready(
+      lensRoot,
+      sources.map((one) => ({ ...one, name: one.name ?? '' })),
+      await knownLenses(),
+    )
+    const fresh = sources.filter((_, i) => !present[i]?.already)
+    const { made, refused } = await createCleanings({
+      project: lensRoot,
+      scope: String(input?.scope ?? ''),
+      sources: fresh,
+      ...(typeof input?.from === 'string' &&
+        input.from.trim() && { from: input.from.trim().slice(0, 1024) }),
+    })
+    for (const one of present)
+      if (one.already)
+        refused.unshift({
+          source: one.source,
+          reason: `added already, as ${one.already.map((lens) => lens.name).join(', ')}`,
+        })
+    if (!made.length)
+      throw new CleaningRefusal(
+        refused.map((one) => `${one.source}: ${one.reason}`).join('; ') ||
+          'no lens to add',
+      )
+    for (const one of made) print(`CLEAN ${one.record.id}`)
+    return { cleanings: made.map((one) => one.record.id), refused }
+  })
 }
 
 /** A lens's scope and name from the page, checked as names; undefined when they are not. @param {any} input */
@@ -980,7 +1149,7 @@ async function handle(req, res) {
       await Promise.all([
         store.readAll(),
         store.runs(),
-        readReviewAgents(dir),
+        readReviewAgents(dir, undefined, { since: SESSION_SINCE }),
         readDiscussions(dir),
         currentHead(),
         readLensesStep(),
@@ -1181,19 +1350,129 @@ async function handle(req, res) {
     }
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/lens/matches') {
+    const source = url.searchParams.get('source') ?? ''
+    if (!source.trim() || source.length > 1024)
+      return send(res, 400, { error: 'source, a glob, is required' })
+    let matched
+    try {
+      matched = await matchSources(lensRoot, source)
+    } catch (error) {
+      if (!(error instanceof GlobRefusal)) throw error
+      return send(res, 409, { error: error.message })
+    }
+    if (!matched.matches.length) return send(res, 200, matched)
+    return send(res, 200, {
+      ...matched,
+      matches: withAlready(lensRoot, matched.matches, await knownLenses()),
+    })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lens/inside') {
+    const source = url.searchParams.get('source') ?? ''
+    if (!source.trim() || source.length > 1024)
+      return send(res, 400, { error: 'source is required' })
+    const inside = await insideOf(lensRoot, source)
+    // Shown in Name before the cleaning: the name it gets when none is typed.
+    if (!inside)
+      return send(res, 200, { inside: null, name: nameOfSource(source, lensRoot) })
+    // None found by its read: its agent may look, at the person's asking, and make one lens of it.
+    if (!inside.starts.length)
+      return send(res, 200, { inside, name: nameOfSource(source, lensRoot) })
+    const [marked] = withAlready(
+      lensRoot,
+      [{ source: inside.label, name: '', starts: inside.starts }],
+      await knownLenses(),
+    )
+    return send(res, 200, { inside: { ...inside, starts: marked?.starts ?? [] } })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lens/catalog') {
+    const [catalog, known] = await Promise.all([catalogOf(lensRoot), knownLenses()])
+    const mark = (/** @type {import('./lib/picker.mjs').Item[]} */ items) =>
+      withAlready(lensRoot, items, known).map((one, i) => ({
+        ...items[i],
+        ...(one.already && { already: one.already }),
+      }))
+    return send(res, 200, {
+      ...catalog,
+      plugins: catalog.plugins.map((one) => ({ ...one, items: mark(one.items) })),
+      project: { ...catalog.project, items: mark(catalog.project.items) },
+      user: { ...catalog.user, items: mark(catalog.user.items) },
+    })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lens/folder') {
+    const go = url.searchParams.get('go')
+    const root = url.searchParams.get('root') ?? ''
+    const relative = url.searchParams.get('path') ?? ''
+    const listing =
+      go !== null
+        ? () => goToFolder(lensRoot, go)
+        : isRoot(root)
+          ? () => listFolder(lensRoot, root, relative)
+          : undefined
+    if (!listing)
+      return send(res, 400, {
+        error: 'root (project, user or plugins), or go, is required',
+      })
+    if ((go ?? relative).length > 1024)
+      return send(res, 400, { error: 'the path is longer than 1024 characters' })
+    let folder
+    try {
+      folder = await listing()
+    } catch (error) {
+      if (!(error instanceof FolderRefusal)) throw error
+      return send(res, 409, { error: error.message, roots: error.roots })
+    }
+    const files = folder.entries.flatMap((one) =>
+      one.source ? [{ source: one.source, name: one.name }] : [],
+    )
+    const marked = new Map(
+      withAlready(lensRoot, files, await knownLenses()).map((one) => [
+        one.source,
+        one.already,
+      ]),
+    )
+    return send(res, 200, {
+      ...folder,
+      entries: folder.entries.map((one) => {
+        const already = one.source ? marked.get(one.source) : undefined
+        return already ? { ...one, already } : one
+      }),
+    })
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/lens/import') {
     const input = await readJson(req)
+    if (Array.isArray(input?.sources)) return importSeveral(res, input)
     return lensChange(res, async () => {
       const made = await createCleaning({
         project: lensRoot,
         source: typeof input?.source === 'string' ? input.source : '',
         scope: String(input?.scope ?? ''),
+        queued: true,
         ...(typeof input?.name === 'string' && input.name.trim() && { name: input.name }),
-        ...(typeof input?.context === 'string' &&
-          input.context.trim() && { context: input.context }),
       })
       print(`CLEAN ${made.record.id}`)
       return { cleaning: made.record.id }
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/reviewers') {
+    const input = await readJson(req)
+    if (typeof input?.id !== 'string' || !ID.test(input.id))
+      return send(res, 400, { error: 'id is required' })
+    const scope = input.scope === undefined ? undefined : String(input.scope)
+    return lensChange(res, async () => {
+      const { made, refused } = await addReviewers(lensRoot, input.id, input.picks, scope)
+      if (!made.length)
+        throw new CleaningRefusal(
+          refused.map((one) => `${one.source}: ${one.reason}`).join('; ') ||
+            'no lens to add',
+        )
+      for (const one of made) print(`CLEAN ${one.record.id}`)
+      return { cleanings: made.map((one) => one.record.id), refused }
     })
   }
 
@@ -1216,7 +1495,12 @@ async function handle(req, res) {
     const lens = lensOf(input)
     if (!lens) return send(res, 400, LENS_REQUIRED)
     const { scope, name } = lens
-    return lensChange(res, () => updateUserLens(lensRoot, scope, name, input.lens))
+    return lensChange(res, async () => {
+      const to = await updateUserLens(lensRoot, scope, name, input.lens)
+      // Renamed or moved, it stays in its groups.
+      const problem = await groupsAfter(() => moveLens(lensRoot, { scope, name }, to))
+      return { ...to, ...(problem && { groupsProblem: problem }) }
+    })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/lens/remove') {
@@ -1224,7 +1508,48 @@ async function handle(req, res) {
     const lens = lensOf(input)
     if (!lens) return send(res, 400, LENS_REQUIRED)
     const { scope, name } = lens
-    return lensChange(res, () => removeUserLens(lensRoot, scope, name))
+    return lensChange(res, async () => {
+      await removeUserLens(lensRoot, scope, name)
+      /** @type {string[]} */
+      let removedFrom = []
+      // Out of every group, which its reviews say.
+      const problem = await groupsAfter(async () => {
+        removedFrom = await forgetLens(lensRoot, { scope, name })
+      })
+      return { removedFrom, ...(problem && { groupsProblem: problem }) }
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/group/save') {
+    const input = await readJson(req)
+    const from = input?.name
+    if (from !== undefined && (typeof from !== 'string' || !LENS_NAME.test(from)))
+      return send(res, 400, { error: 'name: the group changed, or none for a new one' })
+    return lensChange(res, async () => {
+      await saveGroup(lensRoot, from, input?.group)
+      return {}
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/group/remove') {
+    const input = await readJson(req)
+    if (typeof input?.name !== 'string' || !LENS_NAME.test(input.name))
+      return send(res, 400, { error: 'name is required' })
+    return lensChange(res, async () => {
+      await removeGroup(lensRoot, input.name)
+      return {}
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/lens/group/default') {
+    const input = await readJson(req)
+    const name = input?.name
+    if (name !== null && (typeof name !== 'string' || !LENS_NAME.test(name)))
+      return send(res, 400, { error: 'name: a group, or null for every lens that is on' })
+    return lensChange(res, async () => {
+      await setDefaultGroup(lensRoot, name)
+      return {}
+    })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/lens/clean') {
@@ -1233,10 +1558,113 @@ async function handle(req, res) {
     if (!lens) return send(res, 400, LENS_REQUIRED)
     const { scope, name } = lens
     return lensChange(res, async () => {
-      const made = await cleanAgain({ project: lensRoot, scope, name })
+      const made = await cleanAgain({ project: lensRoot, scope, name, queued: true })
       print(`CLEAN ${made.record.id}`)
       return { cleaning: made.record.id }
     })
+  }
+
+  if (
+    req.method === 'POST' &&
+    (url.pathname === '/api/review/start' || url.pathname === '/api/review/build')
+  ) {
+    const input = await readJson(req)
+    const choices = choicesOf(input)
+    if (!choices)
+      return send(res, 400, {
+        error:
+          'lenses (by name, true or false) and remember (true or false) are required',
+      })
+    const [now, step] = await Promise.all([
+      store.readReview().catch(() => undefined),
+      readLensesStep(),
+    ])
+    if (now?.status !== 'preparing' || step?.state !== 'waiting')
+      return send(res, 409, { error: 'the review does not wait to start' })
+    // The last Start or Build not taken up yet: lenses.json has not moved since.
+    const stamp = await lensesStamp()
+    if (asked !== undefined && asked === stamp)
+      return send(res, 409, { error: 'the lenses are being built again: wait for them' })
+    const starting = url.pathname === '/api/review/start'
+    if (starting && choices.remember && step.own)
+      return send(res, 409, {
+        error: "a run's own recipe (--recipe) has nothing to save",
+      })
+    const group = typeof step.group === 'string' ? step.group : undefined
+    // Started on the rows of the group they show: another one picked is built first.
+    if (starting && choices.group !== undefined && (choices.group ?? undefined) !== group)
+      return send(res, 409, {
+        error: 'the lenses of the group picked are not built yet: wait for them',
+      })
+    // Saved as Settings › Lenses saves them, before the start makes the plan again from the settings.
+    if (starting && choices.remember) {
+      const saved = group
+        ? await rememberInGroup(group, choices.lenses, step.lenses)
+        : await rememberChoices(choices.lenses, step.lenses)
+      if (saved) return send(res, 409, { error: saved })
+    }
+    const file = path.join(dir, 'choices.json')
+    // Whole or not at all: lenses.mjs may be reading it.
+    const temp = `${file}.${process.pid}.tmp`
+    try {
+      await writeFile(temp, `${JSON.stringify(choices, null, 2)}\n`)
+      await rename(temp, file)
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw error
+    }
+    asked = stamp
+    print(`${starting ? 'START' : 'BUILD'} ${review.id}`)
+    return send(res, 200, { ok: true })
+  }
+
+  // The review's own controls: its fixes, discussions and posts go on through each, and a reset is refused until they end.
+  if (req.method === 'POST' && url.pathname === '/api/review/pause') {
+    const input = await readJson(req)
+    if (input?.now !== undefined && typeof input.now !== 'boolean')
+      return send(res, 400, { error: 'now is true or false' })
+    const now = input?.now === true
+    return controlReview(res, async () => {
+      await store.pause(now)
+      print(`${now ? 'PAUSE_NOW' : 'PAUSE'} ${review.id}`)
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/review/resume') {
+    return controlReview(res, async () => {
+      await store.resume()
+      print(`RESUME ${review.id}`)
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/review/halt') {
+    const input = await readJson(req)
+    if (input?.reset !== undefined && typeof input.reset !== 'boolean')
+      return send(res, 400, { error: 'reset is true or false' })
+    // Stop and reset that a reset would refuse (resetRefusal): refused whole, the review still runs.
+    const refused = input?.reset === true ? await resetRefusal() : undefined
+    if (refused) return send(res, refused.status, { error: refused.error })
+    return controlReview(res, async () => {
+      const stopped = await store.halt()
+      print(`HALT ${review.id}`)
+      // The hooks read their lines in turn: the reset waits for the agents to end.
+      if (input?.reset === true) askReset(stopped.at)
+    })
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/review/reset') {
+    const latest = await store.readReview()
+    if (!latest.stopped)
+      return send(res, 409, { error: 'only a stopped review is reset' })
+    if (
+      resetAsked?.at === latest.stopped.at &&
+      Date.now() - resetAsked.since < RESET_WAIT_MS
+    )
+      return send(res, 409, { error: 'the review is being reset: wait for it' })
+    const refused = await resetRefusal()
+    if (refused) return send(res, refused.status, { error: refused.error })
+    askReset(latest.stopped.at)
+    return send(res, 200, { ok: true })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
@@ -1251,6 +1679,213 @@ async function handle(req, res) {
   }
 
   return send(res, 404, { error: 'not found' })
+}
+
+const LENS_NAME = /^[\w-]{1,40}$/
+
+/** lenses.json's size and time when the last Start or Build was printed. @type {string | undefined} */
+let asked
+
+/**
+ * The stop whose RESET was printed, and when: a second Reset of it is refused
+ * (409) for a while, then taken, as the hooks' reset may have failed.
+ * @type {{ at: string, since: number } | undefined}
+ */
+let resetAsked
+const RESET_WAIT_MS = 30_000
+
+/**
+ * When the Claude Code session that runs this server first served a review
+ * (the hooks say; a server started by hand, now): an agent noted stuck
+ * before it ended with the session that ran it.
+ */
+const SESSION_SINCE = Number(process.env.TRANCHANT_SESSION_SINCE) || Date.now()
+
+/**
+ * Why a reset is refused now: a finding under way (409), a review agent the
+ * hooks could not stop in this session (409; a discussing agent belongs to
+ * its finding), or review files it cannot read (500, the error's code; its path in the log).
+ * @returns {Promise<{ status: number, error: string } | undefined>}
+ */
+async function resetRefusal() {
+  let busy
+  try {
+    busy = await store.underWay()
+  } catch (error) {
+    // Its path stays in the server's log, as any internal error's.
+    console.error(
+      `tranchant server: reset: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    const code =
+      error instanceof Error && 'code' in error ? ` (${String(error.code)})` : ''
+    return {
+      status: 500,
+      error: `reset refused: the review's files cannot be read${code}`,
+    }
+  }
+  if (busy.length) return { status: 409, error: `reset refused: ${busyText(busy)}` }
+  const stuck = (await readReviewAgents(dir, undefined, { since: SESSION_SINCE })).filter(
+    (one) => one.stuck && !one.name.startsWith('ds-'),
+  )
+  if (stuck.length)
+    return {
+      status: 409,
+      error: `reset refused: ${stuck.map((one) => one.name).join(', ')} still running, TaskStop did not end ${stuck.length > 1 ? 'them' : 'it'}`,
+    }
+  return undefined
+}
+
+/** RESET for the stop at `at`. @param {string} at */
+function askReset(at) {
+  resetAsked = { at, since: Date.now() }
+  print(`RESET ${review.id}`)
+}
+
+/**
+ * Pause, Resume or Stop: `act` writes the review, then prints the hooks'
+ * line; a move the review's state refuses answers 409, with why.
+ * @param {http.ServerResponse} res
+ * @param {() => Promise<void>} act
+ */
+async function controlReview(res, act) {
+  try {
+    await act()
+  } catch (error) {
+    if (!(error instanceof StoreRefusal)) throw error
+    return send(res, 409, { error: error.message })
+  }
+  return send(res, 200, { review: envelopeOf(await store.readReview()) })
+}
+
+/** lenses.json's size and time, or '' while there is none. */
+const lensesStamp = () =>
+  stat(path.join(dir, 'lenses.json')).then(
+    (one) => `${one.size} ${one.mtimeMs}`,
+    () => '',
+  )
+
+/**
+ * The groups brought in line with a lens change that landed already: a
+ * failure is answered beside it, never as the change's (the lens moved).
+ * @param {() => Promise<unknown>} update
+ * @returns {Promise<string | undefined>}
+ */
+async function groupsAfter(update) {
+  try {
+    await update()
+    return undefined
+  } catch (error) {
+    const code = errorCode(error)
+    console.error(
+      `tranchant server: the groups were not updated: ${oneLine(String(error))}`,
+    )
+    return `the lens changed, but its groups were not updated (${typeof code === 'string' ? code : 'error'}): check Settings › Lenses › Groups`
+  }
+}
+
+/**
+ * The page's choices on a review waiting to start: by lens name, on or off
+ * for this review; whether Start saves them; the group picked, when one is
+ * (`null`: every lens that is on). Undefined when unsound.
+ * @param {any} input
+ * @returns {{ lenses: Record<string, boolean>, remember: boolean, group?: string | null } | undefined}
+ */
+function choicesOf(input) {
+  const lenses = input?.lenses
+  if (!lenses || typeof lenses !== 'object' || Array.isArray(lenses)) return undefined
+  if (typeof input.remember !== 'boolean') return undefined
+  const group = input.group
+  if (
+    group !== undefined &&
+    group !== null &&
+    (typeof group !== 'string' || !LENS_NAME.test(group))
+  )
+    return undefined
+  const entries = Object.entries(lenses)
+  if (
+    entries.length > 200 ||
+    !entries.every(([name, on]) => LENS_NAME.test(name) && typeof on === 'boolean')
+  )
+    return undefined
+  return {
+    lenses: Object.fromEntries(entries),
+    remember: input.remember,
+    ...(group !== undefined && { group }),
+  }
+}
+
+/**
+ * The switches of a group's review saved in the group: a lens turned off
+ * leaves it, one turned on joins it. Answers why they could not be, else
+ * undefined.
+ * @param {string} group
+ * @param {Record<string, boolean>} lenses
+ * @param {{ name: string, scope?: 'global' | 'local' }[]} rows The Lenses step's rows: which lens a name is.
+ */
+async function rememberInGroup(group, lenses, rows) {
+  /** @type {Map<string, import('./lib/groups.mjs').MemberScope>} */
+  const scopes = new Map(rows.map((row) => [row.name, row.scope ?? 'recipe']))
+  try {
+    await switchLenses(
+      lensRoot,
+      group,
+      Object.entries(lenses).flatMap(([name, on]) => {
+        const scope = scopes.get(name)
+        return scope ? [{ member: { scope, name }, on }] : []
+      }),
+    )
+  } catch (error) {
+    if (error instanceof GroupRefusal) return error.message
+    throw error
+  }
+  void lensesChanged()
+  return undefined
+}
+
+/**
+ * The choices saved as Settings › Lenses saves them: a recipe's lens in the
+ * settings' `disabledLenses`, an added one in its `lens.json`. Answers why
+ * they could not be, else undefined.
+ * @param {Record<string, boolean>} lenses
+ * @param {{ name: string, scope?: 'global' | 'local' }[]} rows The Lenses step's rows: which lens a name is.
+ */
+async function rememberChoices(lenses, rows) {
+  const scopes = new Map(rows.map((row) => [row.name, row.scope]))
+  const named = Object.entries(lenses).filter(([name]) => scopes.has(name))
+  const recipe = named.filter(([name]) => !scopes.get(name))
+  const turn = settingsWriting.then(async () => {
+    // Checked before anything is written: a choice saved in part is said nowhere.
+    const { settings, problem } = await loadSettings()
+    if (problem && recipe.length) return `the settings cannot be saved: ${problem}`
+    try {
+      for (const [name, on] of named) {
+        const scope = scopes.get(name)
+        if (scope) await updateUserLens(lensRoot, scope, name, { on })
+      }
+      if (recipe.length) {
+        const off = new Set(settings.disabledLenses ?? [])
+        for (const [name, on] of recipe) {
+          if (on) off.delete(name)
+          else off.add(name)
+        }
+        await writeSettings({ ...settings, disabledLenses: [...off] })
+        watchFolders()
+        settingsChanged()
+      }
+    } catch (error) {
+      if (error instanceof LensFileRefusal || error instanceof SettingsRefusal)
+        return error.message
+      const code = errorCode(error)
+      // The person's own files: the cause may be theirs to mend (rights, disk).
+      console.error(`tranchant server: Remember these choices: ${oneLine(String(error))}`)
+      return `the choices could not all be saved (${typeof code === 'string' ? code : 'error'}): check Settings › Lenses`
+    }
+    return undefined
+  })
+  settingsWriting = turn.catch(() => undefined)
+  const answer = await turn
+  void lensesChanged()
+  return answer
 }
 
 /** The settings writes, one after the other: two pages saving at once never cross. @type {Promise<unknown>} */
@@ -1494,7 +2129,10 @@ async function changes() {
   ]
   fingerprints.clear()
   for (const [id, mark] of next) fingerprints.set(id, mark)
-  const status = latest ? statusOf(latest) : statusSeen
+  // A pause or a stop changes the progress panel: part of the status the page is told about.
+  const status = latest
+    ? JSON.stringify([statusOf(latest), latest.paused ?? null, latest.stopped ?? null])
+    : statusSeen
   const agents = []
   for (const name of (await readdir(agentsDir).catch(() => [])).toSorted((a, b) =>
     a.localeCompare(b),
@@ -1535,7 +2173,12 @@ const landed = new Set()
  * @param {import('./lib/format.mjs').Review | undefined} latest
  */
 function announceLanded(latest) {
-  if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing') return
+  // A finding gone (removed, or a reset) lands again under its id: said again.
+  if (latest)
+    for (const id of landed)
+      if (!latest.findings.some((finding) => finding.id === id)) landed.delete(id)
+  if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing' || latest.stopped)
+    return
   for (const finding of latest.findings) {
     if (finding.verified === true || landed.has(finding.id)) continue
     landed.add(finding.id)
@@ -1638,6 +2281,13 @@ async function lensesChanged() {
       }
     }
   }
+  const groups = groupsFile(lensRoot)
+  marks.push(
+    `${groups} ${await stat(groups).then(
+      (one) => `${one.size} ${one.mtimeMs}`,
+      () => '',
+    )}`,
+  )
   const now = marks.join('\n')
   if (now === lensesSeen) return
   lensesSeen = now
@@ -1770,8 +2420,9 @@ server.on('error', async (/** @type {NodeJS.ErrnoException} */ error) => {
 /**
  * What waited while no server ran: the hooks start an agent on each queued
  * fix again (they skip the ones they handed over already) and on each
- * question left unanswered, and the server posts each queued post and
- * opens each queued issue.
+ * question left unanswered, and on each lens's cleaning still waiting for
+ * one (the session that queued it ended); the server posts each queued post
+ * and opens each queued issue.
  */
 async function resumeQueued() {
   const decisions = await store.readDecisions().catch(() => undefined)
@@ -1792,6 +2443,11 @@ async function resumeQueued() {
     // What a change left while no server ran, or a script failed to write.
     else await settleDiscussion(id)
   }
+  const cleanings = await listCleanings(lensRoot).catch((error) => {
+    console.error(`tranchant server: cleanings unreadable: ${oneLine(String(error))}`)
+    return []
+  })
+  for (const one of cleanings) if (one.waiting) print(`CLEAN ${one.id}`)
 }
 
 server.listen(port, '127.0.0.1', async () => {

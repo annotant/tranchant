@@ -33,11 +33,12 @@ const MAX_AGENTS = 8
  * @property {string} [reviewModel] The model of each lens's reviewer, the summary agent and a discussing agent.
  * @property {string} [verifyModel] The model of each finding's verifier.
  * @property {number} [maxFixAgents] Fix agents at a time, 1 to MAX_AGENTS.
- * @property {number} [maxReviewAgents] Review agents (reviewers, verifiers, discussers) at a time.
+ * @property {number} [maxReviewAgents] Review agents (reviewers, verifiers, discussers) at a time; as many lens cleanings, apart.
  * @property {string} [recipe] The recipe `/tranchant review` runs without `--recipe`: an absolute path, or `~/…`.
  * @property {string[]} [disabledLenses] The lenses of the recipe not run.
  * @property {Record<string, string>} [lensModels] By lens of the recipe, its reviewer's model.
  * @property {'auto' | 'glab' | 'gh'} [postWith] The CLI that opens issues: `auto` reads the remote.
+ * @property {boolean} [startReview] Whether `/tranchant review` starts its reviewers once the lenses are built.
  */
 
 /**
@@ -55,6 +56,7 @@ const MAX_AGENTS = 8
  * @property {string[]} disabledLenses
  * @property {Record<string, string>} lensModels
  * @property {'auto' | 'glab' | 'gh'} postWith
+ * @property {boolean} startReview
  */
 
 /** @type {Readonly<Values>} */
@@ -71,6 +73,7 @@ export const DEFAULTS = Object.freeze({
   disabledLenses: [],
   lensModels: {},
   postWith: 'auto',
+  startReview: true,
 })
 
 /** A settings file, or a change to it, this Tranchant refuses, and why. */
@@ -85,7 +88,6 @@ const CHOICES = /** @type {const} */ ({
 /** A model id or alias: `claude-opus-5-5`, `opus`, a Bedrock id with dots. */
 const MODEL = /^[\w.:-]{1,80}$/
 const LENS_NAME = /^[\w-]{1,40}$/
-const MAX_LENSES = 12
 const MAX_PATH = 1024
 
 /** @param {string} key @returns {key is keyof typeof CHOICES} */
@@ -98,7 +100,6 @@ const isCapKey = (key) => key === 'maxFixAgents' || key === 'maxReviewAgents'
 /** @param {unknown} value @returns {value is string[]} */
 const isLensNames = (value) =>
   Array.isArray(value) &&
-  value.length <= MAX_LENSES &&
   value.every((one) => typeof one === 'string' && LENS_NAME.test(one))
 
 /** `~` and `~/…` as the user's home: what a person types in the page. */
@@ -142,6 +143,10 @@ export function validateSettings(input) {
       )
         throw new SettingsRefusal(`${key}: a whole number from 1 to ${MAX_AGENTS}`)
       settings[key] = value
+    } else if (key === 'startReview') {
+      if (typeof value !== 'boolean')
+        throw new SettingsRefusal('startReview: true or false')
+      settings.startReview = value
     } else if (key === 'recipe') {
       if (
         typeof value !== 'string' ||
@@ -153,23 +158,18 @@ export function validateSettings(input) {
       settings.recipe = value.trim()
     } else if (key === 'disabledLenses') {
       if (!isLensNames(value))
-        throw new SettingsRefusal(
-          `disabledLenses: up to ${MAX_LENSES} lens names, letters, digits, - and _`,
-        )
+        throw new SettingsRefusal('disabledLenses: lens names, letters, digits, - and _')
       settings.disabledLenses = [...new Set(value)]
     } else if (key === 'lensModels') {
       if (
         typeof value !== 'object' ||
         Array.isArray(value) ||
-        Object.keys(value).length > MAX_LENSES ||
         !Object.entries(value).every(
           ([lens, model]) =>
             LENS_NAME.test(lens) && typeof model === 'string' && MODEL.test(model),
         )
       )
-        throw new SettingsRefusal(
-          `lensModels: up to ${MAX_LENSES} lens names, each with a model id`,
-        )
+        throw new SettingsRefusal('lensModels: lens names, each with a model id')
       if (Object.keys(value).length) settings.lensModels = { ...value }
     } else throw new SettingsRefusal(`${key}: not a setting`)
   }

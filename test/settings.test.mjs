@@ -38,6 +38,7 @@ test('validateSettings keeps the keys set, drops null ones, and refuses the rest
       recipe: ' ~/recipes/mine.json ',
       disabledLenses: ['tests', 'tests', 'security'],
       postWith: 'gh',
+      startReview: false,
     }),
     {
       theme: 'dark',
@@ -45,9 +46,21 @@ test('validateSettings keeps the keys set, drops null ones, and refuses the rest
       recipe: '~/recipes/mine.json',
       disabledLenses: ['tests', 'security'],
       postWith: 'gh',
+      startReview: false,
     },
   )
   assert.deepEqual(validateSettings({}), {})
+  const many = Array.from({ length: 13 }, (_, i) => `l${i}`)
+  assert.deepEqual(
+    validateSettings({
+      disabledLenses: many,
+      lensModels: Object.fromEntries(many.map((name) => [name, 'opus'])),
+    }),
+    {
+      disabledLenses: many,
+      lensModels: Object.fromEntries(many.map((name) => [name, 'opus'])),
+    },
+  )
   refused(null, 'the settings are not an object')
   refused('dark', 'the settings are not an object')
   refused({ version: 2 }, 'version: 1 is the only one read')
@@ -59,13 +72,10 @@ test('validateSettings keeps the keys set, drops null ones, and refuses the rest
   refused({ maxFixAgents: 9 }, 'maxFixAgents: a whole number from 1 to 8')
   refused({ recipe: 'mine.json' }, /^recipe: an absolute path/)
   refused({ recipe: '' }, /^recipe: an absolute path/)
-  refused({ disabledLenses: 'tests' }, /^disabledLenses: up to 12 lens names/)
-  refused({ disabledLenses: ['a b'] }, /^disabledLenses: up to 12 lens names/)
-  refused(
-    { disabledLenses: Array.from({ length: 13 }, (_, i) => `l${i}`) },
-    /^disabledLenses/,
-  )
+  refused({ disabledLenses: 'tests' }, /^disabledLenses: lens names/)
+  refused({ disabledLenses: ['a b'] }, /^disabledLenses: lens names/)
   refused({ postWith: 'curl' }, 'postWith: one of auto, glab, gh')
+  refused({ startReview: 'off' }, 'startReview: true or false')
   refused({ colour: 'red' }, 'colour: not a setting')
 })
 

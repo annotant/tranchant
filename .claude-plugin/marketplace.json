@@ -8,7 +8,7 @@
     {
       "name": "tranchant",
       "source": "./",
-      "description": "Settle a code review from a page: fix each finding on your branch with a background agent, or post it on someone else's merge request"
+      "description": "Settle a code review from a page: fix each finding on your working tree with a background agent, or post it on someone else's merge request"
     }
   ]
 }

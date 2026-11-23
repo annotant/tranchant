@@ -55,10 +55,25 @@ pattern, read how annotant does it.
   recipe in force and builds its lenses from their sources;
   `lib/userlens.mjs` owns the lenses the user adds (global and local, in
   `~/.config/tranchant/`) and the set they make with the recipe's;
-  `lib/cleaning.mjs` owns their cleanings.
+  `lib/groups.mjs` the project's groups of lenses (`--group`);
+  `lib/cleaning.mjs` owns their cleanings, `lib/reviewers.mjs` the
+  reviewers a cleaning agent found a whole process starts, checked;
+  `lib/glob.mjs` the files a
+  glob typed as a source matches, `lib/inside.mjs` the reviewers a command,
+  or a source that starts agents, holds; `lib/picker.mjs` what Add a lens's
+  picker lists (the plugins', the `.claude` folders', a folder of the
+  allowed roots: names only); `lib/plan.mjs` plans the
+  lenses a review runs on the change (`prepare.mjs`, and `lenses.mjs` again
+  for a review waiting to start).
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.
+- `site/`: the website on GitHub Pages (Jekyll), its landing page and
+  layouts; `.github/scripts/site.mjs` builds its docs pages from the Markdown
+  files its `PAGES` lists (never copied into `site/`), and `.github/workflows/pages.yml`
+  publishes it. `npm run site` (`.github/scripts/site-preview.mjs`) previews
+  it. Its poster (`site/assets/demo-poster.png`) is the page on
+  `test/fixtures/review-ours.json`, `f-01` working.
 - `docs/review-file.md`: the review, decisions and run files, their schemas
   and the findings' states. `docs/settings.md`: the settings file, its
   schema, its precedence and its routes. `docs/studies/`: the decisions a
@@ -76,6 +91,8 @@ pattern, read how annotant does it.
 - `npm run test:hooks`: validate the plugin and run `test/hooks.test.ts` in
   Claude Code (not in CI; run it when `hooks/` changes).
 - `npm run build`: rebuild `page/dist/`. `npm run watch`: on every change.
+- `npm run site`: preview the website on http://localhost:4000 (Docker, or a
+  local `jekyll`), rebuilt and reloaded on every change.
 - `npm run format`: apply Prettier.
 
 ## Conventions

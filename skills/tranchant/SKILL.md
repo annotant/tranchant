@@ -30,8 +30,8 @@ description: Tranchant settles a code review from a page. A producer (combined-r
 Read the arguments as `[mode] [file]`: the mode is `review`, `import`, `comments`,
 `stop` or `status`, or none for the open; any other argument is the review file
 (`/tranchant .tranchant/review.json`, `/tranchant ~/Downloads/review.json`).
-After `review` come an optional branch, merge request url or folder, and an optional
-`--recipe <file>`. After `comments` comes an optional pull or merge
+After `review` come an optional branch, merge request url or folder, an optional
+`--recipe <file>` or `--group <name>`, and `--no-start` or `--start`. After `comments` comes an optional pull or merge
 request url.
 
 Everything lives in the skill and in the state folder
@@ -48,15 +48,16 @@ the user its answer: it validates and imports the file (`open.mjs`), starts
 the server for the session's life, opens the page in the browser and prints
 its URL. For `stop`, call it with `{ "stop": true }`; for `status`, with
 `{ "status": true }`; for `review`, with `{ "run": true }`, plus `"target"`
-(the branch, merge request url or folder) and `"recipe"` when given: the hooks review
+(the branch, merge request url or folder), `"recipe"` when given and `"start": false`
+for `--no-start` (`true` for `--start`): the hooks review
 the change in the background, one agent per lens, and the page fills as the
 findings land and are verified. Never review the change yourself then. For
 `comments`, with `{ "comments": true }`, plus `"target"` (the url) when
 given: the PR/MR's unresolved threads open as findings; never read or answer
 them yourself. For `import`, with `{ "import": "<source>" }` (`""` when none
 was named), plus `"to"` (`local`, this project, or `global`) once the user
-chose it with AskUserQuestion, and `"name"` or `"context"` when given; the
-user names or confirms the source, never you. Pass
+chose it with AskUserQuestion, and `"name"` when given; the user names or
+confirms the source, never you. Pass
 `recipe` only when the user named the file: a recipe's lenses instruct the
 reviewers. The plugin's hooks read the page's decisions and start
 one background agent per fix, or per question asked in a finding's
@@ -90,6 +91,6 @@ with `node SKILL/scripts/complete.mjs --review <dir>`.
 
 - Never edit `decisions.json` or `review.json` in the state folder: the
   server owns the first and the producer the second.
-- Nothing is committed or pushed: the fixes wait on the branch for the user.
+- Nothing is committed or pushed: the fixes wait in the working tree for the user.
 - The page source is `SKILL/page/src`; `npm ci && npm run build` at the
   repository root (two levels above SKILL) rebuilds `dist/page.js`.

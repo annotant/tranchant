@@ -607,7 +607,9 @@ test('a review opened before its findings shows an empty state, then the first o
   expect(
     screen.getByText('The review is running: findings appear here as they land.'),
   ).toBeDefined()
-  expect(screen.getByText('Waiting for the first finding…')).toBeDefined()
+  expect(screen.getByText('Waiting for the first finding…').className).toContain(
+    'tr-empty',
+  )
   expect(screen.queryAllByRole('option')).toHaveLength(0)
   expect(
     screen.getByRole('status', { name: 'Review in progress' }).textContent,
@@ -1018,6 +1020,255 @@ test('a review done names its stopped lenses together, and no verified count unl
   expect(agents.textContent).not.toContain('verified')
 })
 
+const LENS_RECORDS = ['bugs', 'tests', 'docs'].map((name) => ({
+  name,
+  source: `tranchant:${name}`,
+  hash: 'a'.repeat(64),
+}))
+
+const interruptedAgent = (name: string) => ({
+  name,
+  running: false,
+  outcome: 'interrupted' as const,
+  steps: [{ at: 2, kind: 'end', label: 'Interrupted', state: 'failed' as const }],
+})
+
+test('a review running offers Pause and Stop the review, confirmed inline with three ways out', async () => {
+  const server = await renderApp({
+    ...payload({
+      review: { status: 'reviewing', verify: true, lenses: LENS_RECORDS, findings: [] },
+    }),
+    reviewers: [
+      { name: 'rv-bugs', running: true, steps: [] },
+      { name: 'rv-tests', running: false, outcome: 'done', steps: [] },
+    ],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  // The lens not started yet shows, queued.
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('docs').closest('li')?.className).toContain(
+    'tr-lens--queued',
+  )
+  fireEvent.click(within(agents).getByRole('button', { name: 'Pause' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/pause',
+      body: { now: false },
+    }),
+  )
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  const confirm = within(agents).getByRole('alertdialog', { name: 'Stop the review?' })
+  expect(confirm.textContent).toContain(
+    'bugs end now, before they finish; docs never start.',
+  )
+  expect(within(agents).queryByRole('button', { name: 'Pause' })).toBeNull()
+  fireEvent.click(within(confirm).getByRole('button', { name: 'Keep it running' }))
+  expect(within(agents).queryByRole('alertdialog')).toBeNull()
+  // Stop the review keeps the findings: no reset asked.
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  fireEvent.click(
+    within(within(agents).getByRole('alertdialog')).getByRole('button', {
+      name: 'Stop the review',
+    }),
+  )
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/halt',
+      body: { reset: false },
+    }),
+  )
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop and reset' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/halt',
+      body: { reset: true },
+    }),
+  )
+})
+
+test('a review pausing offers Pause now; paused, Resume, the lenses left marked', async () => {
+  const server = await renderApp({
+    ...payload({
+      review: {
+        status: 'reviewing',
+        verify: true,
+        lenses: LENS_RECORDS,
+        paused: { at: '2026-11-20T10:00:00Z' },
+        findings: [],
+      },
+    }),
+    reviewers: [{ name: 'rv-bugs', running: true, steps: [] }],
+  })
+  let agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('Pausing')
+  expect(agents.textContent).toContain('bugs finishes its work; nothing new starts')
+  // Changed their mind while it pauses: Resume is there too.
+  fireEvent.click(within(agents).getByRole('button', { name: 'Resume' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({ url: '/api/review/resume', body: {} }),
+  )
+  fireEvent.click(within(agents).getByRole('button', { name: 'Pause now' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({
+      url: '/api/review/pause',
+      body: { now: true },
+    }),
+  )
+
+  cleanup()
+  const paused = await renderApp({
+    ...payload({
+      review: {
+        status: 'reviewing',
+        verify: true,
+        lenses: LENS_RECORDS,
+        paused: { at: '2026-11-20T10:00:00Z', now: true },
+        findings: [],
+      },
+    }),
+    reviewers: [interruptedAgent('rv-bugs')],
+  })
+  agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('Review paused')
+  expect(agents.textContent).toContain('bugs was interrupted, and runs again on Resume')
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('tests').closest('li')?.textContent).toContain('paused')
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  expect(within(agents).getByRole('button', { name: 'Keep it paused' })).toBeTruthy()
+  fireEvent.click(within(agents).getByRole('button', { name: 'Keep it paused' }))
+  fireEvent.click(within(agents).getByRole('button', { name: 'Resume' }))
+  await waitFor(() =>
+    expect(paused.posts).toContainEqual({ url: '/api/review/resume', body: {} }),
+  )
+})
+
+test('a review stopped keeps its findings, marks the rest not covered, and offers only Reset', async () => {
+  const server = await renderApp({
+    ...payload({
+      review: {
+        status: 'complete',
+        verify: true,
+        lenses: LENS_RECORDS,
+        stopped: { at: '2026-11-20T10:00:00Z' },
+        findings: [FINDINGS[0]!],
+      },
+    }),
+    reviewers: [
+      { name: 'rv-bugs', running: false, outcome: 'done', steps: [] },
+      stoppedAgent('rv-tests'),
+    ],
+  })
+  const header = document.querySelector<HTMLElement>('.tr-header')!
+  expect(header.textContent).toContain('review stopped · 1 finding')
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  expect(agents.textContent).toContain('Review stopped')
+  expect(agents.textContent).toContain('1 of 3 lenses covered')
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('docs').closest('li')?.textContent).toContain(
+    'not covered',
+  )
+  expect(within(lenses).getByText('tests').closest('li')?.className).toContain(
+    'tr-lens--failed',
+  )
+  expect(within(agents).queryByRole('button', { name: 'Pause' })).toBeNull()
+  expect(within(agents).queryByRole('button', { name: 'Stop the review' })).toBeNull()
+  expect(
+    screen.getByRole('option', { name: new RegExp(FINDINGS[0]!.title) }),
+  ).toBeTruthy()
+  fireEvent.click(within(agents).getByRole('button', { name: 'Reset the review' }))
+  await waitFor(() =>
+    expect(server.posts).toContainEqual({ url: '/api/review/reset', body: {} }),
+  )
+})
+
+test('Reset waits for a fix under way on a stopped review, and says which', async () => {
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'complete',
+        verify: true,
+        lenses: LENS_RECORDS,
+        stopped: { at: '2026-11-20T10:00:00Z' },
+        findings: [FINDINGS[0]!],
+      },
+      records: { [FINDINGS[0]!.id]: record('working') },
+    }),
+    reviewers: [{ name: 'rv-bugs', running: false, outcome: 'done', steps: [] }],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  const reset = within(agents).getByRole<HTMLButtonElement>('button', {
+    name: 'Reset the review',
+  })
+  expect(reset.disabled).toBe(true)
+  expect(agents.textContent).toContain(
+    `Reset is refused until it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+  )
+})
+
+test('Stop and reset waits for a question awaiting its answer, Stop the review does not', async () => {
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'reviewing',
+        verify: true,
+        lenses: LENS_RECORDS,
+        findings: [FINDINGS[0]!],
+      },
+    }),
+    discussions: {
+      [FINDINGS[0]!.id]: { messages: [{ by: 'reviewer', text: 'Why?', at: 'x' }] },
+    },
+    reviewers: [{ name: 'rv-bugs', running: true, steps: [] }],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  fireEvent.click(within(agents).getByRole('button', { name: 'Stop the review' }))
+  const confirm = within(agents).getByRole('alertdialog', { name: 'Stop the review?' })
+  expect(
+    within(confirm).getByRole<HTMLButtonElement>('button', { name: 'Stop and reset' })
+      .disabled,
+  ).toBe(true)
+  expect(
+    within(confirm).getByRole<HTMLButtonElement>('button', { name: 'Stop the review' })
+      .disabled,
+  ).toBe(false)
+  expect(confirm.textContent).toContain(
+    `Stop and reset is refused until it ends: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way.`,
+  )
+})
+
+test('a review agent the hooks could not stop shows running on a stopped review, and Reset waits for it', async () => {
+  await renderApp({
+    ...payload({
+      review: {
+        status: 'complete',
+        verify: true,
+        lenses: LENS_RECORDS,
+        stopped: { at: '2026-11-20T10:00:00Z' },
+        findings: [FINDINGS[0]!],
+      },
+      records: { [FINDINGS[0]!.id]: record('working') },
+    }),
+    reviewers: [
+      { name: 'rv-bugs', running: true, stuck: true, steps: [] },
+      // A discussing agent belongs to its finding: it holds no reset up.
+      { name: 'ds-f-09', running: true, stuck: true, steps: [] },
+    ],
+  })
+  const agents = screen.getByRole('region', { name: 'Review agents' })
+  const lenses = within(agents).getByRole('list', { name: 'Reviewers, one per lens' })
+  expect(within(lenses).getByText('bugs').closest('li')?.className).not.toContain(
+    'tr-lens--failed',
+  )
+  expect(
+    within(agents).getByRole<HTMLButtonElement>('button', { name: 'Reset the review' })
+      .disabled,
+  ).toBe(true)
+  expect(agents.textContent).toContain(
+    `Reset is refused until they end: ${FINDINGS[0]!.id}: a fix, a post, an issue or an answer under way; rv-bugs, still running: Tranchant could not stop it.`,
+  )
+})
+
 test('the header switches the theme through the settings, for every page', async () => {
   const server = await renderApp()
   const header = document.querySelector<HTMLElement>('.tr-header')
@@ -1087,4 +1338,32 @@ test('a finding with a discussion is marked with its count, in the list and in t
   expect(
     screen.getAllByRole('img', { name: '2 messages in its discussion' }),
   ).not.toHaveLength(0)
+})
+
+const hints = () =>
+  [...document.querySelectorAll('.tr-keys > span')].map((hint) => hint.textContent)
+
+test('the keyboard hints wrap between two keys, never inside one', async () => {
+  await renderApp()
+  expect(hints()).toEqual([
+    'j/k move',
+    'Enter open',
+    'x select',
+    'f fix',
+    'd drop',
+    's skip',
+  ])
+})
+
+test('a review that can post hints p, between f and d', async () => {
+  await renderApp(payload({ review: { mr: mergeRequest() } }))
+  expect(hints()).toEqual([
+    'j/k move',
+    'Enter open',
+    'x select',
+    'f fix',
+    'p post',
+    'd drop',
+    's skip',
+  ])
 })
