@@ -214,15 +214,16 @@ nothing is summed in the browser.
     session's start (`TRANCHANT_SESSION_SINCE`) is no longer live.
   - A review with no usage at all (opened from a producer's file before any
     fix, or written before this) shows no chip: no zero.
-- **The panel, by agent kind.** The chip opens the panel over the page,
-  as the Lenses chip opens its rows (`LensesControl`): anchored on the
-  chip, closed by Close, Escape or a click outside, and the list and the
-  finding open under it stay where they were; nothing navigates. One row
-  per kind, Summary, Reviewers, Verifiers, Fixes, Discussions,
+- **The panel, by agent kind.** The chip opens a screen of its own,
+  `#tokens`, as the gear opens Settings (`#settings`): the header stays,
+  its chip marked current; *Back to the review*, the chip again or the
+  browser's back return to the review, the finding that was open still
+  open. Two tables this wide (nine columns by lens) do not fit a popover
+  over the page. One row per kind, Summary, Reviewers, Verifiers, Fixes, Discussions,
   Cleanings, then *Before the reset* when there was one, with its agents'
   count, its tokens and its share of the total as a bar; the four counts
   and the models under it, one line. A kind with no agent is left out.
-- **The panel, by lens.** The same panel's second tab: one row per lens
+- **The panel, by lens.** The same screen's second tab: one row per lens
   the review ran, its model, its reviewer's tokens, its verifications'
   tokens, then what it found: landed, confirmed, dropped (removed by its
   verifier, or dropped by you), settled (fixed, posted or moved), and its
@@ -294,7 +295,7 @@ One issue each. Piece 1 comes first; 2 to 5 follow it, in any order.
    the "what it cost" half of the hill-climbing study's piece 2 (#112);
    whichever lands first, the other reads it.
 2. **The total in the header and the panel by kind and by lens** (#140). The
-   chip, its states, the panel's two tabs, the link from a lens's row to
+   chip, its states, the `#tokens` screen and its two tabs, the link from a lens's row to
    its reviewer's report.
 3. **A finding's cost in its run** (#141). The Run section's figures, the
    verification's and the discussion's lines, the finding's sum.
