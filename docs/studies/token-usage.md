@@ -280,7 +280,7 @@ Once pieces 1 and 2 are in, the issue can be written from real figures.
 
 One issue each. Piece 1 comes first; 2 to 5 follow it, in any order.
 
-1. **Each agent's tokens, recorded.** The hooks read `$.agent.list()` on
+1. **Each agent's tokens, recorded** (#139). The hooks read `$.agent.list()` on
    every end path and on `turn.step` every ten seconds, keep the last
    figure in `$.state`; `usage` on the review agents' `end` steps, the
    fix's run (`hook.mjs ended --usage`, the claim stamping the agent),
@@ -290,15 +290,15 @@ One issue each. Piece 1 comes first; 2 to 5 follow it, in any order.
    version floor; `/api/review`'s `usage` block; the review file. This is
    the "what it cost" half of the hill-climbing study's piece 2 (#112);
    whichever lands first, the other reads it.
-2. **The total in the header and the panel by kind and by lens.** The
+2. **The total in the header and the panel by kind and by lens** (#140). The
    chip, its states, the panel's two tabs, the link from a lens's row to
    its reviewer's report.
-3. **A finding's cost in its run.** The Run section's figures, the
+3. **A finding's cost in its run** (#141). The Run section's figures, the
    verification's and the discussion's lines, the finding's sum.
-4. **The estimate on Ready to start the review.** The per-lens medians
+4. **The estimate on Ready to start the review** (#142). The per-lens medians
    from the project's past reviews, the Tokens fact, the rows, the warning
    past 12 kept only without history.
-5. **A lens's and a group's cost in Settings › Lenses.** Its average
+5. **A lens's and a group's cost in Settings › Lenses** (#143). Its average
    tokens a review and confirmed findings, over its last ten reviews in the
    project; a group's, its lenses' summed.
 
