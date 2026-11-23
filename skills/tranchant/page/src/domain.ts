@@ -13,6 +13,8 @@ interface LensRecord {
   source: string
   version?: string
   hash: string
+  /** How many changed files it reviews, as the plan counted them. */
+  files?: number
 }
 
 /** Why a review was refused: the lens, its source, the reason, and what fixes it. */

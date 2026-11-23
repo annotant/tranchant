@@ -270,8 +270,13 @@ test('answers the review, its decisions, its runs and the heads', async () => {
     'review',
     'reviewers',
     'runs',
+    'usage',
   ])
   assert.deepEqual(body.reviewers, [])
+  // No agent ran: no figure, no zero.
+  assert.equal(body.usage.total, null)
+  assert.deepEqual(body.usage.kinds, [])
+  assert.equal(body.usage.running, false)
   assert.deepEqual(body.discussions, {})
   assert.equal(body.review.id, main.review.id)
   assert.equal(body.review.findings.length, 5)
@@ -279,6 +284,76 @@ test('answers the review, its decisions, its runs and the heads', async () => {
   assert.deepEqual(body.runs, {})
   assert.equal(body.head.reviewed, main.review.headSha)
   assert.match(body.head.current, /^[0-9a-f]{40}$/)
+})
+
+/** A figure of `n` tokens of each count. */
+const figure = (/** @type {number} */ n) => ({
+  models: [
+    { model: 'claude-opus-5-5', input: n, output: n, cacheRead: n, cacheWrite: n },
+  ],
+})
+
+test("answers what the review's agents spent: by kind, by lens, by finding, its cleanings too", async (t) => {
+  const server = await startServer(t, { name: 'ours', overrides: { verify: true } })
+  await mkdir(path.join(server.dir, 'reviewers'), { recursive: true })
+  await writeFile(
+    path.join(server.dir, 'reviewers', 'rv-bugs.jsonl'),
+    line({ at: 1, kind: 'start', model: 'm', agent: 'r1' }) +
+      line({ at: 2, kind: 'end', agent: 'r1', usage: figure(10) }),
+  )
+  await writeFile(
+    path.join(server.dir, 'reviewers', 'vf-f-02.jsonl'),
+    line({ at: 1, kind: 'start', model: 'm', lens: 'bugs', agent: 'v1' }) +
+      line({ at: 2, kind: 'end', agent: 'v1', usage: { ...figure(1), partial: true } }),
+  )
+  const store = createStore(server.dir)
+  await store.decide('f-02', { action: 'fix' })
+  await store.claim('f-02', { agent: 'x1' })
+  await store.done('f-02', 'Done.')
+  await store.recordUsage('f-02', 'x1', figure(5))
+  // A lens it cleaned again counts, its cleaning naming it, failed or not; another review's does not.
+  const cleanings = path.join(stateDir, hashOf(server.project), 'cleanings')
+  for (const [id, record] of /** @type {const} */ ([
+    ['c0ffee12-3456', { state: 'failed', review: server.dir, usage: figure(2) }],
+    ['c0ffee34-5678', { state: 'added', review: '/elsewhere/rev-2', usage: figure(9) }],
+    ['c0ffee56-7890', { state: 'added', usage: figure(9) }],
+  ])) {
+    await mkdir(path.join(cleanings, id), { recursive: true })
+    await writeFile(
+      path.join(cleanings, id, 'cleaning.json'),
+      JSON.stringify({ id, ...record }),
+    )
+  }
+  const { usage } = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(usage.total.tokens, 4 * (10 + 1 + 5 + 2))
+  assert.equal(usage.total.partial, true)
+  assert.deepEqual(
+    usage.kinds.map((/** @type {any} */ one) => [one.kind, one.agents, one.usage.tokens]),
+    [
+      ['reviewers', 1, 40],
+      ['verifiers', 1, 4],
+      ['fixes', 1, 20],
+      ['cleanings', 1, 8],
+    ],
+  )
+  assert.deepEqual(
+    usage.lenses.map((/** @type {any} */ one) => [
+      one.lens,
+      one.reviewer.tokens,
+      one.verifiers.tokens,
+    ]),
+    [['bugs', 40, 4]],
+  )
+  assert.deepEqual(
+    usage.findings.map((/** @type {any} */ one) => [one.id, one.usage.tokens]),
+    [['f-02', 24]],
+  )
+  assert.deepEqual(usage.partial, ['vf-f-02'])
+  assert.deepEqual(usage.notReported, [])
+  assert.equal(usage.running, false)
+  // The run carries its own figure, as decisions.json holds it.
+  const body = await json(await fetch(`${server.base}/api/review`))
+  assert.deepEqual(body.findings['f-02'].runs[0].usage, figure(5))
 })
 
 /**

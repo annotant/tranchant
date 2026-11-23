@@ -33,6 +33,13 @@
 // The user's settings (~/.config/tranchant/settings.json, docs/settings.md)
 // choose the agents' models and how many run at a time: read anew before
 // each start, so a change applies to the next agent.
+//
+// What each agent spends is read from the agent list on every path its end
+// is recorded by, and every ten seconds at most while it works: on a review
+// agent's `end` step, on a fix's run (hook.mjs ended --usage), in a
+// cleaning's cleaning.json, and the figure so far in usage.json's `live`.
+// Before Claude Code 2.1.326 the list holds no usage: the turn's end gives
+// the figure, written `partial`.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
@@ -40,10 +47,12 @@ import type {
   Cleaning,
   QueuedCleaning,
   Lens,
+  ModelTokens,
   ReviewAgent,
   ReviewJob,
   ReviewRun,
   Served,
+  Usage,
   Worker,
 } from '../types'
 
@@ -195,14 +204,241 @@ async function stopAgent(
       answer.deny ?? (answer.isError ? answer.text || 'TaskStop failed' : undefined),
     (error: unknown) => message(error),
   )
-  if (failed === undefined) return { stopped: true }
+  // Read every time, right after TaskStop: what it spent, before the engine drops it.
   const agents = await $.agent.list().catch(() => undefined)
-  // The list unread: it may still run.
-  if (!agents) return { failed }
-  const agent = agents.find((one) => one.id === id)
-  // Completed: its work done. Gone from the list, failed or killed: none finished (one that did left its turn's end).
-  if (agent?.status === 'completed') return { finished: true }
-  return agent && ALIVE.has(agent.status) ? { failed } : { stopped: true }
+  const agent = agents?.find((one) => one.id === id)
+  const outcome: { stopped: true } | { finished: true } | { failed: string } =
+    failed === undefined
+      ? { stopped: true }
+      : // The list unread: it may still run.
+        !agents
+        ? { failed }
+        : // Completed: its work done. Gone from the list, failed or killed: none finished (one that did left its turn's end).
+          agent?.status === 'completed'
+          ? { finished: true }
+          : agent && ALIVE.has(agent.status)
+            ? { failed }
+            : { stopped: true }
+  const usage = agent && usageOf(agent.usage, agent.cost)
+  if (usage) {
+    const kept = await keepUsage($, id, usage).catch(() => usage)
+    // Ended: its whole figure, even once the list drops it.
+    if (!('failed' in outcome)) stoppedReads.set(id, kept)
+  }
+  return outcome
+}
+
+// ---------------------------------------------------------------------------
+// What each agent spends.
+
+/** One live read of an agent at most per this many ms. */
+const LIVE_MS = 10_000
+/** The review file's most models in one figure. */
+const MAX_USAGE_MODELS = 8
+
+/** One model's counts, as the engine spells them (TurnUsage). */
+type Counts = {
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+}
+
+/** A count the review file takes (format.mjs's isCount); any other leaves the figure not reported. */
+const isCount = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 1e12
+const tokensOf = (usage: Usage | undefined) =>
+  (usage?.models ?? []).reduce(
+    (sum, one) => sum + one.input + one.output + one.cacheRead + one.cacheWrite,
+    0,
+  )
+
+/**
+ * The engine's figure as the review file records it; nothing counted yet, or
+ * a count it does not give as one, undefined: not reported, never zero.
+ */
+function usageOf(
+  counted: readonly Counts[] | undefined,
+  cost?: { usd: number; hasUnknownPrice?: true },
+): Usage | undefined {
+  if (!counted?.length) return undefined
+  const byModel = new Map<string, ModelTokens>()
+  for (const one of counted) {
+    const counts = [
+      one.input_tokens,
+      one.output_tokens,
+      one.cache_read_input_tokens,
+      one.cache_creation_input_tokens,
+    ]
+    if (!counts.every(isCount)) return undefined
+    const [input, output, cacheRead, cacheWrite] = counts
+    // The review file's rule for a model: a gateway's other characters read as dashes.
+    const named = (one.model || 'unknown').replace(/[^\w.:-]/g, '-').slice(0, 80)
+    const ranked = byModel.has(named) || byModel.size < MAX_USAGE_MODELS - 1
+    // Past the most a figure names, the rest summed as `other`, as format.mjs's sums do.
+    const model = ranked ? named : 'other'
+    const was = byModel.get(model)
+    byModel.set(model, {
+      model,
+      input: (was?.input ?? 0) + input,
+      output: (was?.output ?? 0) + output,
+      cacheRead: (was?.cacheRead ?? 0) + cacheRead,
+      cacheWrite: (was?.cacheWrite ?? 0) + cacheWrite,
+    })
+  }
+  const usd = cost && cost.usd >= 0 && cost.usd <= 1e9 ? cost.usd : undefined
+  return {
+    models: [...byModel.values()],
+    ...(usd !== undefined && { usd }),
+    ...(cost?.hasUnknownPrice && { hasUnknownPrice: true as const }),
+  }
+}
+
+/**
+ * `now`, unless lower than `kept` (/clear or /resume started the count over):
+ * the higher stays, partial. Once partial, a figure stays so: what came before
+ * the count started over is in none.
+ */
+function higher(kept: Usage | undefined, now: Usage): Usage {
+  if (kept && tokensOf(now) < tokensOf(kept)) return { ...kept, partial: true }
+  return kept?.partial ? { ...now, partial: true } : now
+}
+
+/** `all` with agent `agent`'s figure kept, the higher one; `keep` hears what was kept. */
+function withUsage<T extends { agent: string; usage?: Usage }>(
+  all: Record<string, T>,
+  agent: string,
+  usage: Usage,
+  keep: (kept: Usage) => void,
+): Record<string, T> {
+  const found = Object.entries(all).find(([, one]) => one.agent === agent)
+  if (!found) return all
+  const kept = higher(found[1].usage, usage)
+  keep(kept)
+  return { ...all, [found[0]]: { ...found[1], usage: kept } }
+}
+
+/** Keeps `usage` as agent `agent`'s last figure beside its Worker, ReviewAgent or Cleaning: the figure kept. */
+async function keepUsage($: $, agent: string, usage: Usage): Promise<Usage> {
+  let kept = usage
+  const keep = (now: Usage) => {
+    kept = now
+  }
+  const holds = (all: Record<string, { agent: string }>) =>
+    Object.values(all).some((one) => one.agent === agent)
+  if (holds(await read($, workers)))
+    await update($, workers, (all) => withUsage(all, agent, usage, keep))
+  else if (holds(await read($, reviewAgents)))
+    await update($, reviewAgents, (all) => withUsage(all, agent, usage, keep))
+  else if (holds(await read($, cleaning)))
+    await update($, cleaning, (all) => withUsage(all, agent, usage, keep))
+  return kept
+}
+
+/** Agent `agent`'s last figure kept, if any. */
+async function keptUsage($: $, agent: string) {
+  for (const all of [
+    await read($, workers),
+    await read($, reviewAgents),
+    await read($, cleaning),
+  ]) {
+    const found = Object.values(all).find((one) => one.agent === agent)
+    if (found) return found.usage
+  }
+  return undefined
+}
+
+/** What the agent list says agent `agent` spent; not listed, none counted or the list unread, undefined. */
+async function listedUsage($: $, agent: string) {
+  const listed = (await $.agent.list().catch(() => undefined))?.find(
+    (one) => one.id === agent,
+  )
+  return listed && usageOf(listed.usage, listed.cost)
+}
+
+/** The figure a stop read right after TaskStop ended its agent, by agent. */
+const stoppedReads = new Map<string, Usage>()
+/** Each agent's live write under way: its own end waits for it alone, never another's. */
+const liveWrites = new Map<string, Promise<unknown>>()
+/** When each agent's figure was last read live. */
+const liveAt = new Map<string, number>()
+
+/**
+ * Agent `agent`'s figure at its end: the list's, else what its stop read,
+ * else its last figure, partial; with none, it is not reported.
+ */
+async function finalUsage($: $, agent: string): Promise<Usage | undefined> {
+  try {
+    // Its live write already started lands before its end, which removes it.
+    await liveWrites.get(agent)
+    const now = (await listedUsage($, agent)) ?? stoppedReads.get(agent)
+    stoppedReads.delete(agent)
+    liveAt.delete(agent)
+    if (now) return await keepUsage($, agent, now)
+    const kept = await keptUsage($, agent)
+    return kept && { ...kept, partial: true }
+  } catch {
+    // Best effort: the agent's end goes on, the agent not reported.
+    return undefined
+  }
+}
+
+/** The hook.mjs command that writes agent `agent`'s live figure: undefined when the hooks did not start it, or it no longer works. */
+async function liveCommand($: $, agent: string) {
+  const fix = await workerOf($, agent)
+  if (fix?.worker.running)
+    return [
+      'node',
+      `${skillDir($)}/scripts/hook.mjs`,
+      'live',
+      '--finding',
+      fix.id,
+      '--review',
+      fix.worker.review,
+      '--project',
+      fix.worker.project,
+    ]
+  const reviewing = await reviewAgentOf($, agent)
+  if (reviewing)
+    return reviewing.one.running && !reviewing.one.stopping
+      ? reviewHookArgv(
+          $,
+          'live',
+          reviewing.one.name,
+          reviewing.one.review,
+          reviewing.one.project,
+        )
+      : undefined
+  const cleaner = Object.values(await read($, cleaning)).find(
+    (one) => one.agent === agent && one.running,
+  )
+  // A cleaning a review waits for counts in that review; one from Settings, at its end only.
+  const waiting = cleaner && (await reviewWaitingOn($, cleaner.dir))
+  return cleaner && waiting
+    ? reviewHookArgv($, 'live', cleaner.name, waiting, cleaner.project)
+    : undefined
+}
+
+/** A step of agent `agent`: its figure so far, read and written once per LIVE_MS at most. */
+async function liveUsage($: $, agent: string) {
+  const at = Date.now()
+  if (at - (liveAt.get(agent) ?? 0) < LIVE_MS) return
+  liveAt.set(agent, at)
+  if (!(await liveCommand($, agent))) return
+  // One write at a time per agent: a slow one skips the next reading, never queues it.
+  if (liveWrites.has(agent)) return
+  const usage = await listedUsage($, agent)
+  if (!usage) return
+  const kept = await keepUsage($, agent, usage)
+  // Asked again: its end may have come while the list was read.
+  const command = await liveCommand($, agent)
+  if (!command || liveWrites.has(agent)) return
+  const write = $.process
+    .run([...command, '--agent', agent], { stdin: JSON.stringify(kept) })
+    .catch(ignore)
+    .finally(() => liveWrites.delete(agent))
+  liveWrites.set(agent, write)
 }
 const skillDir = ($: $) => `${$.plugin.root}/skills/tranchant`
 /** A finding's id as the person reads it. */
@@ -499,6 +735,7 @@ async function note($: $, agent: string, id: string, worker: Worker, steps: Step
 /** `hook.mjs ended`: a finding its agent left `working` becomes `failed`, its locks released. */
 async function ended($: $, id: string, worker: Worker) {
   const review = await loadReview($, worker.review).catch(() => undefined)
+  const usage = await finalUsage($, worker.agent)
   const ran = await $.process
     .run(
       [
@@ -514,6 +751,8 @@ async function ended($: $, id: string, worker: Worker) {
         ...(review ? ['--lock-root', review.lockRoot] : []),
         '--agent',
         worker.agent,
+        // Left out with no figure: the agent is not reported.
+        ...(usage ? ['--usage', JSON.stringify(usage)] : []),
       ],
       { stdin: '' },
     )
@@ -943,7 +1182,8 @@ function serve($: $, dir: string, opensBrowser: boolean): Watch {
       $.ui.toast(
         `Tranchant stopped serving ${titleOf(watched)}: ${exit}. /tranchant ${dir} starts it again.`,
       )
-  })()
+    // The session may end first: its state is then gone.
+  })().catch(ignore)
   return watched
 }
 
@@ -1627,6 +1867,7 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
     ...(lensModel && { lensModel }),
     job,
   }
+  const lens = job.kind === 'verifier' ? await findingLens($, dir, job.id) : undefined
   // Its start before it is recorded: an end written meanwhile always comes after it.
   await reviewNote($, one, agent, [
     {
@@ -1640,6 +1881,8 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
             : `${job.kind === 'verifier' ? 'Verifying' : 'Discussing'} ${job.id}`,
       state: 'done',
       model,
+      // A verifier's tokens count on its finding's lens, even once it removes the finding.
+      ...(lens && { lens }),
     },
   ])
   await setReviewAgent($, key, one)
@@ -1667,6 +1910,21 @@ async function startReviewAgent($: $, dir: string, job: ReviewJob) {
   // Not ended here: it runs on (stuck), it ended on its own (finished: never queued again), or another end claimed it.
   if (cut === 'ended' && meanwhile.end === 'requeue')
     await requeue($, dir, [againOf(job)])
+}
+
+/** The lens that found finding `id`, from its file; none, or unsound, undefined. */
+async function findingLens($: $, dir: string, id: string) {
+  if (!/^[\w-]{1,64}$/.test(id)) return undefined
+  try {
+    const finding: unknown = JSON.parse(await $.fs.read(`${dir}/findings/${id}.json`))
+    const lens =
+      finding && typeof finding === 'object' && 'lens' in finding
+        ? finding.lens
+        : undefined
+    return typeof lens === 'string' && /^[\w-]{1,40}$/.test(lens) ? lens : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -1738,10 +1996,14 @@ async function endReviewAgent(
   // Its turn's end, one that came while it was stopped, or TaskStop found it completed: its work done, never queued again.
   const finished = how === 'ended' || turned || (!!stop && 'finished' in stop)
   await showStatus($)
+  const usage = await finalUsage($, one.agent)
   await reviewNote($, one, one.agent, [
-    finished
-      ? { at: Date.now(), kind: 'end', label: 'Ended', state: 'done' }
-      : { at: Date.now(), kind: 'end', label, state: 'failed' },
+    {
+      at: Date.now(),
+      kind: 'end',
+      ...(finished ? { label: 'Ended', state: 'done' } : { label, state: 'failed' }),
+      ...(usage && { usage }),
+    },
   ])
   await debug($, `${tag(one.name)}: agent ${one.agent} ${finished ? 'ended' : how}`)
   const outcome = how === 'stopped' && finished ? 'finished' : 'ended'
@@ -2003,7 +2265,12 @@ async function stopReviewing($: $) {
     }
     cleanersEnded += 1
     // Stopped: its lens keeps its last version, and no failure on its source.
-    await runClean($, one.project, ['--check', one.dir, '--stopped'])
+    await runClean($, one.project, [
+      '--check',
+      one.dir,
+      '--stopped',
+      ...(await usageArgs($, one.agent)),
+    ])
   }
   // A review waiting for its lenses' cleaning, or for Start, never reached its reviewers: refused, said why.
   for (const dir of waiting) {
@@ -2466,7 +2733,15 @@ async function checkThenBuild(
     }
     if (!stale.name || !stale.scope) continue
     const prepared = preparedOf(
-      await runClean($, project, ['--again', stale.name, '--scope', stale.scope]),
+      // The review it is cleaned again for counts its tokens, whatever it comes to.
+      await runClean($, project, [
+        '--again',
+        stale.name,
+        '--scope',
+        stale.scope,
+        '--review',
+        dir,
+      ]),
     )
     // Not cleaned again: its last version runs, the reason said here.
     if ('refused' in prepared)
@@ -2964,9 +3239,13 @@ async function cleanDone($: $, agent: string, answer: string) {
   if (!found) return
   await update($, cleaning, (all) => ({
     ...all,
-    [found.dir]: { ...found, running: false },
+    [found.dir]: { ...(all[found.dir] ?? found), running: false },
   }))
-  const ran = await runClean($, found.project, ['--check', found.dir])
+  const ran = await runClean($, found.project, [
+    '--check',
+    found.dir,
+    ...(await usageArgs($, agent)),
+  ])
   const lines = linesOf(ran.stdout)
   const failed = lines.find(
     (line) => line.startsWith('CLEAN_FAILED ') || line.startsWith('CLEAN_REFUSED '),
@@ -2995,6 +3274,12 @@ async function cleanDone($: $, agent: string, answer: string) {
   }
   if (waiting) await cleaningEnded($, waiting, found.dir)
   await pumpCleanings($)
+}
+
+/** clean.mjs's `--usage` of agent `agent` at its end: none when it is not reported. */
+async function usageArgs($: $, agent: string) {
+  const usage = await finalUsage($, agent)
+  return usage ? ['--usage', JSON.stringify(usage)] : []
 }
 
 /** After a reload, the cleaning agents at work get their hooks back. */
@@ -3215,7 +3500,7 @@ export const register: Register = (on) => {
 
   // After a reload of the module, the first tool call starts its servers again.
   on('tool.call', async ($, e, next) => {
-    void rearm($)
+    void rearm($).catch(ignore)
     return next(e)
   })
 
@@ -3279,12 +3564,22 @@ export const register: Register = (on) => {
 
   // An agent ended its turn: a fix's Stop hook released its locks; a review agent holds none.
   on('turn.complete', async ($, e, next) => {
-    void rearm($)
+    void rearm($).catch(ignore)
     if (e.agentId) {
+      // Kept first: an engine whose list holds no usage has this figure alone.
+      const usage = e.usage && usageOf([e.usage])
+      if (usage) await keepUsage($, e.agentId, usage).catch(ignore)
       await workerDone($, e.agentId, e.answer)
       await reviewAgentDone($, e.agentId, e.answer)
       await cleanDone($, e.agentId, e.answer)
     }
     return next(e)
+  })
+
+  // Each response of an agent the hooks started: its figure so far, every ten seconds at most.
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    if (e.agentId) void liveUsage($, e.agentId).catch(ignore)
+    return result
   })
 }

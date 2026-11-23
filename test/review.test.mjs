@@ -191,7 +191,10 @@ test('prepare.mjs reviews a named branch with a recipe of its own, its lenses fi
   assert.equal(envelope.branch, 'feature/cart')
   assert.equal(envelope.headSha, await git('rev-parse', 'feature/cart'))
   assert.deepEqual(used, { file: recipe, from: 'run' })
-  assert.deepEqual(lenses, [{ name: 'js', prompt: 'js.md', paths: ['src/**/*.js'] }])
+  // How many changed files it reads: review.json's lenses record it once it runs.
+  assert.deepEqual(lenses, [
+    { name: 'js', prompt: 'js.md', paths: ['src/**/*.js'], files: 1 },
+  ])
 })
 
 test('prepare.mjs reads the recipe the settings name, --recipe still first, and leaves the lenses turned off out', async (t) => {

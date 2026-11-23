@@ -63,6 +63,8 @@ import {
  * @property {Reviewer[]} [reviewers] With `process`: the reviewers it starts, each to make a lens of.
  * @property {number} [more] With `process`: those past the most listed.
  * @property {number[]} [picked] With `process`: the reviewers made a lens of, by index; it is `added` once all are.
+ * @property {import('./format.mjs').Usage} [usage] What its agent spent, once it ended: clean.mjs --check --usage.
+ * @property {string} [review] The review folder it was cleaned again for (clean.mjs --again --review): that review counts its tokens.
  */
 
 /** A cleaning still `cleaning` this long after its agent started lost it: shown failed. */
@@ -308,9 +310,9 @@ function isLost(/** @type {Cleaning} */ record) {
  * A stored lens's cleaning again, its source changed or asked anew: the
  * added instructions the user edited go to the agent, and stay. `queued`
  * when the page asks for it (Clean it again now), as a new lens's.
- * @param {{ project: string, scope: string, name: string, queued?: boolean }} given
+ * @param {{ project: string, scope: string, name: string, queued?: boolean, review?: string }} given `review`: the review folder it is cleaned again for.
  */
-export async function cleanAgain({ project, scope, name, queued }) {
+export async function cleanAgain({ project, scope, name, queued, review }) {
   if (!isScope(scope)) throw new CleaningRefusal(`no lens scope ${scope}`)
   let dir
   let lens
@@ -337,6 +339,7 @@ export async function cleanAgain({ project, scope, name, queued }) {
       ...sources,
       ...(lens.reviewer && { reviewer: lens.reviewer }),
       ...(queued && { queued: /** @type {const} */ (true) }),
+      ...(review && { review: path.resolve(review) }),
     },
     extract,
   )
@@ -446,13 +449,22 @@ async function readOutput(dir) {
  * a lens cleaned again then keeps its last version, the failure recorded on
  * it so the next review does not clean it again for the same source; unless
  * the agent was `stopped` or never started, which says nothing of the source.
+ * `usage`, what its agent spent, is kept on it whatever it comes to.
  * @param {string} dir
- * @param {{ stopped?: boolean }} [options]
+ * @param {{ stopped?: boolean, usage?: import('./format.mjs').Usage }} [options]
  * @returns {Promise<Cleaning>}
  */
-export async function checkCleaning(dir, { stopped = false } = {}) {
+export async function checkCleaning(dir, { stopped = false, usage } = {}) {
   const record = await readCleaning(dir)
-  if (record.state !== 'cleaning') return record
+  if (record.state !== 'cleaning') {
+    // Read again just before: the page may have added the lens meanwhile.
+    if (usage)
+      await writeJson(path.join(dir, 'cleaning.json'), {
+        ...(await readCleaning(dir)),
+        usage,
+      })
+    return record
+  }
   /** @type {Cleaning} */
   let next
   try {
@@ -503,6 +515,7 @@ export async function checkCleaning(dir, { stopped = false } = {}) {
   }
   if (next.state === 'failed' && record.again && !stopped)
     await recordFailure(record, next.reason ?? '')
+  if (usage) next = { ...next, usage }
   await writeJson(path.join(dir, 'cleaning.json'), next)
   return next
 }

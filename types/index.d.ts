@@ -1,5 +1,25 @@
 // The values Tranchant's hooks module keeps in $.state for the session.
 
+/** One model's part of an agent's tokens: the four counts the API reports. */
+export type ModelTokens = {
+  model: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/**
+ * What an agent spent, as the review file records it (docs/review-file.md):
+ * one entry per model, `/cost`'s estimate, and `partial` for a last reading.
+ */
+export type Usage = {
+  models: ModelTokens[]
+  usd?: number
+  hasUnknownPrice?: true
+  partial?: true
+}
+
 /**
  * The agent the hooks started for a finding's fix, the review folder it works
  * in and the model it runs on. `running` until its turn completes.
@@ -12,6 +32,8 @@ export type Worker = {
   /** When its agent started. */
   since?: number
   model?: string
+  /** Its last figure, from a live read or its turn's end: written, partial, when the list no longer holds it at its end. */
+  usage?: Usage
 }
 
 /** A lens of a recipe, built: its instructions file and the files it reviews. */
@@ -87,6 +109,8 @@ export type ReviewAgent = {
   stopping?: true
   /** While `stopping`: its turn's end came, so the stop ends it as finished. */
   turnEnded?: true
+  /** Its last figure, as a Worker's. */
+  usage?: Usage
 }
 
 /**
@@ -107,6 +131,8 @@ export type Cleaning = {
   /** The two files it writes: the lens's domain and its report. */
   writes: string[]
   running: boolean
+  /** Its last figure, as a Worker's. */
+  usage?: Usage
 }
 
 /** A cleaning the page asked for, waiting for a free cleaning agent. */

@@ -512,7 +512,10 @@ for (const [i, lens] of shown.entries()) {
               ),
             }),
     })
-    records.push(record)
+    records.push({
+      ...record,
+      ...(Number.isSafeInteger(lens.files) && { files: lens.files }),
+    })
     built.push({
       name: lens.name,
       prompt: file,

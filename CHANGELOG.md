@@ -7,6 +7,14 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Each agent's tokens are recorded.** The summary agent, the reviewers,
+  the verifiers, the discussions, the fixes and the cleanings: on their
+  runs, and in a review's `usage.json` while they work and once a reset
+  removed them. `/api/review` sums them by kind, lens and finding; the page
+  shows them in a later release.
+
 ## 0.7.0 - 2026-11-22
 
 ### Added

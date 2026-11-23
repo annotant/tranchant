@@ -393,8 +393,8 @@ await writeFile(
   `${JSON.stringify(
     {
       recipe,
-      // How many files each reads: the ready screen's, while the review waits.
-      lenses: wait ? applied : applied.map(({ files: _files, ...lens }) => lens),
+      // How many files each reads: the ready screen's while the review waits, review.json's once it runs.
+      lenses: applied,
       ...(values.recipe && { own: true }),
       ...(group && { group: group.name }),
       ...(notes.length && { notes }),

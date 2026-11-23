@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// hook.mjs <pre|post|stop|note|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>]
-// hook.mjs <pre|post|note> --reviewer <name> --review <dir> --project <root> [--agent <id>]
+// hook.mjs <pre|post|stop|note|ended|live> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>] [--usage <json>]
+// hook.mjs <pre|post|note|live> --reviewer <name> --review <dir> --project <root> [--agent <id>]
 // hook.mjs pre --cleaner <name> --write <file> [--write <file>]
 // The hooks of one finding's agent: Claude Code runs them around each of its
 // tools with the event as JSON on stdin. Claude Code runs no plugin mod hook
@@ -18,7 +18,11 @@
 // ended: the hooks module, once the agent's turn ended: a finding it left
 //      working, neither done nor asked about, fails, so the reviewer can
 //      send it again, and a change asked in its discussion gets its result
-//      there. Prints `AGENT_ENDED <id>` when it failed.
+//      there. Prints `AGENT_ENDED <id>` when it failed. Then `--usage`, what
+//      the agent spent, goes on the run it claimed, else in usage.json's
+//      `unclaimed`; read last, so a bad value never keeps the finding working.
+// live: the hooks module, while the agent works: its figure so far (stdin,
+//      JSON) in usage.json's `live`.
 //
 // `--reviewer`: a review agent's (the summary agent, `sm-summary`, a lens's
 // reviewer, `rv-<lens>`, a finding's verifier, `vf-<id>`, or the agent
@@ -39,10 +43,11 @@ import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { syncChange } from './lib/discussion.mjs'
 import { withFileLock } from './lib/filelock.mjs'
-import { currentRun, parseDecisions, statusOf } from './lib/format.mjs'
+import { currentRun, parseDecisions, readUsage, statusOf } from './lib/format.mjs'
 import { STATE_ROOT, lockRoot as repositoryOf, locksDir } from './lib/project.mjs'
 import { SETTINGS_FILE, loadSettings } from './lib/settings.mjs'
 import { createStore, historyPath, progressPath, reviewAgentPath } from './lib/store.mjs'
+import { addUnclaimed, dropLive, setLive } from './lib/usage.mjs'
 
 /** @typedef {import('./lib/format.mjs').Entry} Entry */
 /** @typedef {import('./lib/format.mjs').Step} Step */
@@ -580,6 +585,9 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
         file,
         steps.map((step) => `${JSON.stringify({ ...step, agent })}\n`).join(''),
       )
+      // Its final figure is on its end: the live one goes.
+      if (steps.some((step) => step.kind === 'end'))
+        await dropLive(review, finding, agent)
       return
     }
     const entry = await readEntry()
@@ -804,7 +812,14 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
         await record([step])
         return
       }
-      const entry = await readEntry()
+      let entry = await readEntry()
+      // The run the claim opened knows its agent from here: its figure finds it at the end.
+      if (CLAIM.test(command) && entry && agent !== '-') {
+        const stamped = await createStore(review)
+          .stamp(finding, agent)
+          .catch(() => false)
+        if (stamped) entry = await readEntry()
+      }
       if (CLAIM.test(command) && entry) {
         // The Started step says which model the agent runs on: claim.mjs
         // recorded it on the run, else the settings chose it.
@@ -842,6 +857,28 @@ function hooksFor({ finding, review, root, lockRoot, agent, reviewer = false }) 
         `turn ended with the finding working: failed it, released ${released.length} lock(s)`,
       )
       return true
+    },
+
+    /**
+     * What the agent spent, once it ended: on the run it claimed, else
+     * unclaimed. Its live figure goes either way.
+     * @param {unknown} given
+     */
+    async usage(given) {
+      const usage = readUsage(given)
+      if (usage && agent !== '-') {
+        // A run its agent claimed takes it; none, or a store that refuses, unclaimed: kept either way.
+        const kept = await createStore(review)
+          .recordUsage(finding, agent, usage)
+          .catch(async (/** @type {unknown} */ error) => {
+            await log(`usage not on its run: ${String(error)}`)
+            return false
+          })
+        if (!kept) await addUnclaimed(review, finding, agent, usage)
+        await log(`recorded the agent's usage${kept ? '' : ' (unclaimed)'}`)
+      }
+      // Last: a live figure left behind is ignored once its run, or unclaimed, holds the final one.
+      await dropLive(review, `fix:${finding}`, agent)
     },
 
     /** @param {Step[]} steps */
@@ -897,6 +934,15 @@ async function cleaner() {
     )
 }
 
+/** `text` as JSON; none, or not JSON, undefined. @param {string | undefined} text */
+function jsonOf(text) {
+  try {
+    return text?.trim() ? JSON.parse(text) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 async function main() {
   const [mode] = process.argv.slice(2)
   const reviewer = flag('--reviewer')
@@ -905,7 +951,7 @@ async function main() {
   const root = flag('--project')
   if (!mode || !finding || !review || !root) {
     console.error(
-      'usage: hook.mjs <pre|post|stop|note|ended> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>], or --reviewer <name> in place of --finding',
+      'usage: hook.mjs <pre|post|stop|note|ended|live> --finding <id> --review <dir> --project <root> [--lock-root <dir>] [--agent <id>] [--usage <json>], or --reviewer <name> in place of --finding',
     )
     process.exit(2)
   }
@@ -913,6 +959,14 @@ async function main() {
   if (reviewer && !/^[\w-]{1,80}$/.test(reviewer)) process.exit(2)
   let text = ''
   for await (const chunk of process.stdin) text += chunk
+  if (mode === 'live') {
+    // The agent's figure so far: no lock, no step.
+    const usage = readUsage(jsonOf(text))
+    const agent = flag('--agent')
+    if (usage && agent)
+      await setLive(path.resolve(review), reviewer ?? `fix:${finding}`, agent, usage)
+    return
+  }
   /** @type {HookInput} */
   const event =
     mode === 'note' || mode === 'ended' || !text.trim() ? {} : JSON.parse(text)
@@ -947,6 +1001,10 @@ async function main() {
       return false
     })
     if (failed) console.log(`AGENT_ENDED ${finding}`)
+    // After the finding failed and its locks went: an unsound figure only goes unreported.
+    await hooks
+      .usage(jsonOf(flag('--usage')))
+      .catch((error) => console.error(`usage not recorded: ${String(error)}`))
   } else if (mode === 'note')
     await hooks.note(
       text

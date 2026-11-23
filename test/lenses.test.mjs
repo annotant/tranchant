@@ -264,10 +264,12 @@ test('lenses.mjs builds every lens, records them, and prints one LENS line each'
       lens.name,
       lens.source,
       lens.version,
+      // The changed files it read, as the plan counted them.
+      lens.files,
     ]),
     [
-      ['abac', 'workflow:code-reviewer-abac', '2.3.0'],
-      ['money', 'money.md', undefined],
+      ['abac', 'workflow:code-reviewer-abac', '2.3.0', 1],
+      ['money', 'money.md', undefined, 1],
     ],
   )
   assert.deepEqual(

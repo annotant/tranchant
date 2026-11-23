@@ -227,6 +227,8 @@ function world(
   const browsed: string[] = []
   const endings: string[][] = []
   const notes: { argv: string[]; stdin: string }[] = []
+  /** hook.mjs live's calls: the agent's figure so far. */
+  const lives: { argv: string[]; stdin: string }[] = []
   const prepared: { argv: string[]; cwd?: string }[] = []
   const built: string[][] = []
   const cleanRuns: { argv: string[]; cwd?: string }[] = []
@@ -341,6 +343,10 @@ function world(
       endings.push(e.argv.slice(3))
       return ok('')
     }
+    if (e.argv[2] === 'live') {
+      lives.push({ argv: e.argv.slice(3), stdin: e.init?.stdin ?? '' })
+      return ok('')
+    }
     if (e.argv[2] === 'note') {
       if (e.init?.stdin?.includes('"kind":"start"')) await notesHeld
       notes.push({ argv: e.argv.slice(3), stdin: e.init?.stdin ?? '' })
@@ -354,6 +360,21 @@ function world(
     return ok('')
   })
   const stopped: string[] = []
+  // What the list says each agent spent, and the agents it no longer holds.
+  const usages = new Map<string, { usage: Counts[]; cost?: { usd: number } }>()
+  const unlisted = new Set<string>()
+  // Each response of a loop: nothing streams, the step answers at once.
+  on('turn.step', async function* (_$, e) {
+    yield* []
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'end_turn' as const,
+      usage: null,
+    }
+  })
   // The agents whose loop ended: the list says completed, and TaskStop errs on them.
   const ended = new Set(finishedAgents)
   // Held, a TaskStop answers only once released.
@@ -384,15 +405,24 @@ function world(
   // A spawn the plugin makes, answered here, carries no id: the list has it.
   on('agent.list', () => ({
     value: [
-      ...spawned.map((agent, index) => ({
-        id: `a${index + 1}`,
-        name: agent.name,
-        type: agent.type,
-        description: '',
-        status:
-          statuses[`a${index + 1}`] ??
-          (ended.has(`a${index + 1}`) ? ('completed' as const) : ('running' as const)),
-      })),
+      ...spawned.flatMap((agent, index) =>
+        unlisted.has(`a${index + 1}`)
+          ? []
+          : [
+              {
+                id: `a${index + 1}`,
+                name: agent.name,
+                type: agent.type,
+                description: '',
+                status:
+                  statuses[`a${index + 1}`] ??
+                  (ended.has(`a${index + 1}`)
+                    ? ('completed' as const)
+                    : ('running' as const)),
+                ...usages.get(`a${index + 1}`),
+              },
+            ],
+      ),
       ...alsoListed.map((id) => ({
         id,
         type: 'tranchant:rv-bugs-rev-1',
@@ -476,6 +506,9 @@ function world(
   return {
     registered,
     spawned,
+    usages,
+    unlisted,
+    lives,
     servers,
     serverEnvs,
     print,
@@ -534,6 +567,35 @@ function world(
 }
 
 const ignore = () => undefined
+
+/** One model's counts, as the engine reports them. */
+type Counts = {
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+}
+const counts = (n: number, model = 'claude-sonnet-5-5'): Counts => ({
+  model,
+  input_tokens: n,
+  output_tokens: n,
+  cache_read_input_tokens: n,
+  cache_creation_input_tokens: n,
+})
+/** The figure the review file records for `counts(n)`. */
+const figure = (n: number, model = 'claude-sonnet-5-5') => ({
+  model,
+  input: n,
+  output: n,
+  cacheRead: n,
+  cacheWrite: n,
+})
+/** `--usage`'s value in hook.mjs ended's or clean.mjs's argv, parsed. */
+const usageIn = (argv: string[] | undefined) => {
+  const at = argv?.indexOf('--usage') ?? -1
+  return at === -1 ? undefined : JSON.parse(argv?.[at + 1] ?? '')
+}
 
 const command = (args = ''): CommandRunInput => ({
   command: 'tranchant',
@@ -1682,17 +1744,24 @@ test('a lens whose source changed is cleaned again first: the reviewers start on
     'abac',
     '--scope',
     'local',
+    // The review it is cleaned again for, which counts its tokens.
+    '--review',
+    DIR,
   ])
   // Not built yet: no reviewer starts before the lens is cleaned.
   expect(w.built).toEqual([])
   expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:cl-cln00002'])
   expect(w.spawned[0]?.prompt).toContain('\nRULES=/state/cleanings/cln-2/rules.md\n')
+  w.usages.set('a1', { usage: [counts(5)] })
   await $.turn.complete(turnEnded('a1', 'abac, 1 part removed.'))
+  // What its agent spent goes with its check.
   expect(w.cleanRuns.at(-1)?.argv).toEqual([
     '--project',
     ROOT,
     '--check',
     '/state/cleanings/cln-2',
+    '--usage',
+    JSON.stringify({ models: [figure(5)] }),
   ])
   expect(w.built).toEqual([['--review', DIR, '--plan', PLAN]])
   expect(w.spawned.map((one) => one.type)).toEqual([
@@ -1744,6 +1813,7 @@ test('/tranchant stop while a review waits for its lenses: the cleaners stop, no
   ])
   // Its turn ends after the stop: it starts nothing, and complete.mjs never runs on a refused review.
   await $.turn.complete(turnEnded('a1', 'abac'))
+  await w.clock.settle()
   expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:cl-cln00002'])
   expect(w.completed).toEqual([])
 })
@@ -2512,4 +2582,119 @@ test('review --group passes the group to prepare.mjs; with --recipe, or with no 
     expect(answer.text).toMatch(/^Usage: \/tranchant review .*--group <name>/)
   }
   expect(w.prepared).toHaveLength(1)
+})
+
+test("a fix's end puts the list's figure on its run; gone from the list, its last one, partial", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'), fix('f-02'), fix('f-03'))
+  w.usages.set('a1', {
+    usage: [counts(10), counts(1, 'claude-haiku-5-5')],
+    cost: { usd: 0.25 },
+  })
+  await $.turn.complete(turnEnded('a1', 'FIXED'))
+  await w.clock.settle()
+  expect(usageIn(w.ended[0])).toEqual({
+    models: [figure(10), figure(1, 'claude-haiku-5-5')],
+    usd: 0.25,
+  })
+  // Dropped from the list already: its turn's own figure, the last kept, partial.
+  w.unlisted.add('a2')
+  await $.turn.complete({ ...turnEnded('a2', 'FIXED'), usage: counts(4) })
+  await w.clock.settle()
+  expect(usageIn(w.ended[1])).toEqual({ models: [figure(4)], partial: true })
+  // Neither: not reported, no --usage at all.
+  w.unlisted.add('a3')
+  await $.turn.complete(turnEnded('a3', 'FIXED'))
+  await w.clock.settle()
+  expect(w.ended[2]).not.toContain('--usage')
+  await w.exit(0)
+})
+
+test('a stop reads the list right after TaskStop: the figure stands, the agent gone or not', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'))
+  w.usages.set('a1', { usage: [counts(6)] })
+  await w.print('STOP f-01')
+  expect(w.stopped).toEqual(['a1'])
+  expect(usageIn(w.ended[0])).toEqual({ models: [figure(6)] })
+  await w.exit(0)
+})
+
+test('a figure that goes down (/clear) never replaces a higher one: the higher stays, partial', async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'))
+  // Its turn said 9 earlier; the list, started over, says 2.
+  await $.turn.complete({ ...turnEnded('b-other'), usage: counts(1) })
+  w.usages.set('a1', { usage: [counts(9)] })
+  const step = $.turn.step({
+    turnId: 't',
+    index: 0,
+    model: 'm',
+    messageCount: 1,
+    agentId: 'a1',
+  })
+  for await (const _ of step);
+  await step.result
+  await w.clock.settle()
+  w.usages.set('a1', { usage: [counts(2)] })
+  await $.turn.complete(turnEnded('a1', 'FIXED'))
+  await w.clock.settle()
+  expect(usageIn(w.ended[0])).toEqual({ models: [figure(9)], partial: true })
+  await w.exit(0)
+})
+
+test("a working agent's steps write its figure live, ten seconds apart at most, and none of another's", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  await w.print(fix('f-01'))
+  w.usages.set('a1', { usage: [counts(3)] })
+  const step = async (agentId?: string) => {
+    const stream = $.turn.step({
+      turnId: 't',
+      index: 0,
+      model: 'm',
+      messageCount: 1,
+      ...(agentId && { agentId }),
+    })
+    for await (const _ of stream);
+    await stream.result
+    await w.clock.settle()
+  }
+  await step('a1')
+  await step('a1')
+  await step('someone-else')
+  await step()
+  expect(w.lives).toEqual([
+    {
+      argv: ['--finding', 'f-01', '--review', DIR, '--project', ROOT, '--agent', 'a1'],
+      stdin: JSON.stringify({ models: [figure(3)] }),
+    },
+  ])
+  await w.exit(0)
+})
+
+test("a review agent's end step carries its figure; a verifier's start, its finding's lens", async ($, on) => {
+  const w = world(on)
+  w.files.set(`${DIR}/findings/f-07.json`, JSON.stringify({ id: 'f-07', lens: 'bugs' }))
+  await review($, w)
+  const reviewer = w.spawned.findIndex((one) => one.type === 'tranchant:rv-bugs-rev-1')
+  const id = `a${reviewer + 1}`
+  w.usages.set(id, { usage: [counts(8)], cost: { usd: 1 } })
+  await $.turn.complete(turnEnded(id, 'Done.'))
+  await w.clock.settle()
+  const end = w.notes
+    .filter((one) => one.argv.includes('rv-bugs'))
+    .map((one) => JSON.parse(one.stdin.split('\n')[0] ?? '{}'))
+    .find((one) => one.kind === 'end')
+  expect(end?.usage).toEqual({ models: [figure(8)], usd: 1 })
+  await w.print('LANDED f-07')
+  const start = w.notes
+    .filter((one) => one.argv.includes('vf-f-07'))
+    .map((one) => JSON.parse(one.stdin.split('\n')[0] ?? '{}'))
+    .find((one) => one.kind === 'start')
+  expect(start?.lens).toBe('bugs')
+  await w.exit(0)
 })
