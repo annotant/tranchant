@@ -140,7 +140,7 @@ function lensOfFinding(finding, names) {
 
 /**
  * By lens, the findings of a past review that stand confirmed: a removed one
- * has no file left. One that cannot be read counts for none.
+ * has no file left. One that cannot be read throws: its review is left out.
  * @param {string} dir
  * @param {string[]} names The review's lenses.
  * @param {boolean} verify Whether its findings were verified.
@@ -155,7 +155,11 @@ async function confirmedOf(dir, names, verify) {
     const finding = await sizeOf(file)
       .then(() => readFile(file, 'utf8'))
       .then((text) => JSON.parse(text))
-      .catch(() => undefined)
+      .catch((error) => {
+        // Removed since the listing: it stands no more. Anything else leaves the review out.
+        if (errorCode(error) === 'ENOENT') return undefined
+        throw error
+      })
     if (!finding || typeof finding !== 'object' || typeof finding.id !== 'string')
       continue
     if (verify && finding.verified !== true) continue
@@ -244,7 +248,10 @@ async function pastReview(dir, head) {
     (await filesOf(dir, 'findings', '.json')).slice(0, MAX_FINDINGS).map((name) =>
       sizeOf(path.join(dir, 'findings', name)).then(
         (info) => `findings/${name}=${info.stamp}`,
-        () => `findings/${name}=?`,
+        (error) => {
+          if (errorCode(error) === 'ENOENT') return `findings/${name}=gone`
+          throw error
+        },
       ),
     ),
   )
