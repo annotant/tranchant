@@ -19,6 +19,9 @@ released to the `stable` branch.
   (`#tokens`): by agent kind, and by lens with what each lens found,
   confirmed and dropped, its tokens per confirmed finding and **nothing
   confirmed** marked. A lens's name opens its reviewer's report.
+- **A finding's tokens in its Run section.** Each run's figure, a line for
+  its verification and one for its discussion, and the finding's sum under
+  them, `at least` when a part did not report.
 
 ## 0.7.0 - 2026-11-22
 
