@@ -267,6 +267,15 @@ In the page:
   auto-fix) or none, then applies one action to the selection (**Issue**
   opens one issue per finding, as drafted); Post all to do posts every open
   finding at once.
+- **The tokens chip** in the header (`2.90M tokens`) sums what every agent
+  of the review spent, its fixes, discussions and cleanings included, and
+  what a reset removed: `so far` while one works, `paused` while
+  the review is paused and nothing runs, `at least` when one did not report its figure or only a last reading. It opens the
+  **Tokens** screen: by agent kind (agents, tokens, their share, the four
+  counts and the models), and by lens (its reviewer's and its verifiers'
+  tokens, what it found, confirmed, dropped and settled, its tokens per
+  confirmed finding, **nothing confirmed** marked); a lens's name opens its
+  reviewer's report.
 
 Nothing is committed or pushed: the fixes wait in your working tree for
 your review.

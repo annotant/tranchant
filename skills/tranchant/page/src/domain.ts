@@ -405,6 +405,58 @@ export interface Discussion {
   step?: Step
 }
 
+/** One model's counts in an agent's figure. */
+interface ModelUsage {
+  model: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/** A figure as `/api/review` answers it: `tokens`, its four counts summed over its models. */
+export interface Usage {
+  models: ModelUsage[]
+  tokens: number
+  usd?: number
+  hasUnknownPrice?: true
+  /** A last reading, or a sum with a part not reported: a floor. */
+  partial?: true
+}
+
+export type UsageKind =
+  'summary' | 'reviewers' | 'verifiers' | 'fixes' | 'discussions' | 'cleanings'
+
+interface KindUsage {
+  kind: UsageKind
+  agents: number
+  usage: Usage | null
+}
+
+/** What the review's agents spent, summed by the server (`/api/review`'s `usage`). */
+export interface ReviewUsage {
+  /** Null when no agent reported a figure. */
+  total: Usage | null
+  kinds: KindUsage[]
+  /** The most tokens first. */
+  lenses: {
+    lens: string
+    reviewer: Usage | null
+    verifiers: Usage | null
+    tokens: number
+  }[]
+  reset: {
+    usage: Usage | null
+    kinds: KindUsage[]
+    lenses: { lens: string; reviewer: Usage | null; verifiers: Usage | null }[]
+  } | null
+  /** By run name: `rv-bugs`, `rv-bugs#2`, `vf-f-03`, `ds-f-03`, `sm-summary`, `fix:f-03:r1`, `fix:f-03`, `cl-…`. */
+  notReported: string[]
+  partial: string[]
+  /** An agent it counts still works. */
+  running: boolean
+}
+
 /** What `GET /api/review` answers. */
 export interface ReviewPayload {
   review: Review
@@ -417,6 +469,8 @@ export interface ReviewPayload {
   lenses?: LensesProgress
   /** By finding id; absent from older servers. */
   discussions?: Record<string, Discussion>
+  /** Absent from older servers, and when it could not be read. */
+  usage?: ReviewUsage
   head: { reviewed: string; current: string | null }
 }
 

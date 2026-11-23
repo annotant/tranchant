@@ -539,7 +539,9 @@ it was reported.
 
 Every agent the hooks start has its tokens recorded: the summary agent,
 the reviewers, the verifiers, the discussing agents, the fixes' agents and
-the cleanings. The page shows none of it yet; `/api/review` sums it.
+the cleanings. `/api/review` sums it; the page shows the total in the
+header's chip and opens it, by agent kind and by lens, on its Tokens screen
+(`#tokens`).
 
 **The figure.** One shape everywhere, read by
 [`format.mjs`'s `readUsage`](../skills/tranchant/scripts/lib/format.mjs):
