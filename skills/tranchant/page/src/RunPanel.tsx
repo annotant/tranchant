@@ -8,6 +8,7 @@ import {
   stateClass,
   type Step,
 } from './domain'
+import type { FindingCost, RunCost } from './tokens'
 
 interface Props {
   id: string
@@ -15,7 +16,27 @@ interface Props {
   /** The run in progress, as `/api/review` sends it. */
   steps: readonly Step[]
   disabled: boolean
+  /** What its verification, discussion and runs spent; none when the review has no usage. */
+  cost?: FindingCost | undefined
 }
+
+function Cost({ cost }: { cost: RunCost | undefined }) {
+  if (!cost) return null
+  return (
+    <span
+      className={cost.dim ? 'tr-tk-runcost tr-tk-dim' : 'tr-tk-runcost'}
+      title={cost.title}
+    >
+      {cost.text}
+    </span>
+  )
+}
+
+const TONES = {
+  confirmed: groupClass('done'),
+  running: groupClass('inProgress'),
+  still: 'tr-chip',
+} as const
 
 function Steps({ steps, live }: { steps: readonly Step[]; live: boolean }) {
   const list = useRef<HTMLOListElement>(null)
@@ -62,14 +83,15 @@ const OUTCOME_LABELS: Record<Outcome | 'running', string> = {
 }
 
 /** The steps of the run in progress, and the runs that ended, with their history on demand. */
-export function RunPanel({ id, record, steps, disabled }: Props) {
+export function RunPanel({ id, record, steps, disabled, cost }: Props) {
   const [history, setHistory] = useState<History>()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
   const runs = record?.runs ?? []
   const key = `${id}:${runs.length}`
   const shown = history?.key === key ? history.steps : undefined
-  if (!steps.length && !runs.length) return null
+  const rows = cost?.rows ?? []
+  if (!steps.length && !runs.length && !rows.length) return null
 
   async function showHistory() {
     setLoading(true)
@@ -89,7 +111,7 @@ export function RunPanel({ id, record, steps, disabled }: Props) {
     <section className="tr-section tr-run" aria-label="Run">
       <div className="tr-section-head">
         <h3>Run</h3>
-        {shown ? (
+        {!steps.length && !runs.length ? null : shown ? (
           <button
             type="button"
             className="tr-btn tr-btn--link"
@@ -118,8 +140,16 @@ export function RunPanel({ id, record, steps, disabled }: Props) {
       ) : (
         steps.length > 0 && <Steps steps={steps} live />
       )}
-      {runs.length > 0 && (
+      {runs.length + rows.length > 0 && (
         <ul className="tr-runs">
+          {rows.map((row) => (
+            <li key={row.key}>
+              <span className="tr-run-id">{row.name}</span>
+              {row.model && <span className="tr-muted"> · {modelName(row.model)}</span>}
+              {row.chip && <span className={TONES[row.chip.tone]}>{row.chip.text}</span>}
+              <Cost cost={row.cost} />
+            </li>
+          ))}
           {runs.map((run) => (
             <li key={run.id}>
               <span className="tr-run-id">{run.id}</span>
@@ -132,10 +162,12 @@ export function RunPanel({ id, record, steps, disabled }: Props) {
                 {OUTCOME_LABELS[run.outcome ?? 'running']}
               </span>
               {run.summary && <span className="tr-run-summary"> {run.summary}</span>}
+              <Cost cost={cost?.runs.get(run.id)} />
             </li>
           ))}
         </ul>
       )}
+      {cost?.foot && <p className="tr-tk-foot">{cost.foot}</p>}
     </section>
   )
 }

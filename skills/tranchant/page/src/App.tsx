@@ -820,6 +820,7 @@ export default function App() {
       steps={payload?.runs[current.id] ?? []}
       discussion={payload?.discussions?.[current.id]}
       unverified={unverified.has(current.id)}
+      usage={payload?.usage}
       disabled={disabled}
       tracker={tracker}
       onDecide={(decisions) => {

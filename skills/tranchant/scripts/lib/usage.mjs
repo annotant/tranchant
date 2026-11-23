@@ -256,7 +256,8 @@ const hookStart = (/** @type {Record<string, any>} */ step) =>
 
 /**
  * One agent's figure, as a sum reads it: `running` while it works.
- * @typedef {{ kind: Kind, label: string, usage?: Usage, running?: true, lens?: string, finding?: string }} Counted
+ * `run`: the id of the fix's run it is on, none before its claim.
+ * @typedef {{ kind: Kind, label: string, usage?: Usage, running?: true, lens?: string, finding?: string, run?: string }} Counted
  */
 
 /**
@@ -331,6 +332,7 @@ async function countedOf(dir, review, decisions, file, since) {
         kind: 'fixes',
         label: `fix:${id}:${typeof run.id === 'string' ? run.id : '?'}`,
         finding: id,
+        ...(typeof run.id === 'string' && { run: run.id }),
       }
       const lens = lensOf.get(id)
       if (lens) one.lens = lens
@@ -443,6 +445,19 @@ function sumBy(counted, keyOf) {
 }
 
 /**
+ * A finding's verification, discussion or run: its agents summed, and whether
+ * one works. Null when it had no agent; its `usage` null when none reported.
+ * @param {Counted[]} agents
+ */
+function part(agents) {
+  if (!agents.length) return null
+  return {
+    usage: shown(total(agents)),
+    ...(agents.some((one) => one.running) && { running: /** @type {const} */ (true) }),
+  }
+}
+
+/**
  * Agents summed: a part not reported makes the sum partial; none reported, none.
  * @param {Counted[]} agents
  */
@@ -455,9 +470,9 @@ function total(agents) {
 /**
  * What the review spent so far, as `/api/review`'s `usage` answers it: the
  * total, by kind, by lens (its reviewer's and its verifications'), by finding
- * (its fixes, verification and discussion), what resets removed, the agents
- * not reported or partial, and whether any still works. `total` is null when
- * no agent reported a figure.
+ * (its fixes, each of its runs, its verification and discussion), what resets
+ * removed, the agents not reported or partial, and whether any still works.
+ * `total` is null when no agent reported a figure.
  * @param {string} dir
  * @param {{ review: { findings: Finding[], project: string }, decisions: Record<string, Entry>, since: number }} known
  */
@@ -501,9 +516,21 @@ export async function reviewUsage(dir, { review, decisions, since }) {
       .map(([id, agents]) => ({
         id,
         fixes: shown(total(agents.filter((one) => one.kind === 'fixes'))),
-        verifier: shown(total(agents.filter((one) => one.kind === 'verifiers'))),
-        discussion: shown(total(agents.filter((one) => one.kind === 'discussions'))),
+        verifier: part(agents.filter((one) => one.kind === 'verifiers')),
+        discussion: part(agents.filter((one) => one.kind === 'discussions')),
+        runs: agents.flatMap((one) =>
+          one.kind === 'fixes' && one.run !== undefined
+            ? [{ id: one.run, ...part([one]) }]
+            : [],
+        ),
+        // Before its claim, or on a run with no id: in the sum, on no run.
+        unclaimed: part(
+          agents.filter((one) => one.kind === 'fixes' && one.run === undefined),
+        ),
         usage: shown(total(agents)),
+        ...(agents.some((one) => one.running) && {
+          running: /** @type {const} */ (true),
+        }),
       }))
       .toSorted((a, b) => a.id.localeCompare(b.id)),
     reset: removed

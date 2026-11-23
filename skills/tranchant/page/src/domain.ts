@@ -433,6 +433,28 @@ interface KindUsage {
   usage: Usage | null
 }
 
+/** A finding's verification, discussion or run: its agents summed; `usage` null when none reported. */
+export interface UsagePart {
+  usage: Usage | null
+  running?: true
+}
+
+/** What a finding's agents spent. */
+export interface FindingUsage {
+  id: string
+  /** Every fix's agent, the ones that ended with no run included. */
+  fixes: Usage | null
+  /** Null when it had none. */
+  verifier: UsagePart | null
+  discussion: UsagePart | null
+  /** One per run of its record, by the run's id. */
+  runs: (UsagePart & { id: string })[]
+  /** Its fixes' agents on no run: ended or at work before their claim. */
+  unclaimed: UsagePart | null
+  usage: Usage | null
+  running?: true
+}
+
 /** What the review's agents spent, summed by the server (`/api/review`'s `usage`). */
 export interface ReviewUsage {
   /** Null when no agent reported a figure. */
@@ -445,6 +467,8 @@ export interface ReviewUsage {
     verifiers: Usage | null
     tokens: number
   }[]
+  /** By finding id, in id order. */
+  findings: FindingUsage[]
   reset: {
     usage: Usage | null
     kinds: KindUsage[]

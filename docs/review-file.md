@@ -541,7 +541,8 @@ Every agent the hooks start has its tokens recorded: the summary agent,
 the reviewers, the verifiers, the discussing agents, the fixes' agents and
 the cleanings. `/api/review` sums it; the page shows the total in the
 header's chip and opens it, by agent kind and by lens, on its Tokens screen
-(`#tokens`).
+(`#tokens`); a finding's Run section shows each of its runs', its
+verification's and its discussion's, and their sum.
 
 **The figure.** One shape everywhere, read by
 [`format.mjs`'s `readUsage`](../skills/tranchant/scripts/lib/format.mjs):
@@ -612,7 +613,7 @@ no review.
 | `total` | Every agent's figure summed, what resets removed included; `null` when no agent reported one |
 | `kinds` | `[ { kind, agents, usage } ]`, `kind` `summary`, `reviewers`, `verifiers`, `fixes`, `discussions` or `cleanings`; a kind with no agent left out |
 | `lenses` | `[ { lens, reviewer, verifiers, tokens } ]`, the most tokens first |
-| `findings` | `[ { id, fixes, verifier, discussion, usage } ]` |
+| `findings` | `[ { id, fixes, verifier, discussion, runs, unclaimed, usage, running? } ]`: `fixes` every fix's agent summed; `runs` `[ { id, usage, running? } ]`, one per run of `decisions.json` that has an `id`; `unclaimed` the fix's agents on no run (ended or at work before their claim); `verifier`, `discussion` and `unclaimed` `{ usage, running? }`, or `null` when the finding had no such agent (`usage` `null` when its agents reported nothing); `running` while one of its agents works |
 | `reset` | `{ usage, kinds, lenses }`, or `null` with no reset |
 | `notReported`, `partial` | The agents with no figure, and with a partial one, by run name (`rv-bugs`; `rv-bugs#1` and `rv-bugs#2` once Pause now started it again; `fix:f-03:r1`; `cl-…`) |
 | `running` | Whether an agent counted still works: a live figure older than `TRANCHANT_SESSION_SINCE` is no longer live, and counts as `partial` |

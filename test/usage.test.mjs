@@ -195,14 +195,28 @@ test("reviewUsage sums the review's agents by kind, lens and finding, live ones 
     usage.findings.map((one) => [
       one.id,
       one.fixes?.tokens ?? null,
-      one.verifier?.tokens ?? null,
+      one.verifier?.usage?.tokens ?? null,
       one.usage?.tokens ?? null,
+      one.running ?? false,
     ]),
     [
-      ['f-01', 400, 8, 408],
-      ['f-02', 12, null, 12],
-      ['f-03', 16, null, 16],
+      ['f-01', 400, 8, 408, false],
+      ['f-02', 12, null, 12, true],
+      ['f-03', 16, null, 16, false],
     ],
+  )
+  const [f01, f02, f03] = usage.findings
+  // Its discussion's agent reported nothing: the line stays, its figure none.
+  assert.deepEqual(f01?.discussion, { usage: null })
+  assert.deepEqual(
+    f01?.runs.map((run) => [run.id, run.usage?.tokens ?? null, run.running ?? false]),
+    [[decisions.findings['f-01']?.runs[0]?.id, 400, false]],
+  )
+  // A fix's agent before its claim, or one that ended with no run: on the sum, on no run.
+  assert.deepEqual([f02?.runs, f02?.verifier, f03?.runs], [[], null, []])
+  assert.deepEqual(
+    [f01?.unclaimed, f02?.unclaimed, f03?.unclaimed?.usage?.tokens],
+    [null, { usage: { ...figure(3), tokens: 12 }, running: true }, 16],
   )
   assert.equal(usage.reset, null)
 
@@ -383,6 +397,11 @@ test("a fix's agent at work after its claim counts once, from its live figure", 
     [['fixes', 1, 8]],
   )
   assert.equal(usage.running, true)
+  // On its run, so far.
+  assert.deepEqual(
+    usage.findings[0]?.runs.map((run) => [run.usage?.tokens, run.running]),
+    [[8, true]],
+  )
 })
 
 test('a figure goes on the run its own agent claimed, not on the next one', async (t) => {

@@ -4,6 +4,8 @@
 import {
   type Discussion,
   type Finding,
+  type FindingRecord,
+  type FindingUsage,
   type LensesProgress,
   plural,
   type Records,
@@ -13,6 +15,7 @@ import {
   type State,
   stateOf,
   type Usage,
+  type UsagePart,
   type UsageKind,
 } from './domain'
 import { lensOf } from './progress'
@@ -368,4 +371,180 @@ export function totalNote(
   if (pausedOf(review)) return 'tokens · paused: nothing runs until Resume'
   if (review.stopped) return 'tokens · the review stopped'
   return 'tokens · the review, its fixes, discussions and cleanings'
+}
+
+/** A figure on a line of a finding's Run section; none while its agent works with nothing read yet. */
+export interface RunCost {
+  text: string
+  title?: string
+  /** Not reported. */
+  dim?: true
+}
+
+/** The line of a finding's verification or discussion, above its runs. */
+interface CostRow {
+  key: 'verification' | 'discussion'
+  name: string
+  model?: string
+  chip?: { text: string; tone: 'confirmed' | 'running' | 'still' }
+  cost?: RunCost
+}
+
+export interface FindingCost {
+  rows: CostRow[]
+  /** By run id. */
+  runs: Map<string, RunCost>
+  /** The finding's sum; none when nothing of it reported. */
+  foot?: string
+}
+
+const NUMBERS = [
+  'no',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+]
+
+/** The id of the model that spent the most of a figure. */
+function mainModel(usage: Usage | null) {
+  const top = usage?.models.toSorted(
+    (a, b) =>
+      b.input +
+      b.output +
+      b.cacheRead +
+      b.cacheWrite -
+      (a.input + a.output + a.cacheRead + a.cacheWrite),
+  )[0]
+  return top?.model
+}
+
+function costOf(part: UsagePart, stopped = false): RunCost | undefined {
+  const { usage, running } = part
+  if (!usage) {
+    if (running) return undefined
+    return {
+      text: 'not reported',
+      title:
+        'Its agent reported no tokens: its Claude Code session may have closed first',
+      dim: true,
+    }
+  }
+  const text = `${usage.partial ? 'at least ' : ''}${formatTokens(usage.tokens)} tokens${running ? ' so far' : ''}`
+  // Partial: a last reading, or an agent of several that reported nothing.
+  if (usage.partial)
+    return {
+      text,
+      title: 'At least this much: a part of it is a last reading or not reported',
+    }
+  if (stopped) return { text, title: 'Its last request was cut: its output is estimated' }
+  return { text }
+}
+
+const their = (names: readonly string[]) => (names.length > 1 ? 'their' : 'its')
+
+/** "its run", "its two runs", "its 12 runs". */
+const runsWord = (count: number) =>
+  count === 1 ? 'its run' : `its ${NUMBERS[count] ?? count} runs`
+
+/**
+ * What a finding's verification, discussion and runs spent, as its Run
+ * section says it; none when the review has no usage, or none of the finding's
+ * agents was counted.
+ */
+export function findingCostOf(
+  usage: ReviewUsage | undefined,
+  finding: Pick<Finding, 'id' | 'verified'>,
+  record: Pick<FindingRecord, 'runs'> | undefined,
+  discussion: Discussion | undefined,
+): FindingCost | undefined {
+  // No figure in the whole review and nothing at work: old or a producer's, it says nothing.
+  if (!usage || (!usage.total && !usage.running)) return undefined
+  const spent: FindingUsage | undefined = usage.findings.find(
+    (one) => one.id === finding.id,
+  )
+  if (!spent) return undefined
+  const rows: CostRow[] = []
+  /** What did not report, as the foot names it. */
+  const missing: string[] = []
+  const partial: string[] = []
+  const note = (part: UsagePart, name: string) => {
+    if (!part.usage && !part.running) missing.push(name)
+    else if (part.usage?.partial) partial.push(name)
+  }
+  const { verifier, discussion: discussed } = spent
+  if (verifier) {
+    note(verifier, 'the verification')
+    const model = mainModel(verifier.usage)
+    const cost = costOf(verifier)
+    rows.push({
+      key: 'verification',
+      name: verifier.running
+        ? 'verifying'
+        : finding.verified === true
+          ? 'verified'
+          : 'verification',
+      ...(model && { model }),
+      ...(verifier.running
+        ? { chip: { text: 'In progress', tone: 'running' as const } }
+        : finding.verified === true && {
+            chip: { text: 'Confirmed', tone: 'confirmed' as const },
+          }),
+      ...(cost && { cost }),
+    })
+  }
+  if (discussed) {
+    note(discussed, 'the discussion')
+    const model = mainModel(discussed.usage)
+    const answers =
+      discussion?.messages.filter((one) => one.by === 'agent' && !one.failed).length ?? 0
+    const cost = costOf(discussed)
+    rows.push({
+      key: 'discussion',
+      name: discussed.running ? 'discussing' : 'discussed',
+      ...(model && { model }),
+      ...(discussed.running
+        ? { chip: { text: 'In progress', tone: 'running' as const } }
+        : answers > 0 && {
+            chip: { text: plural(answers, 'answer'), tone: 'still' as const },
+          }),
+      ...(cost && { cost }),
+    })
+  }
+  const outcomes = new Map((record?.runs ?? []).map((run) => [run.id, run.outcome]))
+  const runs = new Map<string, RunCost>()
+  let shownRuns = 0
+  for (const run of spent.runs) {
+    if (!outcomes.has(run.id)) continue
+    shownRuns += 1
+    note(run, run.id)
+    const cost = costOf(run, outcomes.get(run.id) === 'stopped')
+    if (cost) runs.set(run.id, cost)
+  }
+  const { unclaimed } = spent
+  if (unclaimed) note(unclaimed, "a fix's agent before its claim")
+  const sum = spent.usage
+  if (!sum) return { rows, runs }
+  const head = `${sum.partial || missing.length ? 'At least ' : ''}${formatTokens(sum.tokens)} tokens on this finding${spent.running ? ' so far' : ''}`
+  let foot: string
+  if (missing.length)
+    foot = `${head}: ${listed(missing)} did not report ${their(missing)} tokens.`
+  else if (partial.length)
+    foot = `${head}: ${listed(partial)} reported only part of ${their(partial)} tokens.`
+  else if (spent.running || sum.partial) foot = `${head}.`
+  else {
+    const parts = [
+      ...(verifier ? ['its verification'] : []),
+      ...(discussed ? ['its discussion'] : []),
+      ...(shownRuns ? [runsWord(shownRuns)] : []),
+      ...(unclaimed ? ["a fix's agent before its claim"] : []),
+    ]
+    foot = parts.length ? `${head}: ${listed(parts)}.` : `${head}.`
+  }
+  return { rows, runs, foot }
 }
