@@ -276,6 +276,10 @@ In the page:
   tokens, what it found, confirmed, dropped and settled, its tokens per
   confirmed finding, **nothing confirmed** marked); a lens's name opens its
   reviewer's report.
+- A finding's **Run** section says what it cost: each run's tokens
+  (`run-2 · opus · Fixed · 182k tokens`), a line for its verification and
+  one for its discussion, and the finding's sum under them (`at least` when
+  one did not report). Its header says nothing of it.
 
 Nothing is committed or pushed: the fixes wait in your working tree for
 your review.
