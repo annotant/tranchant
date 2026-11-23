@@ -767,6 +767,9 @@ test('--no-start builds the lenses and starts no reviewer; Start runs the lenses
       ['css', 'idle', 0, false],
       ['all', 'idle', 1, true],
     ])
+    // A built lens's prompt hash, the estimate's history: none on a lens not built.
+    assert.match(waiting.progress.lenses[0].hash, /^\w+$/)
+    assert.equal(waiting.progress.lenses[1].hash, undefined)
     // Building again keeps it waiting, and changes nothing in the settings.
     const rebuilt = await rerun(waiting, '--replan')
     assert.equal(rebuilt.stdout.trim(), 'WAITING')
@@ -784,6 +787,8 @@ test('--no-start builds the lenses and starts no reviewer; Start runs the lenses
       ['all'],
     )
     assert.equal(started.progress.state, 'ready')
+    // The row's hash is the one review.json records: the estimate compares them.
+    assert.equal(started.progress.lenses[0].hash, started.envelope.lenses[0].hash)
     assert.deepEqual(
       started.progress.lenses.map((/** @type {any} */ row) => row.name),
       ['all'],

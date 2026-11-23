@@ -112,6 +112,7 @@ import {
   writeSettings,
 } from './lib/settings.mjs'
 import { trackerOf } from './lib/tracker.mjs'
+import { estimateOf } from './lib/estimate.mjs'
 import { reviewUsage } from './lib/usage.mjs'
 import {
   MAX_ISSUE_BODY,
@@ -1164,10 +1165,23 @@ async function handle(req, res) {
       console.error(`tranchant server: /api/review: usage: ${String(error)}`)
       return undefined
     })
+    // While it waits to start: what it should spend, from the project's past reviews.
+    const estimate =
+      latest.status === 'preparing' &&
+      lenses?.state === 'waiting' &&
+      Array.isArray(lenses.lenses)
+        ? await estimateOf(dir, lenses.lenses, latest.createdAt).catch((error) => {
+            console.error(
+              `tranchant server: /api/review: estimate: ${error instanceof Error ? error.stack : String(error)}`,
+            )
+            return undefined
+          })
+        : undefined
     return send(res, 200, {
       review: latest,
       ...(lenses && { lenses }),
       ...(usage && { usage }),
+      ...(estimate && { estimate }),
       findings: decisions.findings,
       runs,
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),

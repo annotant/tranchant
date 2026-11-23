@@ -1,0 +1,301 @@
+// What a review waiting to start should spend, from the project's past
+// reviews (Ready to start the review's Tokens fact and its rows' `~`). Per
+// lens: the median of its reviewer's tokens per changed file it read over its
+// last runs, times the files it reads now, plus its verifications' median
+// times its median findings; plus the summary's median. No history file: the
+// review folders the state keeps are the history, read bounded. A past
+// folder is data a fix's agent could have written: one that cannot be read
+// is left out, said once on stderr, never a failure of the page.
+import { readFile, readdir, stat } from 'node:fs/promises'
+import path from 'node:path'
+import { errorCode } from './errors.mjs'
+import { LENS_NAME, sumUsage, tokensOf } from './format.mjs'
+import { pastAgents } from './usage.mjs'
+
+/** @typedef {import('./format.mjs').Usage} Usage */
+/**
+ * What one past review spent on one lens: `reviewer` its reviewer's tokens,
+ * none when one of its reviewer's runs reported no whole figure;
+ * `verifications` one per finding whose verifiers all reported one;
+ * `findings` the findings it sent to verification, whole or not.
+ * @typedef {{ hash: string, files?: number, reviewer?: number, verifications: number[], findings: number }} PastLens
+ */
+/**
+ * @typedef {{ id: string, createdAt: number, recorded: boolean, summary?: number, lenses: Map<string, PastLens> }} PastReview
+ */
+/**
+ * What `/api/review` answers as `estimate` while a review waits: `recorded`
+ * whether a past review of the project recorded its tokens; `summary` the
+ * summary agent's median, null with none; `lenses` only those with a past
+ * run, `tokens` for the files they read now. `reviews`: the past reviews
+ * (folder names) a figure comes from, so the page counts those of the
+ * lenses on.
+ * @typedef {{ tokens: number, reviews: string[] }} Part
+ * @typedef {{ recorded: boolean, summary: Part | null, lenses: (Part & { name: string, perFile: number, runs: number })[] }} Estimate
+ */
+
+/** The most past reviews read: the last written. */
+const SCANNED = 20
+/** The runs of a lens its medians are taken over. */
+const RUNS = 5
+/** A file past this size is not read: no review's file is that large. */
+const MAX_FILE = 16 * 1024 * 1024
+/** The most an estimate says, as readUsage caps a count. */
+const MAX_TOKENS = 1e12
+
+/** A past review's sums, by folder, kept while its review.json and run files stay the same. @type {Map<string, { stamp: string, past: PastReview | undefined }>} */
+const cache = new Map()
+/** What was said of unreadable folders: once each, not at every poll. */
+const said = new Set()
+
+/** Why a read failed, in a few words. @param {unknown} error */
+const why = (error) => {
+  const code = errorCode(error)
+  if (typeof code === 'string') return code
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** @param {string} line */
+function say(line) {
+  if (said.has(line)) return
+  said.add(line)
+  console.error(`tranchant estimate: ${line}`)
+}
+
+/** The middle value, or the mean of the two middle ones; none of nothing. */
+export function median(/** @type {number[]} */ values) {
+  if (!values.length) return undefined
+  const sorted = values.toSorted((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2
+    ? (sorted[mid] ?? 0)
+    : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2
+}
+
+/**
+ * Agents' tokens summed, when every one of them reported a whole figure.
+ * @param {{ usage?: Usage }[]} agents
+ */
+function whole(agents) {
+  if (!agents.length || agents.some((one) => !one.usage || one.usage.partial))
+    return undefined
+  return tokensOf(sumUsage(agents.map((one) => one.usage)))
+}
+
+/**
+ * A file's time and size, when it is a file small enough to read: a FIFO or a
+ * device would hold the server's answer.
+ * @param {string} file
+ */
+async function sizeOf(file) {
+  const info = await stat(file)
+  if (!info.isFile() || info.size > MAX_FILE)
+    throw new Error('not a file, or larger than 16 MiB')
+  return { at: info.mtimeMs, stamp: `${info.mtimeMs}:${info.size}` }
+}
+
+/**
+ * One past review's sums, read from review.json and its run files' `end`
+ * steps; undefined when it ran no lens, or its review.json is unsound.
+ * @param {string} dir
+ * @returns {Promise<PastReview | undefined>}
+ */
+async function readPast(dir) {
+  /** @type {any} */
+  const review = JSON.parse(await readFile(path.join(dir, 'review.json'), 'utf8'))
+  const createdAt = Date.parse(review?.createdAt)
+  if (
+    !Number.isFinite(createdAt) ||
+    !Array.isArray(review.lenses) ||
+    !review.lenses.length
+  )
+    return undefined
+  const agents = await pastAgents(dir)
+  const of = (/** @type {string} */ kind, /** @type {string} */ lens) =>
+    agents.filter((one) => one.kind === kind && one.lens === lens)
+  /** @type {Map<string, PastLens>} */
+  const lenses = new Map()
+  for (const lens of review.lenses) {
+    if (
+      typeof lens?.name !== 'string' ||
+      !LENS_NAME.test(lens.name) ||
+      typeof lens.hash !== 'string'
+    )
+      continue
+    /** @type {Map<string, { usage?: Usage }[]>} */
+    const byFinding = new Map()
+    for (const one of of('verifiers', lens.name))
+      if (one.finding)
+        byFinding.set(one.finding, [...(byFinding.get(one.finding) ?? []), one])
+    const reviewer = whole(of('reviewers', lens.name))
+    lenses.set(lens.name, {
+      hash: lens.hash,
+      ...(Number.isSafeInteger(lens.files) && { files: lens.files }),
+      ...(reviewer !== undefined && { reviewer }),
+      verifications: [...byFinding.values()].flatMap((runs) => {
+        const tokens = whole(runs)
+        return tokens === undefined ? [] : [tokens]
+      }),
+      findings: byFinding.size,
+    })
+  }
+  const summary = whole(agents.filter((one) => one.kind === 'summary'))
+  return {
+    id: path.basename(dir),
+    createdAt,
+    recorded: agents.some((one) => one.usage),
+    ...(summary !== undefined && { summary }),
+    lenses,
+  }
+}
+
+/**
+ * One past review, from the cache while its files stay the same: a completed
+ * review is read once.
+ * @param {string} dir
+ * @param {string} head review.json's stamp.
+ */
+async function pastReview(dir, head) {
+  const runs = path.join(dir, 'reviewers')
+  const names = await readdir(runs).catch((error) => {
+    if (errorCode(error) === 'ENOENT') return []
+    throw error
+  })
+  const files = await Promise.all(
+    names
+      .filter((name) => name.endsWith('.jsonl'))
+      .toSorted()
+      .map(async (name) => `${name}=${(await sizeOf(path.join(runs, name))).stamp}`),
+  )
+  const stamp = [head, ...files].join('\n')
+  const kept = cache.get(dir)
+  if (kept?.stamp === stamp) return kept.past
+  try {
+    const past = await readPast(dir)
+    cache.set(dir, { stamp, past })
+    return past
+  } catch (error) {
+    // Unsound as it stands: not read again until it changes.
+    cache.set(dir, { stamp, past: undefined })
+    throw error
+  }
+}
+
+/**
+ * The project's past reviews that ran lenses before this one, the newest
+ * first: at most SCANNED read, the last written.
+ * @param {string} dir The review waiting to start: never one of them.
+ * @param {number} before Its creation, in ms: a past review was created before.
+ */
+async function pastReviews(dir, before) {
+  const root = path.dirname(dir)
+  const names = await readdir(root).catch((error) => {
+    say(`${root}: ${why(error)}, no past review read`)
+    return []
+  })
+  const stamped = await Promise.all(
+    names
+      .map((name) => path.join(root, name))
+      .filter((one) => one !== dir)
+      .map((one) =>
+        sizeOf(path.join(one, 'review.json')).then(
+          (info) => ({ dir: one, ...info }),
+          (error) => {
+            const code = errorCode(error)
+            if (code !== 'ENOENT' && code !== 'ENOTDIR')
+              say(`${one}: ${why(error)}, left out`)
+            return undefined
+          },
+        ),
+      ),
+  )
+  const newest = stamped
+    .flatMap((one) => (one ? [one] : []))
+    .toSorted((a, b) => b.at - a.at)
+    .slice(0, SCANNED)
+  const kept = new Set(newest.map((one) => one.dir))
+  for (const one of cache.keys())
+    if (path.dirname(one) === root && !kept.has(one)) cache.delete(one)
+  const read = await Promise.all(
+    newest.map((one) =>
+      pastReview(one.dir, one.stamp).catch((error) => {
+        say(`${one.dir}: ${why(error)}, left out`)
+        return undefined
+      }),
+    ),
+  )
+  return read
+    .flatMap((one) => (one && one.createdAt < before ? [one] : []))
+    .toSorted((a, b) => b.createdAt - a.createdAt)
+}
+
+/**
+ * A lens's last runs that count, the newest first: the same prompt as now
+ * (its hash; unknown, its last run's), its reviewer whole, and on at least one
+ * file.
+ * @param {PastReview[]} past
+ * @param {string} name
+ * @param {string | undefined} hash
+ */
+function runsOf(past, name, hash) {
+  /** @type {{ review: PastReview, lens: PastLens & { files: number, reviewer: number } }[]} */
+  const runs = []
+  let prompt = hash
+  for (const review of past) {
+    const lens = review.lenses.get(name)
+    if (!lens) continue
+    prompt ??= lens.hash
+    // Its prompt changed: what ran before says nothing of what runs now, back to it or not.
+    if (lens.hash !== prompt) break
+    const { files, reviewer } = lens
+    if (!files || files < 1 || reviewer === undefined) continue
+    runs.push({ review, lens: { ...lens, files, reviewer } })
+    if (runs.length === RUNS) break
+  }
+  return runs
+}
+
+const capped = (/** @type {number} */ tokens) => Math.min(Math.round(tokens), MAX_TOKENS)
+
+/**
+ * The estimate of a review waiting to start, for each of its lenses that
+ * reads a changed file, on or off: the page sums those its switches turn on.
+ * @param {string} dir The review's folder.
+ * @param {{ name: string, files?: number, hash?: string }[]} rows lenses.json's rows.
+ * @param {string} createdAt The review's: what was created after is not its past.
+ * @returns {Promise<Estimate>}
+ */
+export async function estimateOf(dir, rows, createdAt) {
+  const before = Date.parse(createdAt)
+  const past = await pastReviews(dir, Number.isFinite(before) ? before : Infinity)
+  if (!past.some((one) => one.recorded))
+    return { recorded: false, summary: null, lenses: [] }
+  const summaries = past.filter((one) => one.summary !== undefined).slice(0, RUNS)
+  const summary = median(summaries.map((one) => one.summary ?? 0))
+  /** @type {Estimate['lenses']} */
+  const lenses = []
+  for (const row of rows) {
+    const files = row.files ?? 0
+    if (!Number.isSafeInteger(files) || files < 1 || !LENS_NAME.test(row.name)) continue
+    const runs = runsOf(past, row.name, row.hash)
+    if (!runs.length) continue
+    const perFile = median(runs.map((run) => run.lens.reviewer / run.lens.files)) ?? 0
+    const verification = median(runs.flatMap((run) => run.lens.verifications)) ?? 0
+    const findings = median(runs.map((run) => run.lens.findings)) ?? 0
+    lenses.push({
+      name: row.name,
+      tokens: capped(perFile * files + verification * findings),
+      perFile: capped(perFile),
+      runs: runs.length,
+      reviews: runs.map((run) => run.review.id),
+    })
+  }
+  return {
+    recorded: true,
+    summary:
+      summary === undefined
+        ? null
+        : { tokens: capped(summary), reviews: summaries.map((one) => one.id) },
+    lenses,
+  }
+}

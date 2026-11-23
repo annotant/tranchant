@@ -40,6 +40,8 @@ export interface LensRow {
   /** With `ready`: against the project's previous review. */
   change?: 'unchanged' | 'updated' | 'new'
   version?: string
+  /** With `ready`: its built prompt's hash. */
+  hash?: string
   /** With `failed`; with `cleaning: 'failed'`, why its last version runs. */
   reason?: string
   fix?: string
@@ -481,6 +483,26 @@ export interface ReviewUsage {
   running: boolean
 }
 
+/**
+ * What a review waiting to start should spend, from the project's past
+ * reviews (`/api/review`'s `estimate`). The page sums the lenses its switches
+ * turn on.
+ */
+export interface Estimate {
+  /** Whether a past review of the project recorded its tokens. */
+  recorded: boolean
+  /** The summary agent's median; null with none. */
+  summary: EstimatePart | null
+  /** Each lens that reads a changed file and has a past run, on or off. */
+  lenses: (EstimatePart & { name: string; perFile: number; runs: number })[]
+}
+
+/** A figure of the estimate, and the past reviews (folder names) it comes from. */
+interface EstimatePart {
+  tokens: number
+  reviews: string[]
+}
+
 /** What `GET /api/review` answers. */
 export interface ReviewPayload {
   review: Review
@@ -495,6 +517,8 @@ export interface ReviewPayload {
   discussions?: Record<string, Discussion>
   /** Absent from older servers, and when it could not be read. */
   usage?: ReviewUsage
+  /** While the review waits to start; absent from older servers, and when it could not be read. */
+  estimate?: Estimate
   head: { reviewed: string; current: string | null }
 }
 

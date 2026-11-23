@@ -2402,7 +2402,15 @@ test('a review waiting to start: Build and Start print their line with the choic
   const early = await send('start', { lenses: {}, remember: false })
   assert.equal(early.status, 409)
   await assert.rejects(readFile(choices))
+  // Not waiting yet: no estimate read.
+  assert.equal((await json(await fetch(`${server.base}/api/review`))).estimate, undefined)
   await waiting()
+  // While it waits, what it should spend: no past review of the project recorded any.
+  assert.deepEqual((await json(await fetch(`${server.base}/api/review`))).estimate, {
+    recorded: false,
+    summary: null,
+    lenses: [],
+  })
   assert.equal(
     (await send('start', { lenses: { bugs: 'no' }, remember: false })).status,
     400,
