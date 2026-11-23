@@ -295,8 +295,8 @@ One issue each. Piece 1 comes first; 2 to 5 follow it, in any order.
    the "what it cost" half of the hill-climbing study's piece 2 (#112);
    whichever lands first, the other reads it.
 2. **The total in the header and the panel by kind and by lens** (#140). The
-   chip, its states, the `#tokens` screen and its two tabs, the link from a lens's row to
-   its reviewer's report.
+   chip, its states, the `#tokens` screen and its two tabs, the link from a
+   lens's row to its reviewer's report.
 3. **A finding's cost in its run** (#141). The Run section's figures, the
    verification's and the discussion's lines, the finding's sum.
 4. **The estimate on Ready to start the review** (#142). The per-lens medians
