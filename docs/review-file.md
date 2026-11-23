@@ -427,7 +427,7 @@ turned on joins it, in place of one of the same name; the settings are not
 written.
 
 The page's center shows why it waits, the target, the lenses that run and
-the files each reads, the agents, the token note past 12 reviewers, a
+the files each reads, the agents, the tokens it should spend (below), a
 switch on each lens, **Remember these choices** and **Start the review**,
 refused while a lens that is on cannot be built. A switch acts on this
 review only; checked, Remember saves them on Start as Settings › Lenses
@@ -447,6 +447,34 @@ The server takes no second Start or Build until `lenses.json` moves (409),
 nor `remember` on a run's own recipe; Remember checks the settings file
 before it writes anything. `/tranchant stop` refuses a review that waits,
 or whose Start is at work.
+
+**The estimate.** While a review waits, `/api/review` answers `estimate`
+(`lib/estimate.mjs`), from the project's past reviews created before it,
+the 20 whose `review.json` was last written: their `review.json` and their
+run files' `end` steps only, each review's sums kept in the server's memory
+while its `review.json` and run files stay the same (a `complete` review is
+read once). A file that is not a regular file, or past 16 MiB, leaves its
+review out; so does a `review.json` that does not parse or has no date:
+said once on stderr, never a failure. Per lens that reads a changed file,
+on or off: the median of its reviewer's tokens per file read (`files` on
+`review.json`'s `lenses`) over its last 5 runs, times the files it reads
+now, plus the median of its verifications (one per finding, its verifiers
+summed, left out when one has no whole figure) times the median of the
+findings it sent to verification over the same runs. A run is skipped when
+it read no file or its reviewer has no whole figure (none, or `partial`);
+its history stops at the first run whose prompt `hash` is not the row's
+(`hash` on a ready row of `lenses.json`; a lens not built takes its last
+run's), back to it later or not. A lens with no past run is left out.
+`estimate` is `{ recorded, summary, lenses: [ { name, tokens, perFile, runs, reviews } ] }`:
+`recorded` whether a past review recorded any figure, `summary`
+`{ tokens, reviews }`, the summary agent's median over the last 5 that have
+one (`null`: none), `reviews` the past reviews' folder names a figure comes
+from. The page sums the lenses its switches turn on (one that cannot be
+built left out) and the summary: the **Tokens** fact (`about 3.5M tokens`,
+from how many past reviews, and the lenses on with no past run, not
+counted), `~` on each row, the figure beside Start. With a figure, the
+token note past 12 reviewers goes; with none (`recorded` false, or no lens
+on with a past run), the fact says why and the note stays.
 
 ## Pause, stop and reset
 
@@ -807,7 +835,7 @@ locks and show no progress.
 | `GET /`               | The page.                                                                                                                                                                                                                                                                                                                                                          |
 | `GET /page.js`        | Its bundle.                                                                                                                                                                                                                                                                                                                                                        |
 | `GET /api/health`     | `{ ok: true, review: "<id>", version: "<plugin version>" }`.                                                                                                                                                                                                                                                                                                       |
-| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head, lenses?, usage? }` (`usage`: [what the agents spend](#what-the-agents-spend)): `lenses` the Lenses step's `lenses.json` once it started (`{ state: "resolving" \| "ready" \| "refused" \| "waiting", group?, notes?, wait?, own?, changed?, choices?, problem?, lenses: [ { name, source, state: "resolving" \| "ready" \| "failed" \| "idle", files?, off?, offInSettings?, change?, version?, reason?, fix?, scope?, cleaning?: "running" \| "again" \| "failed" } ] }`); the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
+| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head, lenses?, usage?, estimate? }` (`usage`: [what the agents spend](#what-the-agents-spend); `estimate` while the review waits: [the estimate](#waiting-to-start)): `lenses` the Lenses step's `lenses.json` once it started (`{ state: "resolving" \| "ready" \| "refused" \| "waiting", group?, notes?, wait?, own?, changed?, choices?, problem?, lenses: [ { name, source, state: "resolving" \| "ready" \| "failed" \| "idle", files?, off?, offInSettings?, change?, version?, hash?, reason?, fix?, scope?, cleaning?: "running" \| "again" \| "failed" } ] }`); the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
 | `GET /api/account`    | `{ username, tool }`: the account `tool` posts as, `glab api user`'s `username` or `gh api user`'s `login`, run from `project` and kept once known; `null` when the tool cannot say (not installed, not logged in, an error), asked again next time. `tool` is `?tool=glab` or `?tool=gh` when the query names one (the batch bar asks for glab's: MR comments go through glab), else the settings' `postWith`, or with `auto` `gh` on a GitHub tracker and `glab` otherwise. The page names it in a post's confirmation, or says "your glab account", and in the Settings. |
 | `GET /api/settings`, `PUT /api/settings` | The user's settings file, read and written, with the recipe in force for the review's project, every lens that could run on it and the lenses being cleaned: see [the settings file](settings.md). |
 | `POST /api/review/start`, `POST /api/review/build` | `{ lenses: { <name>: true \| false }, remember, group? }`: on a review `preparing` whose `lenses.json` is `waiting` (else 409), the page's choices to `choices.json`, then `START` or `BUILD`. `group`, a group's name or `null` for every lens that is on, plans the lenses again with it; Start with a group other than the one `lenses.json` names answers 409. With `remember`, Start saves them first as Settings › Lenses does, or in the group the review runs; a settings or groups file it cannot read, a lens it cannot change, or a group left with no lens answers 409. 400 for unsound choices. |

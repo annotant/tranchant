@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { useState } from 'react'
 import { expect, test, vi } from 'vitest'
 import App from '../src/App'
-import type { LensesProgress, LensRow, StartChoices } from '../src/domain'
+import type { Estimate, LensesProgress, LensRow, StartChoices } from '../src/domain'
 import { LensesCenter, ReadyCenter } from '../src/LensesStep'
 import { SettingsView } from '../src/SettingsView'
 import type { StoredSettings } from '../src/settings'
@@ -40,7 +40,7 @@ const REVIEW = {
 }
 
 /** The ready screen, its switches held as the page holds them; `onStart` resolves. */
-function renderReady(step: LensesProgress = waiting, cap = 3) {
+function renderReady(step: LensesProgress = waiting, cap = 3, estimate?: Estimate) {
   const onStart = vi.fn((_build: boolean) => Promise.resolve())
   function Held() {
     const [choices, setChoices] = useState<StartChoices>({ lenses: {}, remember: false })
@@ -48,6 +48,7 @@ function renderReady(step: LensesProgress = waiting, cap = 3) {
       <ReadyCenter
         step={step}
         review={REVIEW}
+        estimate={estimate}
         choices={choices}
         cap={cap}
         model="claude-sonnet-5-5"
@@ -187,6 +188,132 @@ test('past 12 reviewers the token note warns, without blocking Start', () => {
   expect(screen.queryByRole('note')).toBeNull()
 })
 
+const ESTIMATE: Estimate = {
+  recorded: true,
+  summary: { tokens: 96_000, reviews: ['r1', 'r2'] },
+  lenses: [
+    { name: 'bugs', tokens: 420_000, perFile: 30_000, runs: 5, reviews: ['r1', 'r3'] },
+    {
+      name: 'performance',
+      tokens: 300_000,
+      perFile: 25_000,
+      runs: 2,
+      reviews: ['r4'],
+    },
+  ],
+}
+
+const hint = () =>
+  screen.getByRole('button', { name: 'Start the review' }).nextElementSibling
+
+test('the ready screen estimates the tokens, and the figure follows the switches', () => {
+  renderReady(waiting, 3, ESTIMATE)
+  expect(fact('Tokens')).toBe(
+    'about 516k tokens, from 3 past reviews in this project: each lens’s tokens per file read, its verifiers and the summary · + 1 lens with no past run, not counted',
+  )
+  expect(within(rowOf('bugs')).getByText('~420k').getAttribute('title')).toBe(
+    '30k tokens per file read, the median of its last 5 reviews here, × 14 files, plus its verifiers',
+  )
+  expect(within(rowOf('abac')).getByText('no past run')).toBeTruthy()
+  // Off, or reading none of the change: no figure on its row.
+  expect(rowOf('performance').textContent).not.toContain('~')
+  expect(rowOf('sql').textContent).not.toContain('no past run')
+  expect(hint()?.textContent).toBe('2 reviewers start, 3 at a time · about 516k tokens')
+
+  fireEvent.click(switchOf('performance'))
+  expect(within(rowOf('performance')).getByText('~300k')).toBeTruthy()
+  // Its past review is one more the figure comes from.
+  expect(fact('Tokens')).toMatch(/^about 816k tokens, from 4 past reviews/)
+  expect(hint()?.textContent).toBe('3 reviewers start, 3 at a time · about 816k tokens')
+  fireEvent.click(switchOf('abac'))
+  expect(fact('Tokens')).not.toContain('no past run')
+})
+
+test('with an estimate the warning past 12 goes; without one it stays, and the fact says why', () => {
+  const many: LensRow[] = Array.from({ length: 13 }, (_, i) => ({
+    name: `l${i}`,
+    source: `tranchant:l${i}`,
+    state: 'ready',
+    files: 1,
+  }))
+  const priced: Estimate = {
+    ...ESTIMATE,
+    lenses: many.map((row) => ({
+      name: row.name,
+      tokens: 1000,
+      perFile: 1000,
+      runs: 1,
+      reviews: ['r1'],
+    })),
+  }
+  const { unmount } = render(
+    <ReadyCenter
+      step={{ ...waiting, lenses: many }}
+      review={REVIEW}
+      estimate={priced}
+      choices={{ lenses: {}, remember: false }}
+      cap={3}
+      model={undefined}
+      onChoices={() => undefined}
+      onStart={() => Promise.resolve()}
+    />,
+  )
+  expect(fact('Tokens')).toMatch(/^about 109k tokens/)
+  expect(screen.queryByRole('note')).toBeNull()
+  unmount()
+
+  renderReady({ ...waiting, lenses: many }, 3, {
+    recorded: false,
+    summary: null,
+    lenses: [],
+  })
+  expect(fact('Tokens')).toBe(
+    'no estimate yet: no review in this project has recorded its tokens. The next one will.',
+  )
+  expect(screen.getByRole('note').textContent).toContain('13 reviewers.')
+  expect(rowOf('l0').textContent).not.toContain('no past run')
+  expect(hint()?.textContent).toBe('13 reviewers start, 3 at a time.')
+})
+
+test('past reviews recorded, but none of these lenses ran: no figure, the warning stays', () => {
+  renderReady(waiting, 3, {
+    recorded: true,
+    summary: { tokens: 50_000, reviews: ['r1'] },
+    lenses: [],
+  })
+  expect(fact('Tokens')).toMatch(/^no estimate: none of these lenses has a past run/)
+  expect(within(rowOf('bugs')).getByText('no past run')).toBeTruthy()
+  expect(hint()?.textContent).toBe('2 reviewers start, 3 at a time.')
+})
+
+test('a lens that cannot be built is not in the figure; no summary, none said', () => {
+  const failed: LensesProgress = {
+    ...waiting,
+    lenses: [
+      { name: 'bugs', source: 'tranchant:bugs', state: 'ready', files: 14 },
+      {
+        name: 'performance',
+        source: 'tranchant:performance',
+        state: 'failed',
+        files: 12,
+        reason: 'not found',
+      },
+    ],
+  }
+  renderReady(failed, 3, { ...ESTIMATE, summary: null })
+  expect(fact('Tokens')).toBe(
+    'about 420k tokens, from 2 past reviews in this project: each lens’s tokens per file read and its verifiers',
+  )
+  expect(rowOf('performance').textContent).not.toContain('~')
+})
+
+test('an older server sends no estimate: no Tokens fact, no figure on the rows', () => {
+  renderReady()
+  expect(screen.queryByText('Tokens')).toBeNull()
+  expect(rowOf('bugs').querySelector('.tr-lens-row-est')).toBeNull()
+  expect(hint()?.textContent).toBe('2 reviewers start, 3 at a time.')
+})
+
 test('a run of its own recipe has no choice to remember', () => {
   renderReady({ ...waiting, own: true })
   expect(screen.queryByRole('checkbox', { name: 'Remember these choices' })).toBeNull()
@@ -196,11 +323,13 @@ test('the page waits with a ready chip, and Start posts the choices', async () =
   const server = fakeServer({
     ...payload({ review: { status: 'preparing', findings: [] } }),
     lenses: waiting,
+    estimate: ESTIMATE,
   })
   render(<App />)
   expect(
     await screen.findByRole('heading', { name: 'Ready to start the review' }),
   ).toBeTruthy()
+  expect(fact('Tokens')).toMatch(/^about 516k tokens/)
   expect(screen.getByText('ready to start')).toBeTruthy()
   expect(screen.queryByText('building the lenses')).toBeNull()
   fireEvent.click(switchOf('performance'))

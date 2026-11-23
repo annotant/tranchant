@@ -370,6 +370,14 @@ async function countedOf(dir, review, decisions, file, since) {
   return counted
 }
 
+/**
+ * The review agents of a past review, each with its final figure or none:
+ * its run files only, nothing live (lib/estimate.mjs).
+ * @param {string} dir
+ */
+export const pastAgents = (dir) =>
+  countedOf(dir, { findings: [] }, {}, { version: 1, live: [], unclaimed: [] }, Infinity)
+
 /** A cleaning's agent's name, as the hooks spawn it (register.ts's spawnCleaner): its live figure's key. */
 export const cleanerName = (/** @type {string} */ id) =>
   `cl-${id.replace(/[^\w-]/g, '').slice(0, 8)}`

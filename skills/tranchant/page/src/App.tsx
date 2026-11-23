@@ -752,6 +752,7 @@ export default function App() {
           <ReadyCenter
             step={payload.lenses}
             review={review}
+            estimate={payload.estimate}
             choices={startChoices}
             cap={values?.maxReviewAgents}
             model={values?.reviewModel}
