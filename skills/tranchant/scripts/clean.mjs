@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // clean.mjs [--project <root>] --find
 //   | --prepare <source> --to <global | local> [--name <name>]
-//   | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped]
+//   | --again <name> --scope <global | local> [--review <dir>] | --start <id>
+//   | --check <folder> [--stopped] [--usage <json>]
 //   | --drop <id>
 // What runs around a lens's cleaning agent (lib/cleaning.mjs), from the
 // session's folder or for --project.
@@ -9,7 +10,8 @@
 //   `.claude/agents/*review*`: one `CANDIDATE <path>` each, from the
 //   project's root, or `NO_CANDIDATE`. The user names or confirms one.
 // --prepare: a new lens's cleaning (/tranchant import); --again: a stored
-//   lens's, its source changed; --start: one the page made, which waits no
+//   lens's, its source changed (`--review`: the review it is cleaned for,
+//   which counts its tokens); --start: one the page made, which waits no
 //   more from then on. Each prints
 //   `CLEANING <json>`, what the agent is given: `{ id, dir, project, name,
 //   scope, again, source, file, folder, version?, rules?, reviewer?,
@@ -21,14 +23,15 @@
 //   `process` for a whole review process, its reviewers to pick on the page)
 //   or `CLEAN_FAILED <reason>`. With --stopped, the agent was stopped or
 //   never started: the cleaning fails, and a lens cleaned again keeps no
-//   failure on its source.
+//   failure on its source. With --usage, what its agent spent, checked, is
+//   kept in cleaning.json: unsound, it is left out.
 // --drop: one the page made that waited for an agent and gets none
 //   (/tranchant stop): it fails as stopped, `CLEAN_FAILED <reason>`.
 // Any refusal prints `CLEAN_REFUSED <reason>` and exits 2.
 import { execFileSync } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
-import { oneLine } from './lib/format.mjs'
+import { oneLine, readUsage } from './lib/format.mjs'
 import {
   CleaningRefusal,
   agentInput,
@@ -72,6 +75,15 @@ function projectRoot() {
 
 const project = projectRoot()
 
+/** `text` as JSON; none, or not JSON, undefined. @param {string | undefined} text */
+function parsed(text) {
+  try {
+    return text ? JSON.parse(text) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Runs `step`; a refusal of the cleaning is printed, anything else thrown. */
 async function guarded(/** @type {() => Promise<void>} */ step) {
   try {
@@ -108,8 +120,10 @@ if (checked || dropped) {
     const dir = dropped
       ? (await cleaningOf(project, dropped)).dir
       : path.resolve(checked ?? '')
+    const usage = readUsage(parsed(flag('--usage')))
     return checkCleaning(dir, {
       stopped: Boolean(dropped) || process.argv.includes('--stopped'),
+      ...(usage && { usage }),
     })
   })().catch((error) =>
     refuse(
@@ -133,12 +147,18 @@ await guarded(async () => {
     const name = flag('--name')
     made = await createCleaning({ project, source, scope: to, ...(name && { name }) })
   } else if (again) {
-    made = await cleanAgain({ project, scope: flag('--scope') ?? '', name: again })
+    const review = flag('--review')
+    made = await cleanAgain({
+      project,
+      scope: flag('--scope') ?? '',
+      name: again,
+      ...(review && { review }),
+    })
   } else if (id) {
     made = await startedCleaning(project, id)
   } else {
     console.error(
-      'usage: clean.mjs [--project <root>] --find | --prepare <source> --to <global | local> [--name <name>] | --again <name> --scope <global | local> | --start <id> | --check <folder> [--stopped] | --drop <id>',
+      'usage: clean.mjs [--project <root>] --find | --prepare <source> --to <global | local> [--name <name>] | --again <name> --scope <global | local> [--review <dir>] | --start <id> | --check <folder> [--stopped] [--usage <json>] | --drop <id>',
     )
     process.exit(2)
   }

@@ -112,6 +112,7 @@ import {
   writeSettings,
 } from './lib/settings.mjs'
 import { trackerOf } from './lib/tracker.mjs'
+import { reviewUsage } from './lib/usage.mjs'
 import {
   MAX_ISSUE_BODY,
   MAX_ISSUE_TITLE,
@@ -1154,9 +1155,19 @@ async function handle(req, res) {
         currentHead(),
         readLensesStep(),
       ])
+    // Summed here, never in the browser; unreadable, the review reads as one with no usage.
+    const usage = await reviewUsage(dir, {
+      review: latest,
+      decisions: decisions.findings,
+      since: SESSION_SINCE,
+    }).catch((error) => {
+      console.error(`tranchant server: /api/review: usage: ${String(error)}`)
+      return undefined
+    })
     return send(res, 200, {
       review: latest,
       ...(lenses && { lenses }),
+      ...(usage && { usage }),
       findings: decisions.findings,
       runs,
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
@@ -2164,8 +2175,12 @@ async function changes() {
 
 /** Whether READY was printed: the hooks read it first, LANDED only after. */
 let ready = false
-/** The findings LANDED was printed for, once each. @type {Set<string>} */
-const landed = new Set()
+/**
+ * The findings LANDED was printed for, once each landing, with their
+ * `addedAt`: a reset and a landing between two reads leave only it changed.
+ * @type {Map<string, string | undefined>}
+ */
+const landed = new Map()
 
 /**
  * LANDED for each finding not verified yet, while a review whose findings
@@ -2175,13 +2190,14 @@ const landed = new Set()
 function announceLanded(latest) {
   // A finding gone (removed, or a reset) lands again under its id: said again.
   if (latest)
-    for (const id of landed)
-      if (!latest.findings.some((finding) => finding.id === id)) landed.delete(id)
+    for (const [id, addedAt] of landed)
+      if (!latest.findings.some((one) => one.id === id && one.addedAt === addedAt))
+        landed.delete(id)
   if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing' || latest.stopped)
     return
   for (const finding of latest.findings) {
     if (finding.verified === true || landed.has(finding.id)) continue
-    landed.add(finding.id)
+    landed.set(finding.id, finding.addedAt)
     print(`LANDED ${finding.id}`)
   }
 }

@@ -1324,6 +1324,44 @@ export function createStore(dir) {
     },
 
     /**
+     * The claim's Bash call names its agent (`agent_id`): stamped on the run
+     * the claim opened, when it names none, so its figure finds it.
+     * @param {string} id
+     * @param {string} agent
+     * @returns {Promise<boolean>} Whether a run was stamped.
+     */
+    stamp(id, agent) {
+      return exclusive(async () => {
+        const decisions = await readDecisions()
+        const entry = decisions.findings[id]
+        const run = entry && currentRun(entry)
+        if (!run || run.agent) return false
+        run.agent = agent
+        await writeDecisions(decisions)
+        return true
+      })
+    },
+
+    /**
+     * What agent `agent` spent, on the last run it claimed, ended or not
+     * (done.mjs and ask.mjs end the run before the turn ends).
+     * @param {string} id
+     * @param {string} agent
+     * @param {import('./format.mjs').Usage} usage
+     * @returns {Promise<boolean>} Whether a run took it: none, it is unclaimed.
+     */
+    recordUsage(id, agent, usage) {
+      return exclusive(async () => {
+        const decisions = await readDecisions()
+        const run = decisions.findings[id]?.runs.findLast((one) => one.agent === agent)
+        if (!run) return false
+        run.usage = usage
+        await writeDecisions(decisions)
+        return true
+      })
+    },
+
+    /**
      * The finding's agent ended its turn with the finding still `working`,
      * neither done nor asked about: it fails, so the reviewer can send it
      * again. Only the run `agent` claimed, or one that names no agent.

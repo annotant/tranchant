@@ -64,7 +64,9 @@ pattern, read how annotant does it.
   picker lists (the plugins', the `.claude` folders', a folder of the
   allowed roots: names only); `lib/plan.mjs` plans the
   lenses a review runs on the change (`prepare.mjs`, and `lenses.mjs` again
-  for a review waiting to start).
+  for a review waiting to start); `lib/usage.mjs` owns `usage.json` and sums
+  what the review's agents spent (`/api/review`'s `usage`), each figure read
+  through `lib/format.mjs`'s `readUsage`.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.

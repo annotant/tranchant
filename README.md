@@ -145,7 +145,9 @@ checklist) and filters them by name, origin and finding kind. See [the settings 
 ## Install
 
 Requires Claude Code 2.1.287 or later (its mods), Node.js 22.12 or later,
-and `glab` logged in when you post on GitLab.
+and `glab` logged in when you post on GitLab. Before Claude Code 2.1.326,
+the tokens each agent spent are recorded from its last turn only, marked
+partial.
 
 Straight from GitHub, no clone needed:
 
