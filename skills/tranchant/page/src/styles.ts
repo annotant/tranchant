@@ -316,6 +316,8 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-tk-row--flag > :first-child { box-shadow: inset 3px 0 0 var(--tr-warn); }
 .tr-tk-state { color: var(--tr-muted); font-size: 12px; white-space: nowrap; }
 .tr-tk-foot { margin: 0; color: var(--tr-muted); font-size: 12.5px; }
+.tr-tk-runcost { margin-left: auto; color: var(--tr-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tr-tk-dim { font-style: italic; }
 .tr-lns { display: flex; flex-direction: column; gap: 14px; }
 .tr-lns-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .tr-lns-intro p { max-width: 70ch; }

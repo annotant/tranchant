@@ -21,6 +21,7 @@ import {
   repliesOn,
   staleMrReason,
   type Review,
+  type ReviewUsage,
   STATE_DETAILS,
   stateClass,
   stateLabel,
@@ -39,6 +40,7 @@ import { FixChanges } from './FixChanges'
 import { Markdown } from './markdown'
 import { RunPanel } from './RunPanel'
 import { languageOfFile } from './syntax'
+import { findingCostOf } from './tokens'
 
 interface Props {
   review: Review
@@ -49,6 +51,8 @@ interface Props {
   discussion?: Thread | undefined
   /** No verifier confirmed it yet. */
   unverified?: boolean
+  /** What the review's agents spent: its Run section says the finding's part. */
+  usage?: ReviewUsage | undefined
   disabled: boolean
   /** Where issues go: undefined until known, `kind` null when nowhere. */
   tracker?: Tracker | undefined
@@ -252,6 +256,7 @@ export function FindingDetail({
   steps,
   discussion,
   unverified = false,
+  usage,
   disabled,
   tracker,
   onDecide,
@@ -884,7 +889,13 @@ export function FindingDetail({
         />
       )}
 
-      <RunPanel id={finding.id} record={record} steps={steps} disabled={disabled} />
+      <RunPanel
+        id={finding.id}
+        record={record}
+        steps={steps}
+        disabled={disabled}
+        cost={findingCostOf(usage, finding, record, discussion)}
+      />
     </article>
   )
 }

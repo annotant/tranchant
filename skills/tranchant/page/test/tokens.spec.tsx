@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import type {
+  Discussion,
   Finding,
+  FindingUsage,
   ReviewAgent,
   ReviewPayload,
   ReviewUsage,
@@ -11,6 +13,7 @@ import type {
 import { applyTheme } from '../src/theme'
 import {
   chipOf,
+  findingCostOf,
   formatTokens,
   kindRows,
   type LensInput,
@@ -109,6 +112,7 @@ function usage(fields: Partial<ReviewUsage> = {}): ReviewUsage {
       kinds: [{ kind: 'reviewers', agents: 2, usage: figure(200) }],
       lenses: [],
     },
+    findings: [],
     notReported: [],
     partial: [],
     running: false,
@@ -635,4 +639,337 @@ test("a lens's report is scrolled to, and the chip back reopens the tab left", a
   expect(
     await screen.findByRole('tab', { name: /^By lens/, selected: true }),
   ).toBeDefined()
+})
+
+/** The page, correctness-1 open. */
+async function openFirst(data: ReviewPayload) {
+  await renderPage(data)
+  await screen.findByRole('navigation', { name: 'Findings' })
+  const first = FOUND[0]!
+  fireEvent.click(screen.getByText(first.title, { selector: '.tr-item-title' }))
+  await screen.findByRole('heading', { level: 2, name: first.title })
+}
+
+/** A run of a finding's record. */
+const ran = (id: string, outcome?: 'fixed' | 'stopped', summary?: string) => ({
+  id,
+  model: 'claude-opus-5-5',
+  startedAt: '2026-11-23T10:00:00Z',
+  ...(outcome && { outcome }),
+  ...(summary && { summary }),
+})
+
+/** correctness-1: verified, discussed once, a run stopped and one that fixed it. */
+function spentOn(fields: Partial<FindingUsage> = {}): FindingUsage {
+  return {
+    id: 'correctness-1',
+    fixes: figure(246),
+    verifier: { usage: figure(38) },
+    discussion: { usage: figure(22) },
+    runs: [
+      { id: 'run-1', usage: figure(64) },
+      { id: 'run-2', usage: figure(182) },
+    ],
+    unclaimed: null,
+    usage: figure(306),
+    ...fields,
+  }
+}
+
+const DISCUSSED: Discussion = {
+  messages: [
+    { by: 'reviewer', text: 'Why not a default tenant?', at: '2026-11-23T09:00:00Z' },
+    { by: 'agent', text: 'It would hide the bug.', at: '2026-11-23T09:01:00Z' },
+  ],
+}
+
+const RAN = { runs: [ran('run-1', 'stopped'), ran('run-2', 'fixed')] }
+
+test("a finding's cost: its verification, its discussion, a stopped run and a fixed one, and their sum", () => {
+  const cost = findingCostOf(
+    usage({ findings: [spentOn()] }),
+    { id: 'correctness-1', verified: true },
+    RAN,
+    DISCUSSED,
+  )
+  expect(cost?.rows).toEqual([
+    {
+      key: 'verification',
+      name: 'verified',
+      model: SONNET,
+      chip: { text: 'Confirmed', tone: 'confirmed' },
+      cost: { text: '38k tokens' },
+    },
+    {
+      key: 'discussion',
+      name: 'discussed',
+      model: SONNET,
+      chip: { text: '1 answer', tone: 'still' },
+      cost: { text: '22k tokens' },
+    },
+  ])
+  expect([...(cost?.runs ?? [])]).toEqual([
+    [
+      'run-1',
+      { text: '64k tokens', title: 'Its last request was cut: its output is estimated' },
+    ],
+    ['run-2', { text: '182k tokens' }],
+  ])
+  expect(cost?.foot).toBe(
+    '306k tokens on this finding: its verification, its discussion and its two runs.',
+  )
+})
+
+test("a finding's cost: a run not reported makes the sum a floor, and says which", () => {
+  const cost = findingCostOf(
+    usage({
+      findings: [
+        spentOn({
+          runs: [
+            { id: 'run-1', usage: figure(64) },
+            { id: 'run-2', usage: null },
+          ],
+          usage: figure(124, { partial: true }),
+        }),
+      ],
+    }),
+    { id: 'correctness-1', verified: true },
+    RAN,
+    DISCUSSED,
+  )
+  expect(cost?.runs.get('run-2')).toEqual({
+    text: 'not reported',
+    title: 'Its agent reported no tokens: its Claude Code session may have closed first',
+    dim: true,
+  })
+  expect(cost?.foot).toBe(
+    'At least 124k tokens on this finding: run-2 did not report its tokens.',
+  )
+})
+
+test("a finding's cost: at work, a last reading, an unconfirmed verification, and nothing to say", () => {
+  const working = findingCostOf(
+    usage({
+      findings: [
+        spentOn({
+          verifier: { usage: figure(10, { partial: true }) },
+          discussion: { usage: null, running: true },
+          runs: [{ id: 'run-1', usage: figure(20), running: true }],
+          usage: figure(30, { partial: true }),
+          running: true,
+        }),
+      ],
+    }),
+    { id: 'correctness-1', verified: false },
+    { runs: [ran('run-1')] },
+    undefined,
+  )
+  expect(working?.rows).toEqual([
+    {
+      key: 'verification',
+      name: 'verification',
+      model: SONNET,
+      cost: {
+        text: 'at least 10k tokens',
+        title: 'At least this much: a part of it is a last reading or not reported',
+      },
+    },
+    {
+      key: 'discussion',
+      name: 'discussing',
+      chip: { text: 'In progress', tone: 'running' },
+    },
+  ])
+  expect(working?.runs.get('run-1')).toEqual({ text: '20k tokens so far' })
+  // A floor and at work at once: both said.
+  expect(working?.foot).toBe(
+    'At least 30k tokens on this finding so far: the verification reported only part of its tokens.',
+  )
+
+  const read = findingCostOf(
+    usage({
+      findings: [
+        spentOn({
+          verifier: { usage: figure(10, { partial: true }) },
+          discussion: null,
+          runs: [],
+          usage: figure(10, { partial: true }),
+        }),
+      ],
+    }),
+    { id: 'correctness-1', verified: true },
+    undefined,
+    undefined,
+  )
+  expect(read?.foot).toBe(
+    'At least 10k tokens on this finding: the verification reported only part of its tokens.',
+  )
+  // No usage in the review and nothing at work, or none counted for this finding: nothing said.
+  const spent = usage({ findings: [spentOn()] })
+  expect(
+    findingCostOf(usage({ total: null }), { id: 'correctness-1' }, RAN, undefined),
+  ).toBeUndefined()
+  expect(findingCostOf(spent, { id: 'tests-1' }, RAN, undefined)).toBeUndefined()
+})
+
+test("a finding's cost: a verifier at work before any figure of the review, and two that did not report", () => {
+  const verifying = findingCostOf(
+    usage({
+      total: null,
+      running: true,
+      findings: [
+        spentOn({
+          fixes: null,
+          verifier: { usage: null, running: true },
+          discussion: null,
+          runs: [],
+          usage: null,
+          running: true,
+        }),
+      ],
+    }),
+    { id: 'correctness-1', verified: false },
+    undefined,
+    undefined,
+  )
+  expect(verifying).toEqual({
+    rows: [
+      {
+        key: 'verification',
+        name: 'verifying',
+        chip: { text: 'In progress', tone: 'running' },
+      },
+    ],
+    runs: new Map(),
+  })
+  const none = findingCostOf(
+    usage({
+      findings: [
+        spentOn({
+          verifier: { usage: null },
+          runs: [
+            { id: 'run-1', usage: figure(64) },
+            { id: 'run-2', usage: null },
+          ],
+          usage: figure(86, { partial: true }),
+        }),
+      ],
+    }),
+    { id: 'correctness-1', verified: true },
+    RAN,
+    DISCUSSED,
+  )
+  expect(none?.rows[0]?.name).toBe('verified')
+  expect(none?.foot).toBe(
+    'At least 86k tokens on this finding: the verification and run-2 did not report their tokens.',
+  )
+})
+
+test("a finding's cost: a fix's agent on no run is named, a run the record lacks is left out, the main model shown", () => {
+  const twoModels: Usage = {
+    models: [
+      { model: 'claude-haiku-5-5', input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
+      { model: 'claude-opus-5-5', input: 9, output: 9, cacheRead: 9, cacheWrite: 9 },
+    ],
+    tokens: 40,
+  }
+  const cost = findingCostOf(
+    usage({
+      findings: [
+        spentOn({
+          verifier: null,
+          discussion: { usage: twoModels },
+          runs: [
+            { id: 'run-1', usage: figure(64) },
+            { id: 'run-9', usage: null },
+          ],
+          unclaimed: { usage: figure(50) },
+          usage: figure(114),
+        }),
+      ],
+    }),
+    { id: 'correctness-1', verified: true },
+    { runs: [ran('run-1', 'fixed')] },
+    {
+      messages: [
+        ...DISCUSSED.messages,
+        { by: 'agent', text: 'Stopped.', at: '2026-11-23T09:02:00Z', failed: true },
+      ],
+    },
+  )
+  expect(cost?.rows).toEqual([
+    {
+      key: 'discussion',
+      name: 'discussed',
+      model: 'claude-opus-5-5',
+      chip: { text: '1 answer', tone: 'still' },
+      cost: { text: '40 tokens' },
+    },
+  ])
+  expect([...(cost?.runs.keys() ?? [])]).toEqual(['run-1'])
+  expect(cost?.foot).toBe(
+    "114k tokens on this finding: its discussion, its run and a fix's agent before its claim.",
+  )
+})
+
+test("the finding's Run section shows each part's tokens and its sum; its header shows none", async () => {
+  const data = reviewPayload(usage({ findings: [spentOn()] }))
+  data.findings['correctness-1'] = record('fixed', RAN)
+  data.discussions = { 'correctness-1': DISCUSSED }
+  await openFirst(data)
+  const run = within(screen.getByRole('region', { name: 'Run' }))
+  expect(
+    run
+      .getAllByRole('listitem')
+      .map((item) => item.querySelector('.tr-tk-runcost')?.textContent),
+  ).toEqual(['38k tokens', '22k tokens', '64k tokens', '182k tokens'])
+  expect(run.getByText('verified')).toBeDefined()
+  expect(run.getByText('Confirmed').className).toBe('tr-chip tr-chip--done')
+  expect(run.getByText('1 answer')).toBeDefined()
+  expect(
+    run.getByText(
+      '306k tokens on this finding: its verification, its discussion and its two runs.',
+    ),
+  ).toBeDefined()
+  expect(document.querySelector('.tr-detail-head')?.textContent).not.toMatch(/tokens/)
+})
+
+test('the Run section dims a run not reported and says why', async () => {
+  const data = reviewPayload(
+    usage({
+      findings: [
+        spentOn({
+          runs: [
+            { id: 'run-1', usage: figure(64) },
+            { id: 'run-2', usage: null },
+          ],
+          usage: figure(124, { partial: true }),
+        }),
+      ],
+    }),
+  )
+  data.findings['correctness-1'] = record('fixed', RAN)
+  await openFirst(data)
+  const run = within(screen.getByRole('region', { name: 'Run' }))
+  const missing = run.getByText('not reported')
+  expect(missing.className).toBe('tr-tk-runcost tr-tk-dim')
+  expect(missing.getAttribute('title')).toMatch(/reported no tokens/)
+  expect(
+    run.getByText(
+      'At least 124k tokens on this finding: run-2 did not report its tokens.',
+    ),
+  ).toBeDefined()
+})
+
+test('a finding only verified still has its Run section, with no history to show', async () => {
+  const data = reviewPayload(
+    usage({
+      findings: [spentOn({ fixes: null, discussion: null, runs: [], usage: figure(38) })],
+    }),
+  )
+  delete data.findings['correctness-1']
+  await openFirst(data)
+  const run = within(screen.getByRole('region', { name: 'Run' }))
+  expect(run.queryByRole('button', { name: 'Show history' })).toBeNull()
+  expect(run.getByText('38k tokens on this finding: its verification.')).toBeDefined()
 })
