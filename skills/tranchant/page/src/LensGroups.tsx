@@ -189,7 +189,7 @@ export function GroupsTab({
             const history = groupHistoryOf(
               members.flatMap((one) => {
                 const lens = lenses.find((entry) => isMember([entry], one))
-                return lens ? [lens.history] : []
+                return lens ? [{ name: lens.name, history: lens.history }] : []
               }),
             )
             const id = `tr-grp-${key}`

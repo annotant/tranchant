@@ -24,18 +24,18 @@ const figure = (/** @type {number} */ n, more = {}) => ({
  * and an end with its figure (none: no `end`'s usage).
  * @param {string} root
  * @param {string} id
- * @param {{ createdAt: string, status?: string, lenses: object[], agents?: Record<string, { usage?: object, lens?: string }> }} review
+ * @param {{ createdAt: string, status?: string, verify?: boolean, lenses: object[], agents?: Record<string, { usage?: object, lens?: string }> }} review
  */
 async function pastReview(
   root,
   id,
-  { createdAt, status = 'complete', lenses, agents = {} },
+  { createdAt, status = 'complete', verify, lenses, agents = {} },
 ) {
   const dir = path.join(root, 'reviews', id)
   await mkdir(path.join(dir, 'reviewers'), { recursive: true })
   await writeFile(
     path.join(dir, 'review.json'),
-    JSON.stringify({ version: 1, createdAt, status, lenses, findings: [] }),
+    JSON.stringify({ version: 1, createdAt, status, verify, lenses, findings: [] }),
   )
   for (const [name, { usage, lens }] of Object.entries(agents))
     await writeFile(
@@ -375,13 +375,23 @@ test('lensHistories: per lens, its tokens and confirmed findings a review, over 
       .map((step) => JSON.stringify(step))
       .join('\n') + '\n',
   )
-  // Not verified: every finding that stands is confirmed.
   const r2 = await pastReview(root, 'r2', {
     createdAt: '2026-11-02T00:00:00.000Z',
+    verify: true,
     lenses: [lens('bugs', 'h1')],
-    agents: { 'rv-bugs': { usage: figure(50) } }, // 200
+    agents: {
+      'rv-bugs': { usage: figure(50) }, // 200
+      'vf-bugs-9': { usage: figure(0), lens: 'bugs' },
+    },
   })
-  await withFindings(r2, [{ id: 'bugs-9', lens: 'bugs' }])
+  await withFindings(r2, [{ id: 'bugs-9', lens: 'bugs', verified: true }])
+  // Not verified: no verifier confirmed its findings, not averaged.
+  const r0 = await pastReview(root, 'r0', {
+    createdAt: '2026-10-31T00:00:00.000Z',
+    lenses: [lens('bugs', 'h1')],
+    agents: { 'rv-bugs': { usage: figure(500) } },
+  })
+  await withFindings(r0, [{ id: 'bugs-0', lens: 'bugs' }])
   // Still under way, and one whose verification reported nothing whole: not averaged.
   await pastReview(root, 'r3', {
     createdAt: '2026-11-03T00:00:00.000Z',
@@ -423,17 +433,22 @@ test('lensHistories: per lens, its tokens and confirmed findings a review, over 
   assert.deepEqual(again, { tokens: 200, confirmed: 1, runs: 1 })
 })
 
-test('lensHistories: the last ten reviews, the confirmed rounded to one decimal', async (t) => {
+test('lensHistories: the last ten reviews, the confirmed to two decimals', async (t) => {
   const root = await tempDir(t)
   let dir = ''
   for (let n = 0; n < 12; n++) {
     dir = await pastReview(root, `r${n}`, {
       createdAt: `2026-11-${String(n + 1).padStart(2, '0')}T00:00:00.000Z`,
+      verify: true,
       lenses: [lens('bugs', 'h1')],
-      agents: { 'rv-bugs': { usage: figure(n + 1) } },
+      agents: {
+        'rv-bugs': { usage: figure(n + 1) },
+        ...(n % 3 === 0 && { [`vf-bugs-${n}`]: { usage: figure(0), lens: 'bugs' } }),
+      },
     })
     // One confirmed in three reviews of the last ten.
-    if (n % 3 === 0) await withFindings(dir, [{ id: `bugs-${n}`, lens: 'bugs' }])
+    if (n % 3 === 0)
+      await withFindings(dir, [{ id: `bugs-${n}`, lens: 'bugs', verified: true }])
   }
   const [bugs] = await lensHistories(dir, [{ name: 'bugs', hash: 'h1' }])
   // 4 × (3 … 12) / 10, and r3, r6, r9 of r2 … r11.
@@ -446,6 +461,7 @@ test('lensHistories: a prompt back to an older one starts over, and a review a s
   for (const [n, hash] of ['h1', 'h0', 'h1', 'h1'].entries())
     dir = await pastReview(root, `r${n}`, {
       createdAt: `2026-11-0${n + 1}T00:00:00.000Z`,
+      verify: true,
       lenses: [lens('bugs', hash)],
       agents: { 'rv-bugs': { usage: figure(10 * (n + 1)) } },
     })
@@ -469,10 +485,15 @@ test('lensHistories: a finding that cannot be read leaves its review out of the 
   const root = await tempDir(t)
   const dir = await pastReview(root, 'r1', {
     createdAt: '2026-11-01T00:00:00.000Z',
+    verify: true,
     lenses: [lens('bugs', 'h1')],
-    agents: { 'rv-bugs': { usage: figure(10) } },
+    agents: {
+      'rv-bugs': { usage: figure(10) },
+      'vf-f-1': { usage: figure(0), lens: 'bugs' },
+      'vf-f-2': { usage: figure(0), lens: 'bugs' },
+    },
   })
-  await withFindings(dir, [{ id: 'f-1', lens: 'bugs' }])
+  await withFindings(dir, [{ id: 'f-1', lens: 'bugs', verified: true }])
   await writeFile(path.join(dir, 'findings', 'f-2.json'), '{ not json')
   assert.deepEqual(await lensHistories(dir, [{ name: 'bugs', hash: 'h1' }]), [null])
   // Past 256 KiB: not read either.
@@ -491,7 +512,7 @@ test('lensHistories: a finding that cannot be read leaves its review out of the 
   assert.equal(lenses[0]?.tokens, 40)
   await writeFile(
     path.join(dir, 'findings', 'f-2.json'),
-    JSON.stringify({ id: 'f-2', lens: 'bugs' }),
+    JSON.stringify({ id: 'f-2', lens: 'bugs', verified: true }),
   )
   assert.deepEqual(await lensHistories(dir, [{ name: 'bugs', hash: 'h1' }]), [
     { tokens: 40, confirmed: 2, runs: 1 },

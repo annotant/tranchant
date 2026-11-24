@@ -478,18 +478,20 @@ on with a past run), the fact says why and the note stays.
 
 **A lens's average.** The same scan gives Settings › Lenses each lens's
 average a review (`history` on `/api/settings`'s lenses, see
-[the settings file](settings.md)): over its last 10 `complete` reviews of
-the project that no stop cut, the one the page serves included, since its
-prompt `hash` last changed (the lens as built now; one that cannot be built
-takes its last run's), its reviewer's and its verifications' tokens, and its
-findings that stand confirmed (`verified`, or every one in a review not
-verified; a finding counts for the lens its `lens` names, never one read
-from its id). A run is skipped when its reviewer or one of its
-verifications has no whole figure, or a finding it landed had no verifier.
-A finding's file past 256 KiB, or that cannot be read, leaves its review
-out of the averages, said once on stderr; its tokens still count for the
-estimate. A group's average, on the page, is the averages of its lenses
-still there summed, those with none said and left out.
+[the settings file](settings.md)): over its last 10 `complete` and
+`verify` reviews of the project that no stop cut, the one the page serves
+included, since its prompt `hash` last changed (the lens as built now; one
+that cannot be built takes its last run's), its reviewer's and its
+verifications' tokens, and its findings a verifier confirmed (`verified`; a
+finding counts for the lens its `lens` names, never one read from its id).
+A review run without verification confirmed nothing and is skipped, as is
+a run whose reviewer or one of whose verifications has no whole figure, or
+a finding it landed had no verifier. A finding's file past 256 KiB, or that
+cannot be read, leaves its review out of the averages, said once on stderr;
+its tokens still count for the estimate. On the page, a lens's line divides
+its tokens by its confirmed findings (none confirmed, no ratio); a group's
+sums its lenses' averages still there, the ratio over the sums, those with
+none named and left out.
 
 ## Pause, stop and reset
 

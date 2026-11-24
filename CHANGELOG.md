@@ -23,9 +23,11 @@ released to the `stable` branch.
   its verification and one for its discussion, and the finding's sum under
   them, `at least` when a part did not report.
 - **A lens's and a group's average in Settings › Lenses.** Under each lens,
-  `~140k tokens a review · 0.8 confirmed`, over its last 10 complete
-  reviews in the project since its prompt last changed; under each group,
-  its lenses' averages summed, those with no history said.
+  `~140k tokens · 0.8 confirmed findings a review · ~175k tokens per
+  confirmed finding`, over its last 10 complete and verified reviews in the
+  project since its prompt last changed, a finding counted once a verifier
+  confirmed it; under each group, its lenses' averages summed, those with no
+  history named.
 
 ## 0.7.0 - 2026-11-22
 

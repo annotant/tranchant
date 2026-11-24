@@ -2155,6 +2155,7 @@ test("/api/settings: a lens's average over the project's past reviews, its promp
     JSON.stringify({
       version: 1,
       createdAt: '2026-11-01T00:00:00.000Z',
+      verify: true,
       lenses: [{ name: 'correctness', source: 'tranchant:correctness', hash, files: 2 }],
       findings: [],
     }),
@@ -2176,7 +2177,11 @@ test("/api/settings: a lens's average over the project's past reviews, its promp
   )
   await writeFile(
     path.join(past, 'findings', 'correctness-1.json'),
-    JSON.stringify({ id: 'correctness-1', lens: 'correctness' }),
+    JSON.stringify({ id: 'correctness-1', lens: 'correctness', verified: true }),
+  )
+  await writeFile(
+    path.join(past, 'reviewers', 'vf-correctness-1.jsonl'),
+    `${JSON.stringify({ at: 1, kind: 'start', model: 'm', agent: 'v', lens: 'correctness' })}\n${JSON.stringify({ at: 2, kind: 'end', agent: 'v', usage: { models: [{ model: 'claude-sonnet-5-5', input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }] } })}\n`,
   )
   const settings = await json(await fetch(`${server.base}/api/settings`))
   const lenses = settings.lensSet.lenses
