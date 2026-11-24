@@ -9,6 +9,10 @@ released to the `stable` branch.
 
 ### Added
 
+- **Pick several sources at once in Settings › Lenses › Browse.** A box on
+  each item: a click checks one, Shift-click a range over the list as
+  shown, a source that is a lens already skipped. **Add N** opens one row
+  each under **Picked**, renamable, with one Where it lives.
 - **Each agent's tokens are recorded.** The summary agent, the reviewers,
   the verifiers, the discussions, the fixes and the cleanings: on their
   runs, and in a review's `usage.json` while they work and once a reset
@@ -28,6 +32,10 @@ released to the `stable` branch.
   project since its prompt last changed, a finding counted once a verifier
   confirmed it; under each group, its lenses' averages summed, those with no
   history named.
+
+### Changed
+
+- **Add a lens is Global by default**, for one source as for many.
 
 ## 0.7.0 - 2026-11-22
 

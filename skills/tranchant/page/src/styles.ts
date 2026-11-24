@@ -447,6 +447,18 @@ button.tr-chip { gap: 5px; border: 1px solid transparent; font-family: inherit; 
 .tr-picker-refused { margin: 6px 12px; padding: 10px 12px; border: 1px solid var(--tr-warn); border-radius: var(--tr-radius); background: var(--tr-warn-bg); color: var(--tr-warn); font-size: 12.5px; }
 .tr-picker-foot { margin: 0; padding: 8px 12px; border-top: 1px solid var(--tr-border); background: var(--tr-bg-2); color: var(--tr-muted); font-size: 12px; }
 .tr-picker-empty { margin: 0; padding: 16px 12px; color: var(--tr-muted); font-size: 13px; }
+.tr-picker-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; }
+.tr-picker-row .tr-picker-item { padding-left: 2px; }
+.tr-picker-row--checked { background: var(--tr-accent-weak); }
+.tr-picker-box { display: flex; align-items: center; justify-content: center; align-self: stretch; min-height: 34px; cursor: pointer; }
+.tr-picker-box .tr-check { width: 16px; height: 16px; margin: 0; cursor: pointer; }
+.tr-picker-box:has(.tr-check:disabled) { cursor: default; }
+.tr-picker-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border-top: 1px solid var(--tr-border); background: var(--tr-bg); font-size: 12.5px; }
+.tr-picker-actions .tr-btn--link { font-size: 12.5px; }
+.tr-picker-actions .tr-btn--primary { margin-left: auto; }
+.tr-picker-count { color: var(--tr-muted); }
+.tr-tab-checked { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: var(--tr-accent-weak); color: var(--tr-accent); font-size: 11px; font-weight: 600; }
+.tr-source-many { display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-height: 34px; padding: 0 10px; border: 1px dashed var(--tr-border); border-radius: var(--tr-radius); background: var(--tr-bg-2); font-size: 13px; }
 .tr-tab { min-height: 36px; padding: 6px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--tr-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .tr-tab[aria-selected="true"] { color: var(--tr-text); border-bottom-color: var(--tr-accent); }
 .tr-tab:focus-visible { outline: 2px solid var(--tr-accent); outline-offset: -2px; }

@@ -116,7 +116,8 @@ Beside the recipe's lenses, **Settings › Lenses** adds a team's reviewer as
 a lens of its own: a plugin's skill, agent or command, or a file, typed or picked
 with **Browse…** (the installed plugins', the project's and `~/.claude`'s
 skills, agents and commands, and a file browser limited to the project,
-`~/.claude/` and the plugins' folders, names only); a glob
+`~/.claude/` and the plugins' folders, names only: check several there,
+Shift-click for a range, to add them at once, one row each); a glob
 (`.claude/agents/*-review.md`) adds every file it matches, listed first to
 check and rename, one cleaning agent each. A command
 (`pr-review-toolkit:review-pr`), or an agent that starts agents it names, is
@@ -131,7 +132,7 @@ reads it once and writes the lens Tranchant runs, its review kept and its
 orchestration, output format, posting and questions left out, with
 added instructions (the files it takes, its topics, its buckets) the user can
 edit; the page shows what it removed and added before the lens is used. A
-lens is **local** (this project) or **global** (every project), always in
+lens is **global** (every project, Add a lens's default) or **local** (this project), always in
 `~/.config/tranchant/`, never in the repository; a local lens wins over a
 global one of the same name, which wins over the recipe's. Each
 `/tranchant review` hashes again the source of every added lens it runs and
