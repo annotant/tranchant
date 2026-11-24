@@ -134,6 +134,8 @@ test('a pair is settled once: the open twin reads as the settled one, and its de
   expect(records['b-2']?.state).toBe('posted')
 })
 
+const usage = (tokens: number) => ({ models: [], tokens })
+
 const stepAt = (at: number) => ({ at, kind: 'read', label: 'x', state: 'done' as const })
 
 test('the scorecard counts each side, the shared lens for both, and marks the better side', () => {
@@ -162,9 +164,16 @@ test('the scorecard counts each side, the shared lens for both, and marks the be
       partial: [],
       running: false,
       lenses: [
-        { lens: 'bugs', reviewer: null, verifiers: null, tokens: 100_000 },
-        { lens: 'correctness', reviewer: null, verifiers: null, tokens: 300_000 },
-        { lens: 'money', reviewer: null, verifiers: null, tokens: 200_000 },
+        { lens: 'bugs', reviewer: usage(100_000), verifiers: null, tokens: 100_000 },
+        {
+          lens: 'correctness',
+          reviewer: usage(300_000),
+          verifiers: null,
+          tokens: 300_000,
+        },
+        { lens: 'money', reviewer: usage(200_000), verifiers: null, tokens: 200_000 },
+        // Reported nothing: no figure, never a zero.
+        { lens: 'conventions', reviewer: null, verifiers: null, tokens: 0 },
       ],
     },
   })

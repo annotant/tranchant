@@ -241,8 +241,10 @@ export function tokensOf(
   battle: BattleRecord,
   side: Side,
 ) {
-  const lenses = (usage?.lenses ?? []).filter((one) =>
-    inSide(sideOfLens(battle, one.lens), side),
+  // A lens whose agents reported nothing has no figure: never a zero.
+  const lenses = (usage?.lenses ?? []).filter(
+    (one) =>
+      inSide(sideOfLens(battle, one.lens), side) && (one.reviewer || one.verifiers),
   )
   return lenses.length ? lenses.reduce((sum, one) => sum + one.tokens, 0) : undefined
 }
