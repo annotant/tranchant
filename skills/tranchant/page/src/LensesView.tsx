@@ -36,6 +36,7 @@ import {
   type SettingsPayload,
   withSetting,
 } from './settings'
+import { lensHistoryOf } from './tokens'
 
 interface Props {
   /** undefined while the settings load, or when the server cannot answer them. */
@@ -1780,6 +1781,7 @@ function LensRow({
   const name = (open && draft?.trim()) || lens.name
   const id = `tr-lns-${lens.scope}-${lens.name}`
   const model = modelFact(lens, models)
+  const history = lensHistoryOf(lens.history)
   return (
     <li className={`tr-lns-item${open ? ' tr-lns-item--open' : ''}`}>
       <div className="tr-lns-row">
@@ -1848,6 +1850,11 @@ function LensRow({
         )}
         {!lens.problem && lens.stale === 'failed' && lens.failedCleaning && (
           <p className="tr-lns-reason">{lens.failedCleaning.reason}</p>
+        )}
+        {history && (
+          <p className="tr-lns-history" title={history.title}>
+            {history.text}
+          </p>
         )}
       </div>
       {open && (

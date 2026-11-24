@@ -20,6 +20,8 @@ import { before, test } from 'node:test'
 import { say } from '../skills/tranchant/scripts/lib/discussion.mjs'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
 import { hashOf } from '../skills/tranchant/scripts/lib/project.mjs'
+import { DEFAULTS } from '../skills/tranchant/scripts/lib/settings.mjs'
+import { describeLenses } from '../skills/tranchant/scripts/lib/userlens.mjs'
 import { buildPlayground } from './fixtures/playground.mjs'
 import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
 
@@ -2131,6 +2133,59 @@ test('a tool forced on the other forge\u2019s host is refused: no token goes to 
 })
 
 // The recipe in force, the imports, and the Lenses step's progress.
+
+test("/api/settings: a lens's average over the project's past reviews, its prompt's hash kept on the server", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, { env: { XDG_CONFIG_HOME: config } })
+  const described = await describeLenses({
+    project: server.project,
+    base: 'main',
+    values: DEFAULTS,
+  })
+  const built = described.lenses.find((lens) => lens.name === 'correctness')
+  const hash = built && 'hash' in built ? built.hash : undefined
+  assert.ok(hash)
+  // Beside the fixture's review, which other tests import too: gone once read.
+  const past = path.join(path.dirname(server.dir), 'past-review')
+  t.after(() => rm(past, { recursive: true, force: true }))
+  await mkdir(path.join(past, 'reviewers'), { recursive: true })
+  await mkdir(path.join(past, 'findings'), { recursive: true })
+  await writeFile(
+    path.join(past, 'review.json'),
+    JSON.stringify({
+      version: 1,
+      createdAt: '2026-11-01T00:00:00.000Z',
+      lenses: [{ name: 'correctness', source: 'tranchant:correctness', hash, files: 2 }],
+      findings: [],
+    }),
+  )
+  const usage = {
+    models: [
+      {
+        model: 'claude-sonnet-5-5',
+        input: 10,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 40,
+      },
+    ],
+  }
+  await writeFile(
+    path.join(past, 'reviewers', 'rv-correctness.jsonl'),
+    `${JSON.stringify({ at: 1, kind: 'start', model: 'm', agent: 'a' })}\n${JSON.stringify({ at: 2, kind: 'end', agent: 'a', usage })}\n`,
+  )
+  await writeFile(
+    path.join(past, 'findings', 'correctness-1.json'),
+    JSON.stringify({ id: 'correctness-1', lens: 'correctness' }),
+  )
+  const settings = await json(await fetch(`${server.base}/api/settings`))
+  const lenses = settings.lensSet.lenses
+  assert.ok(lenses.every((/** @type {any} */ lens) => lens.hash === undefined))
+  const find = (/** @type {string} */ name) =>
+    lenses.find((/** @type {any} */ lens) => lens.name === name)
+  assert.deepEqual(find('correctness').history, { tokens: 100, confirmed: 1, runs: 1 })
+  assert.equal(find('docs').history, undefined)
+})
 
 test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, changes, shows and removes it', async (t) => {
   const config = await tempDir(t, 'tranchant-config-')
