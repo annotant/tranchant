@@ -1,4 +1,12 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   type DiffState,
   postAnswer,
@@ -8,6 +16,7 @@ import {
   postPause,
   postReset,
   postResume,
+  postSplit,
   postStart,
   postStop,
   useDiff,
@@ -17,6 +26,18 @@ import {
   useTracker,
 } from './api'
 import { BatchBar } from './BatchBar'
+import {
+  battleView,
+  type BattleView,
+  letterOf,
+  mirrorRecords,
+  otherOf,
+  type Side,
+  sideReview,
+  whoOf,
+} from './battle'
+import { BattleBoard } from './BattleBoard'
+import { BattleCompare } from './BattleCompare'
 import { parseDiff, placeFindings, type Section, unfoldFile } from './diff'
 import { DiffView, FileList, fileId, scrollTo, useReadingFile } from './DiffView'
 import {
@@ -111,6 +132,58 @@ const isEditing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || /^(input|textarea|select)$/i.test(target.tagName))
 
+/** Whose findings the page shows in a battle: A's, B's, or the comparison. */
+type BattleShown = Side | 'compare'
+
+/** The header's switch in a battle: A · 6 | B · 6 | Compare, Compare once both reviews are done. */
+function BattleSwitch({
+  view,
+  shown,
+  sizes,
+  compare,
+  onPick,
+}: {
+  view: BattleView
+  shown: BattleShown
+  /** Each group's findings. */
+  sizes: Record<Side, number>
+  compare: boolean
+  onPick: (next: BattleShown) => void
+}) {
+  const { battle } = view
+  const choices: [BattleShown, string, string, string][] = [
+    ['a', 'A', 'A', `Group A’s findings: ${battle.a}`],
+    ['b', 'B', 'B', `Group B’s findings: ${battle.b}`],
+    [
+      'compare',
+      '=',
+      'Compare',
+      compare ? 'Both groups side by side' : 'Once both reviews are done',
+    ],
+  ]
+  return (
+    <div className="tr-bt-switch" role="group" aria-label="Whose findings">
+      {choices.map(([key, badge, label, title]) => (
+        <button
+          key={key}
+          type="button"
+          className={`tr-bt-switch-btn${key === 'compare' ? '' : ` tr-bt-side--${key}`}`}
+          aria-pressed={shown === key}
+          disabled={key === 'compare' && !compare}
+          title={title}
+          onClick={() => onPick(key)}
+        >
+          <span className="tr-bt-badge" aria-hidden="true">
+            {badge}
+          </span>
+          {label}
+          {key !== 'compare' && <span className="tr-count">{sizes[key]}</span>}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function Header({
   review,
   lenses,
@@ -118,10 +191,13 @@ function Header({
   moved,
   usage,
   route,
+  battle,
   onNeedsYou,
   onTheme,
 }: {
   review: Review
+  /** In a battle: the switch between A's findings, B's and the comparison. */
+  battle?: ReactNode
   usage: ReviewUsage | undefined
   /** The Lenses step of a `/tranchant review` review. */
   lenses: LensesProgress | undefined
@@ -224,6 +300,14 @@ function Header({
               group {review.group ?? lenses?.group}
             </span>
           )}
+          {review.battle && (
+            <span
+              className="tr-chip tr-chip--scope"
+              title="A battle review: two groups of lenses on this change, compared"
+            >
+              battle · {review.battle.a} vs {review.battle.b}
+            </span>
+          )}
           {/* While they build, or refused, the page's center shows them. */}
           {lenses && review.status !== 'preparing' && review.status !== 'refused' && (
             <LensesControl step={lenses} />
@@ -231,6 +315,7 @@ function Header({
           {chip && <TokensChip chip={chip} open={route === 'tokens'} />}
         </div>
       </div>
+      {battle}
       <div className="tr-attention">
         <button
           type="button"
@@ -374,7 +459,30 @@ export default function App() {
 
   const review = payload?.review
   const records = useMemo(() => payload?.findings ?? {}, [payload])
-  const groups = useMemo(() => groupFindings(review?.findings ?? []), [review])
+  // A battle: one group's findings at a time, or the comparison once both are done.
+  const [battlePick, setBattlePick] = useState<BattleShown>('a')
+  const battle = useMemo(
+    () => (review ? battleView(review, payload?.splits) : undefined),
+    [review, payload?.splits],
+  )
+  const compareReady = !!review && !!battle && (!isReviewing(review) || !!review.stopped)
+  const battleShown: BattleShown | undefined = battle
+    ? battlePick === 'compare' && !compareReady
+      ? 'a'
+      : battlePick
+    : undefined
+  const side = battleShown === 'a' || battleShown === 'b' ? battleShown : undefined
+  // One finding to settle per pair: its twin's decision reads as its own, and goes to the twin.
+  const mirror = useMemo(
+    () => (battle ? mirrorRecords(records, battle.twins) : undefined),
+    [battle, records],
+  )
+  const shownRecords = mirror?.records ?? records
+  const shownReview = useMemo(
+    () => (review && battle && side ? sideReview(review, battle, side) : review),
+    [review, battle, side],
+  )
+  const groups = useMemo(() => groupFindings(shownReview?.findings ?? []), [shownReview])
   const unverified = useMemo(
     () => (review ? unverifiedIds(review) : new Set<string>()),
     [review],
@@ -422,8 +530,8 @@ export default function App() {
     [diff],
   )
   const placement = useMemo(
-    () => (files && review ? placeFindings(files, review.findings) : undefined),
-    [files, review],
+    () => (files && shownReview ? placeFindings(files, shownReview.findings) : undefined),
+    [files, shownReview],
   )
   const reading = useReadingFile(diffPane, placement?.sections ?? NO_SECTIONS)
   // The diff is the main view; the list replaces it only when the diff is unavailable.
@@ -432,8 +540,8 @@ export default function App() {
     () =>
       shown === 'diff' && placement
         ? placement.ordered
-        : orderedFindings(review?.findings ?? []),
-    [shown, placement, review],
+        : orderedFindings(shownReview?.findings ?? []),
+    [shown, placement, shownReview],
   )
   const disabled = !reachable
   const has = (id: string | undefined) =>
@@ -442,10 +550,17 @@ export default function App() {
   const openId = has(openState) ? openState : ordered[0]?.id
   const cursor = has(cursorState) ? cursorState : openId
   // Read once a decision returns: the reviewer may have moved on, and the records reloaded.
-  const latest = useRef({ openId, ordered, records })
-  useEffect(() => {
-    latest.current = { openId, ordered, records }
+  const latest = useRef({
+    openId,
+    ordered,
+    records: shownRecords,
+    target: mirror?.target,
   })
+  useEffect(() => {
+    latest.current = { openId, ordered, records: shownRecords, target: mirror?.target }
+  })
+  /** The finding a decision on `id` goes to: its twin's, when the twin's decision is the one it shows. */
+  const targetOf = useCallback((id: string) => latest.current.target?.get(id) ?? id, [])
 
   /** Sends `decisions`; resolves to the ids the server applied. */
   const decide = useCallback(
@@ -453,8 +568,13 @@ export default function App() {
       if (!decisions.length) return []
       let applied: string[] = []
       try {
-        const result = await postDecisions(decisions)
-        applied = result.applied
+        const result = await postDecisions(
+          decisions.map((one) => ({ ...one, id: targetOf(one.id) })),
+        )
+        // Said as the page asked them: a twin's decision is the one shown.
+        applied = decisions
+          .filter((one) => result.applied.includes(targetOf(one.id)))
+          .map((one) => one.id)
         setNotice(
           result.refused.length
             ? `Refused: ${result.refused.map((one) => `${one.id} (${one.reason})`).join(', ')}`
@@ -462,7 +582,7 @@ export default function App() {
         )
         setSelected((current) => {
           const next = new Set(current)
-          for (const id of result.applied) next.delete(id)
+          for (const id of applied) next.delete(id)
           return next
         })
       } catch (failure) {
@@ -471,20 +591,20 @@ export default function App() {
       await reload()
       return applied
     },
-    [reload],
+    [reload, targetOf],
   )
 
   const answer = useCallback(
     async (id: string, text: string, choices: string[]) => {
       try {
-        await postAnswer(id, text, choices)
+        await postAnswer(targetOf(id), text, choices)
         setNotice(undefined)
       } catch (failure) {
         setNotice(failure instanceof Error ? failure.message : 'The answer was not sent.')
       }
       await reload()
     },
-    [reload],
+    [reload, targetOf],
   )
 
   const discuss = useCallback(
@@ -531,12 +651,26 @@ export default function App() {
   const stop = useCallback(
     async (id: string) => {
       try {
-        await postStop(id)
+        await postStop(targetOf(id))
         setNotice(undefined)
       } catch (failure) {
         setNotice(
           failure instanceof Error ? failure.message : 'The agent was not stopped.',
         )
+      }
+      await reload()
+    },
+    [reload, targetOf],
+  )
+
+  // Not the same: the pair splits, each finding counts for its group alone.
+  const split = useCallback(
+    async (pair: [string, string]) => {
+      try {
+        await postSplit(pair, true)
+        setNotice(undefined)
+      } catch (failure) {
+        setNotice(failure instanceof Error ? failure.message : 'The pair was not split.')
       }
       await reload()
     },
@@ -575,7 +709,9 @@ export default function App() {
 
   // From the cursor, wrapping; off the set it starts at the first. Moving the cursor scrolls.
   const openNextNeedingYou = () => {
-    const needing = ordered.filter((finding) => needsYou(stateOf(records, finding.id)))
+    const needing = ordered.filter((finding) =>
+      needsYou(stateOf(shownRecords, finding.id)),
+    )
     const index = needing.findIndex((finding) => finding.id === cursor)
     const next = needing[(index + 1) % needing.length]
     if (next) open(next.id)
@@ -608,7 +744,7 @@ export default function App() {
           action === 'post' &&
           !hasComment(ordered.find((finding) => finding.id === cursor))
         const finding = ordered.find((one) => one.id === cursor)
-        if (!blind && allows(action, stateOf(records, cursor), review, finding)) {
+        if (!blind && allows(action, stateOf(shownRecords, cursor), review, finding)) {
           if (cursor === openId) void decideShown({ id: cursor, action })
           else void decide([{ id: cursor, action }])
         }
@@ -623,7 +759,7 @@ export default function App() {
     ordered,
     cursor,
     openId,
-    records,
+    shownRecords,
     disabled,
     decide,
     decideShown,
@@ -642,7 +778,20 @@ export default function App() {
     )
   }
 
-  const tally = counts(review, records)
+  const tally = counts(shownReview ?? review, shownRecords)
+  // In a battle, the switch between A's findings, B's, and the comparison.
+  const battleSwitch = battle && battleShown && (
+    <BattleSwitch
+      view={battle}
+      shown={battleShown}
+      sizes={{
+        a: sideReview(review, battle, 'a').findings.length,
+        b: sideReview(review, battle, 'b').findings.length,
+      }}
+      compare={compareReady}
+      onPick={setBattlePick}
+    />
+  )
   const moved =
     payload?.head.current !== null && payload?.head.current !== payload?.head.reviewed
   const header = (
@@ -653,6 +802,7 @@ export default function App() {
       moved={moved}
       usage={payload?.usage}
       route={route}
+      battle={battleSwitch}
       onNeedsYou={openNextNeedingYou}
       onTheme={(next) => {
         // No settings read yet (an older server): the switch holds for this visit.
@@ -812,13 +962,56 @@ export default function App() {
     const cut = (review.stopped && agent.running) || agent.outcome === 'interrupted'
     return [{ ...agent, running: false, ...(cut && { outcome: 'failed' as const }) }]
   })
+  // In a battle: whether the other group found it too, and the way to it.
+  const twin = battle && side && current ? battle.twins.get(current.id) : undefined
+  const twinFinding = twin ? review.findings.find((one) => one.id === twin) : undefined
+  const battleNote = battle && side && current && (
+    <div
+      className={`tr-bt-twin${battle.sides.get(current.id) === 'both' || twinFinding ? ' tr-bt-twin--both' : ''}`}
+      role="note"
+    >
+      {battle.sides.get(current.id) === 'both' ? (
+        <>
+          <strong>Found for both groups.</strong>
+          <span>
+            {current.lens ?? 'Its lens'} is in A and B and ran once: this finding counts
+            for both.
+          </span>
+        </>
+      ) : twinFinding ? (
+        <>
+          <strong>{letterOf(otherOf(side))} found it too.</strong>
+          <span>
+            {twinFinding.id}, “{twinFinding.title}”, {twinFinding.path}:{twinFinding.line}
+            . One finding to settle: fixing, posting or dropping this one settles both.
+          </span>
+          <button
+            type="button"
+            className="tr-btn tr-btn--link"
+            onClick={() => {
+              setBattlePick(otherOf(side))
+              open(twinFinding.id)
+            }}
+          >
+            Open it in {letterOf(otherOf(side))}
+          </button>
+        </>
+      ) : (
+        <>
+          <strong>Only {letterOf(side)} found it.</strong>
+          <span>No finding of {letterOf(otherOf(side))} on these lines.</span>
+        </>
+      )}
+    </div>
+  )
   const detail = current ? (
     <FindingDetail
       key={current.id}
       review={review}
       finding={current}
-      record={records[current.id]}
-      steps={payload?.runs[current.id] ?? []}
+      record={shownRecords[current.id]}
+      steps={payload?.runs[mirror?.target.get(current.id) ?? current.id] ?? []}
+      battleNote={battleNote}
       discussion={payload?.discussions?.[current.id]}
       unverified={unverified.has(current.id)}
       usage={payload?.usage}
@@ -846,6 +1039,35 @@ export default function App() {
     </p>
   )
 
+  if (battle && battleShown === 'compare')
+    return (
+      <div className="tr-app">
+        {!reachable && (
+          <div className="tr-banner" role="alert">
+            Tranchant stopped serving this review. Retrying every 5 seconds…
+          </div>
+        )}
+        {header}
+        {notice && (
+          <p className="tr-notice" role="status">
+            {notice}
+          </p>
+        )}
+        <BattleCompare
+          review={review}
+          view={battle}
+          records={shownRecords}
+          agents={agents}
+          usage={payload?.usage}
+          disabled={disabled}
+          onSplit={(pair) => void split(pair)}
+          onOpen={(next, id) => {
+            setBattlePick(next)
+            open(id)
+          }}
+        />
+      </div>
+    )
   return (
     <div className="tr-app">
       {!reachable && (
@@ -857,6 +1079,18 @@ export default function App() {
       <ReviewAgents
         agents={agents}
         phase={phase}
+        board={
+          battle && (
+            <BattleBoard
+              view={battle}
+              agents={agents}
+              findings={review.findings}
+              usage={payload?.usage}
+              phase={phase}
+              project={review.project}
+            />
+          )
+        }
         planned={review.lenses?.map((lens) => lens.name) ?? []}
         onControl={review.lenses ? control : undefined}
         underWay={underWay}
@@ -868,7 +1102,8 @@ export default function App() {
         verify={review?.verify === true}
         project={review?.project ?? ''}
         lensGroup={review?.group}
-        others={(settings.payload?.groups?.list ?? [])
+        // A battle compares its two groups itself.
+        others={(battle ? [] : (settings.payload?.groups?.list ?? []))
           .map((group) => group.name)
           .filter((name) => name !== review?.group)}
         onOpen={open}
@@ -881,8 +1116,8 @@ export default function App() {
         openAtStart={values?.summary !== 'closed'}
       />
       <BatchBar
-        review={review}
-        records={records}
+        review={shownReview ?? review}
+        records={shownRecords}
         ordered={ordered}
         selected={selected}
         disabled={disabled}
@@ -927,7 +1162,8 @@ export default function App() {
               <>
                 <FindingList
                   groups={groups}
-                  records={records}
+                  records={shownRecords}
+                  who={battle && side ? (id) => whoOf(battle, id, side) : undefined}
                   cursor={cursor}
                   openId={openId}
                   selected={selected}
@@ -955,7 +1191,7 @@ export default function App() {
               <DiffView
                 sections={placement.sections}
                 stats={stats}
-                records={records}
+                records={shownRecords}
                 cursor={cursor}
                 open={current}
                 selected={selected}

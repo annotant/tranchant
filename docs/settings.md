@@ -188,9 +188,9 @@ unchecked), and the token warning past 12; **Save the group**,
 group** select sits above them. On the Lenses tab, each lens names its
 groups (a chip opens the group), and the filter has a **Group** select.
 Before Start ([waiting to start](review-file.md#waiting-to-start)), a
-**Group** select changes the lenses the review runs. Two reviews of the
-same change, one per group, are how two sets of lenses are compared: the
-page compares nothing yet.
+**Group** select changes the lenses the review runs, and the **Battle
+review** tab runs two groups on the same change at once and compares them
+([a battle review](review-file.md#a-battle-review)).
 
 ## The file
 

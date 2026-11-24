@@ -46,6 +46,14 @@ import {
 import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import {
+  BattleRefusal,
+  battleOf,
+  isFindingId,
+  readSplits,
+  sameBattle,
+  writeSplit,
+} from './lib/battle.mjs'
 import { errorCode } from './lib/errors.mjs'
 import {
   PLUGIN_ROOT,
@@ -1158,15 +1166,23 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/review') {
     // Read anew: findings land and the status flips while the review runs.
-    const [{ review: latest, decisions }, runs, agents, discussions, current, lenses] =
-      await Promise.all([
-        store.readAll(),
-        store.runs(),
-        readReviewAgents(dir, undefined, { since: SESSION_SINCE }),
-        readDiscussions(dir),
-        currentHead(),
-        readLensesStep(),
-      ])
+    const [
+      { review: latest, decisions },
+      runs,
+      agents,
+      discussions,
+      current,
+      lenses,
+      splits,
+    ] = await Promise.all([
+      store.readAll(),
+      store.runs(),
+      readReviewAgents(dir, undefined, { since: SESSION_SINCE }),
+      readDiscussions(dir),
+      currentHead(),
+      readLensesStep(),
+      readSplits(dir),
+    ])
     // Summed here, never in the browser; unreadable, the review reads as one with no usage.
     const usage = await reviewUsage(dir, {
       review: latest,
@@ -1193,6 +1209,7 @@ async function handle(req, res) {
       ...(lenses && { lenses }),
       ...(usage && { usage }),
       ...(estimate && { estimate }),
+      ...(latest.battle && { splits }),
       findings: decisions.findings,
       runs,
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
@@ -1609,7 +1626,7 @@ async function handle(req, res) {
     if (!choices)
       return send(res, 400, {
         error:
-          'lenses (by name, true or false) and remember (true or false) are required',
+          'lenses (by name, true or false) and remember (true or false) are required, battle two different groups or null',
       })
     const [now, step] = await Promise.all([
       store.readReview().catch(() => undefined),
@@ -1626,6 +1643,22 @@ async function handle(req, res) {
       return send(res, 409, {
         error: "a run's own recipe (--recipe) has nothing to save",
       })
+    const battle = battleOf(step.battle)
+    if (choices.battle && step.own)
+      return send(res, 409, {
+        error: "a run's own recipe (--recipe) runs whole: no battle",
+      })
+    // Started on the rows of the battle they show: another one picked is built first.
+    if (
+      starting &&
+      choices.battle !== undefined &&
+      !sameBattle(choices.battle ?? undefined, battle)
+    )
+      return send(res, 409, {
+        error: 'the lenses of the battle picked are not built yet: wait for them',
+      })
+    if (starting && choices.remember && (battle || choices.battle))
+      return send(res, 409, { error: 'a battle has no switches to save' })
     const group = typeof step.group === 'string' ? step.group : undefined
     // Started on the rows of the group they show: another one picked is built first.
     if (starting && choices.group !== undefined && (choices.group ?? undefined) !== group)
@@ -1652,6 +1685,34 @@ async function handle(req, res) {
     asked = stamp
     print(`${starting ? 'START' : 'BUILD'} ${review.id}`)
     return send(res, 200, { ok: true })
+  }
+
+  // A battle's pair the user says is not the same finding, or pairs again.
+  if (req.method === 'POST' && url.pathname === '/api/battle/split') {
+    const input = await readJson(req)
+    const pair = input?.pair
+    if (
+      !Array.isArray(pair) ||
+      pair.length !== 2 ||
+      !pair.every(isFindingId) ||
+      pair[0] === pair[1] ||
+      typeof input.split !== 'boolean'
+    )
+      return send(res, 400, {
+        error: 'pair (two finding ids) and split (true or false) are required',
+      })
+    const latest = await store.readReview()
+    if (!latest.battle) return send(res, 409, { error: 'the review is not a battle' })
+    if (!pair.every((id) => latest.findings.some((finding) => finding.id === id)))
+      return send(res, 404, { error: 'a finding of the pair is not in the review' })
+    try {
+      return send(res, 200, {
+        splits: await writeSplit(dir, pair[0], pair[1], input.split),
+      })
+    } catch (error) {
+      if (error instanceof BattleRefusal) return send(res, 409, { error: error.message })
+      throw error
+    }
   }
 
   // The review's own controls: its fixes, discussions and posts go on through each, and a reset is refused until they end.
@@ -1822,9 +1883,10 @@ async function groupsAfter(update) {
 /**
  * The page's choices on a review waiting to start: by lens name, on or off
  * for this review; whether Start saves them; the group picked, when one is
- * (`null`: every lens that is on). Undefined when unsound.
+ * (`null`: every lens that is on); the battle picked, when one is (`null`:
+ * back to one group). Undefined when unsound.
  * @param {any} input
- * @returns {{ lenses: Record<string, boolean>, remember: boolean, group?: string | null } | undefined}
+ * @returns {{ lenses: Record<string, boolean>, remember: boolean, group?: string | null, battle?: import('./lib/battle.mjs').Battle | null } | undefined}
  */
 function choicesOf(input) {
   const lenses = input?.lenses
@@ -1837,6 +1899,11 @@ function choicesOf(input) {
     (typeof group !== 'string' || !LENS_NAME.test(group))
   )
     return undefined
+  const battle =
+    input.battle === undefined || input.battle === null
+      ? input.battle
+      : battleOf(input.battle)
+  if (input.battle !== undefined && battle === undefined) return undefined
   const entries = Object.entries(lenses)
   if (
     entries.length > 200 ||
@@ -1847,6 +1914,7 @@ function choicesOf(input) {
     lenses: Object.fromEntries(entries),
     remember: input.remember,
     ...(group !== undefined && { group }),
+    ...(battle !== undefined && { battle }),
   }
 }
 
@@ -2179,13 +2247,14 @@ async function changes() {
     )
     agents.push(`${name} ${file}`)
   }
-  // The Lenses step's rows, which change before any agent starts.
-  agents.push(
-    `lenses.json ${await stat(path.join(dir, 'lenses.json')).then(
-      (one) => `${one.size} ${one.mtimeMs}`,
-      () => '',
-    )}`,
-  )
+  // The Lenses step's rows, which change before any agent starts; a battle's pairs split.
+  for (const name of ['lenses.json', 'battle.json'])
+    agents.push(
+      `${name} ${await stat(path.join(dir, name)).then(
+        (one) => `${one.size} ${one.mtimeMs}`,
+        () => '',
+      )}`,
+    )
   const agentsNow = agents.join('\n')
   const summary = latest
     ? JSON.stringify([latest.summary, latest.strengths])

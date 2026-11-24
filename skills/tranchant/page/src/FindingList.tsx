@@ -25,8 +25,18 @@ interface Props {
   commented?: ReadonlySet<string>
   /** By finding, the messages of its discussion: marked with their count. */
   discussed?: ReadonlyMap<string, number>
+  /** In a battle: who found it, `A + B`, `also B` or `only A`. */
+  who?: ((id: string) => Who | undefined) | undefined
   onOpen: (id: string) => void
   onToggle: (id: string) => void
+}
+
+/** Who found a finding of a battle, as its row says it. */
+interface Who {
+  label: string
+  /** Both groups did: marked. */
+  both: boolean
+  title: string
 }
 
 const optionId = (id: string) => `tr-option-${id}`
@@ -92,10 +102,12 @@ function Row({
   unverified,
   commented,
   discussed,
+  who,
   onOpen,
   onToggle,
 }: {
   finding: Finding
+  who: Who | undefined
   records: Records
   focused: boolean
   open: boolean
@@ -129,6 +141,14 @@ function Row({
           <span className={stateClass(state)} title={STATE_DETAILS[state]}>
             {stateLabel(state)}
           </span>
+          {who && (
+            <span
+              className={`tr-bt-who${who.both ? ' tr-bt-who--both' : ''}`}
+              title={who.title}
+            >
+              {who.label}
+            </span>
+          )}
           {finding.lens && <LensChip lens={finding.lens} />}
           {tag !== 'concern' && (
             <span className={`tr-chip tr-chip--tag-${tag}`}>{tag}</span>
@@ -157,6 +177,7 @@ export function FindingList({
   unverified,
   commented,
   discussed,
+  who,
   onOpen,
   onToggle,
 }: Props) {
@@ -208,6 +229,7 @@ export function FindingList({
                   unverified={unverified?.has(finding.id) ?? false}
                   commented={commented?.has(finding.id) ?? false}
                   discussed={discussed?.get(finding.id) ?? 0}
+                  who={who?.(finding.id)}
                   onOpen={() => onOpen(finding.id)}
                   onToggle={() => onToggle(finding.id)}
                 />

@@ -7,6 +7,7 @@ import {
   type Review,
   type StartChoices,
 } from './domain'
+import { BattleSetup, pickedBattle } from './BattleSetup'
 import { lensHref, MANY_LENSES } from './LensesView'
 import type { GroupsPayload } from './settings'
 import { formatTokens } from './tokens'
@@ -456,6 +457,8 @@ export function ReadyCenter({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  // A battle's plan opens on its tab (--battle); the Review tab otherwise.
+  const [tab, setTab] = useState<'review' | 'battle'>(step.battle ? 'battle' : 'review')
   const rows = step.lenses
   const changed = step.changed ?? 0
   const group = step.group
@@ -495,6 +498,115 @@ export function ReadyCenter({
   }
   const cleanedAgain = rows.filter((row) => row.cleaning === 'again')
   const at = cap ? `, ${cap} at a time` : ''
+  // Each tab plans its own: the battle picked, or back to one group, the default one.
+  const openTab = (next: 'review' | 'battle') => {
+    setTab(next)
+    if (next === 'battle') {
+      const battle = pickedBattle(step, choices, groups)
+      if (battle && !step.battle && battle.a !== battle.b) {
+        const first: StartChoices = { lenses: {}, remember: false, battle }
+        onChoices(first)
+        act(true, first)
+      }
+    } else if (step.battle) {
+      const back: StartChoices = {
+        lenses: {},
+        remember: false,
+        battle: null,
+        group: groups?.default ?? null,
+      }
+      onChoices(back)
+      act(true, back)
+    }
+  }
+  const tabs = !step.own && (
+    <div className="tr-tabs" role="tablist" aria-label="Kind of review">
+      {(
+        [
+          ['review', 'Review'],
+          ['battle', 'Battle review'],
+        ] as const
+      ).map(([key, label]) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          className="tr-tab"
+          aria-selected={tab === key}
+          disabled={busy}
+          onClick={() => {
+            if (tab !== key) openTab(key)
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+  const why =
+    step.wait === 'reset'
+      ? 'The review was reset: its findings are gone'
+      : step.wait === 'flag'
+        ? 'This run was opened with --no-start'
+        : step.wait === 'battle'
+          ? 'This run was opened with --battle'
+          : 'Start the review by itself is off in Settings'
+  if (tab === 'battle')
+    return (
+      <main className="tr-ready" aria-labelledby="tr-ready-title">
+        <div className="tr-ready-head">
+          <h2 id="tr-ready-title">Ready to start the review</h2>
+          <p className="tr-muted">
+            {why}: the lenses are built, and no reviewer runs until you start.
+          </p>
+        </div>
+        {tabs}
+        {error && (
+          <p className="tr-notice" role="alert">
+            Not started: {error}
+          </p>
+        )}
+        {step.problem && (
+          <p className="tr-notice" role="alert">
+            The lenses were not planned again, the last plan stands: {step.problem}
+          </p>
+        )}
+        <GroupNotes notes={step.battle ? step.notes : undefined} />
+        <BattleSetup
+          step={step}
+          review={review}
+          groups={groups}
+          choices={choices}
+          cap={cap}
+          busy={busy}
+          onPick={(battle, build) => {
+            const next: StartChoices = { lenses: {}, remember: false, battle }
+            onChoices(next)
+            if (build) act(true, next)
+          }}
+          onStart={(battle) => act(false, { lenses: {}, remember: false, battle })}
+        />
+      </main>
+    )
+  // Back from a battle: its rows are not the review's until the plan is made again.
+  if (step.battle)
+    return (
+      <main className="tr-ready" aria-labelledby="tr-ready-title">
+        <div className="tr-ready-head">
+          <h2 id="tr-ready-title">Ready to start the review</h2>
+          <p className="tr-muted">{why}: no reviewer runs until you start.</p>
+        </div>
+        {tabs}
+        {error && (
+          <p className="tr-notice" role="alert">
+            Not started: {error}
+          </p>
+        )}
+        <p className="tr-muted" role="status">
+          {busy || !error ? 'Building the lenses of the review…' : ''}
+        </p>
+      </main>
+    )
   // The lenses on, plus the summary agent's: the figure follows the switches.
   const costs = new Map(estimate?.lenses.map((one) => [one.name, one]))
   // One that cannot be built runs nothing: never in the figure.
@@ -521,11 +633,7 @@ export function ReadyCenter({
             : 'Ready to start the review'}
         </h2>
         <p className="tr-muted">
-          {step.wait === 'reset'
-            ? 'The review was reset: its findings are gone'
-            : step.wait === 'flag'
-              ? 'This run was opened with --no-start'
-              : 'Start the review by itself is off in Settings'}
+          {why}
           {step.wait === 'reset' ? ', the lenses' : ': the lenses'} are built, and no
           reviewer runs until you start it.{' '}
           {step.wait === 'reset' &&
@@ -535,6 +643,7 @@ export function ReadyCenter({
             : 'Turn off the lenses this change does not need.'}
         </p>
       </div>
+      {tabs}
       <dl className="tr-ready-facts">
         <dt>Target</dt>
         <dd>

@@ -34,6 +34,21 @@ released to the `stable` branch.
   project since its prompt last changed, a finding counted once a verifier
   confirmed it; under each group, its lenses' averages summed, those with no
   history named.
+- **Battle review: two groups of lenses on one change, compared.** Ready
+  to start the review has two tabs, **Review** and **Battle review**: pick
+  group A and group B, see the lenses they share and those only one has,
+  then **Start the battle** (`/tranchant review --battle A,B` opens on that
+  tab). Both run in one review and share its queue, A and B in turn; a lens
+  in both groups runs once and counts for both, unless **Run the shared
+  lenses twice**. The progress panel shows the shared lenses above A and B
+  side by side, each with its lenses, verifiers, findings, tokens and time.
+  The header's **A · B · Compare** switch shows one group's findings at a
+  time, each saying `A + B`, `also B` or `only A`; a finding both found is
+  settled once. **Compare**, once both are done: a scorecard (findings,
+  found by both, only this group, dropped by the verifier, kept and
+  dropped by you, reviewers, tokens, time, the better side marked), the
+  pairs found by both (**Not the same** splits one), what only A and only
+  B found, and **Copy as Markdown**.
 
 ### Changed
 
