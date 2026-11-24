@@ -2176,7 +2176,7 @@ test("/api/settings: a lens's average over the project's past reviews, its promp
   )
   await writeFile(
     path.join(past, 'findings', 'correctness-1.json'),
-    JSON.stringify({ id: 'correctness-1' }),
+    JSON.stringify({ id: 'correctness-1', lens: 'correctness' }),
   )
   const settings = await json(await fetch(`${server.base}/api/settings`))
   const lenses = settings.lensSet.lenses

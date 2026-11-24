@@ -336,3 +336,37 @@ test('with no history at all, no lens and no group shows an average', () => {
   fireEvent.click(tab(/^Groups/))
   expect(document.querySelectorAll('.tr-lns-history')).toHaveLength(0)
 })
+
+test("a group's line follows its draft while edited, and reads each member's own scope", () => {
+  const lenses = WITH_HISTORY.map((one) =>
+    one.name === 'conventions' && one.scope === 'local'
+      ? { ...one, history: { tokens: 50_000, confirmed: 0.5, runs: 3 } }
+      : one,
+  )
+  const groups: GroupsPayload = {
+    ...GROUPS,
+    list: [
+      ...GROUPS.list,
+      // The built-in conventions: the project's has the history, not this one.
+      { name: 'style', lenses: [{ scope: 'recipe', name: 'conventions' }] },
+    ],
+  }
+  renderLenses('group:backend', groups, lenses)
+  const list = within(screen.getByRole('list', { name: 'Groups' }))
+  expect(
+    within(itemOf(list.getByText('style'))).queryByText(/tokens a review/),
+  ).toBeNull()
+  const editor = within(screen.getByRole('region', { name: 'backend' }))
+  const bugs = within(editor.getByRole('group', { name: 'Built-in' }))
+    .getByText('bugs')
+    .closest('label')
+    ?.querySelector('input')
+  if (!bugs) throw new Error('no checkbox for bugs')
+  fireEvent.click(bugs)
+  const backend = itemOf(editor.getByLabelText('Name'))
+  expect(
+    within(backend).getByText(
+      '~140k tokens a review · 0.8 confirmed · 1 lens with no history, not counted',
+    ),
+  ).toBeTruthy()
+})

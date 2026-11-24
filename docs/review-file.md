@@ -450,8 +450,8 @@ or whose Start is at work.
 
 **The estimate.** While a review waits, `/api/review` answers `estimate`
 (`lib/estimate.mjs`), from the project's past reviews created before it,
-the 20 whose `review.json` was last written: their `review.json`, their
-run files' `end` steps and their `findings/`, each review's sums kept in the
+the 20 whose `review.json` was last written: their `review.json` and their
+run files' `end` steps (their `findings/` for the averages below), each review's sums kept in the
 server's memory while those files stay the same (a `complete` review is
 read once). A file that is not a regular file, or past 16 MiB, leaves its
 review out; so does a `review.json` that does not parse or has no date:
@@ -479,14 +479,17 @@ on with a past run), the fact says why and the note stays.
 **A lens's average.** The same scan gives Settings › Lenses each lens's
 average a review (`history` on `/api/settings`'s lenses, see
 [the settings file](settings.md)): over its last 10 `complete` reviews of
-the project, the one the page serves included, with the same prompt `hash`
-(the lens as built now; one that cannot be built takes its last run's),
-its reviewer's and its verifications' tokens, and its findings that stand
-confirmed (`verified`, or every one in a review not verified; a finding
-names its lens by `lens`, else by its id's prefix). A run is skipped when
-its reviewer or one of its verifications has no whole figure. A group's
-average, on the page, is its lenses' summed, those with none said and left
-out.
+the project that no stop cut, the one the page serves included, since its
+prompt `hash` last changed (the lens as built now; one that cannot be built
+takes its last run's), its reviewer's and its verifications' tokens, and its
+findings that stand confirmed (`verified`, or every one in a review not
+verified; a finding counts for the lens its `lens` names, never one read
+from its id). A run is skipped when its reviewer or one of its
+verifications has no whole figure, or a finding it landed had no verifier.
+A finding's file past 256 KiB, or that cannot be read, leaves its review
+out of the averages, said once on stderr; its tokens still count for the
+estimate. A group's average, on the page, is the averages of its lenses
+still there summed, those with none said and left out.
 
 ## Pause, stop and reset
 

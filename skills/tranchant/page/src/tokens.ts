@@ -564,13 +564,13 @@ export function lensHistoryOf(history: LensHistory | undefined): HistoryLine | u
   if (!history) return undefined
   return {
     text: `~${formatTokens(history.tokens)} tokens a review · ${perReview(history.confirmed)} confirmed`,
-    title: `Its reviewer's and its verifications' tokens, and its findings that stood confirmed: the average of its last ${plural(history.runs, 'complete review')} in this project with its prompt as it is now`,
+    title: `Its reviewer's and its verifications' tokens, and its findings that stood confirmed: the average of its last ${plural(history.runs, 'complete review')} in this project since its prompt last changed`,
   }
 }
 
 /**
- * A group's line in Settings › Lenses › Groups: its lenses' averages summed,
- * those with none said; none when none of them has one.
+ * A group's line in Settings › Lenses › Groups: the averages of its lenses
+ * still there summed, those with none said; none when none of them has one.
  */
 export function groupHistoryOf(
   members: readonly (LensHistory | undefined)[],
@@ -583,6 +583,6 @@ export function groupHistoryOf(
   return {
     text: `~${formatTokens(tokens)} tokens a review · ${perReview(confirmed)} confirmed${missing ? ` · ${plural(missing, 'lens', 'lenses')} with no history, not counted` : ''}`,
     title:
-      "Its lenses' averages summed, each over its last complete reviews in this project: what a review of this group should spend and find",
+      "Its lenses' averages summed, each over its last complete reviews in this project: what a review spends and finds when every one of them runs",
   }
 }
