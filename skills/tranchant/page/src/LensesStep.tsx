@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   plural,
+  type Estimate,
   type LensRow,
   type LensesProgress,
   type Review,
@@ -8,6 +9,7 @@ import {
 } from './domain'
 import { lensHref, MANY_LENSES } from './LensesView'
 import type { GroupsPayload } from './settings'
+import { formatTokens } from './tokens'
 
 const CHANGE_WORDS: Record<NonNullable<LensRow['change']>, string> = {
   unchanged: 'unchanged',
@@ -338,6 +340,37 @@ function GroupNotes({ notes }: { notes: string[] | undefined }) {
   )
 }
 
+/** What a lens that runs should spend, on its row: `~350k`, or that it has no past run. */
+function Cost({
+  row,
+  lit,
+  cost,
+}: {
+  row: LensRow
+  lit: boolean
+  cost: Estimate['lenses'][number] | undefined
+}) {
+  const files = row.files ?? 0
+  if (!lit || files < 1 || row.state === 'failed') return null
+  if (!cost)
+    return (
+      <span
+        className="tr-lens-row-est"
+        title="No past run in this project with its prompt: not in the estimate"
+      >
+        no past run
+      </span>
+    )
+  return (
+    <span
+      className="tr-lens-row-est tr-tk-est"
+      title={`${formatTokens(cost.perFile)} tokens per file read, the median of its last ${plural(cost.runs, 'review')} here, × ${plural(files, 'file')}, plus its verifiers`}
+    >
+      ~{formatTokens(cost.tokens)}
+    </span>
+  )
+}
+
 /** On for this review: the page's choice, else what the settings say. */
 const isOn = (row: LensRow, choices: StartChoices) =>
   Object.hasOwn(choices.lenses, row.name) ? choices.lenses[row.name] === true : !row.off
@@ -396,6 +429,7 @@ function readyWords(
 export function ReadyCenter({
   step,
   review,
+  estimate,
   choices,
   cap,
   model,
@@ -405,6 +439,8 @@ export function ReadyCenter({
 }: {
   step: LensesProgress
   review: Pick<Review, 'branch' | 'base' | 'ownership'>
+  /** What it should spend, from the project's past reviews; absent from older servers. */
+  estimate?: Estimate | undefined
   choices: StartChoices
   /** Review agents at a time, and their model: the settings'. */
   cap: number | undefined
@@ -459,6 +495,23 @@ export function ReadyCenter({
   }
   const cleanedAgain = rows.filter((row) => row.cleaning === 'again')
   const at = cap ? `, ${cap} at a time` : ''
+  // The lenses on, plus the summary agent's: the figure follows the switches.
+  const costs = new Map(estimate?.lenses.map((one) => [one.name, one]))
+  // One that cannot be built runs nothing: never in the figure.
+  const buildable = running.filter((row) => row.state !== 'failed')
+  const known = buildable.flatMap((row) => {
+    const cost = costs.get(row.name)
+    return cost ? [cost] : []
+  })
+  const unknown = buildable.length - known.length
+  const summary = estimate?.summary
+  const total = (summary?.tokens ?? 0) + known.reduce((sum, one) => sum + one.tokens, 0)
+  const reviews = new Set([
+    ...(summary?.reviews ?? []),
+    ...known.flatMap((one) => one.reviews),
+  ])
+  const priced = !!estimate?.recorded && known.length > 0
+  const about = `about ${formatTokens(total)} tokens`
   return (
     <main className="tr-ready" aria-labelledby="tr-ready-title">
       <div className="tr-ready-head">
@@ -554,6 +607,31 @@ export function ReadyCenter({
           {plural(running.length, 'reviewer')}
           {at}, then one verifier per finding{model ? ` · ${model}` : ''}
         </dd>
+        {estimate && running.length > 0 && (
+          <>
+            <dt>Tokens</dt>
+            <dd>
+              {priced ? (
+                <>
+                  <span className="tr-tk-est">about {formatTokens(total)}</span>{' '}
+                  <span className="tr-muted">
+                    tokens, from {plural(reviews.size, 'past review')} in this project:
+                    each lens’s tokens per file read
+                    {summary ? ', its verifiers and the summary' : ' and its verifiers'}
+                    {unknown > 0 &&
+                      ` · + ${plural(unknown, 'lens', 'lenses')} with no past run, not counted`}
+                  </span>
+                </>
+              ) : (
+                <span className="tr-muted">
+                  {estimate.recorded
+                    ? 'no estimate: none of these lenses has a past run in this project with its prompt. The next review will record one.'
+                    : 'no estimate yet: no review in this project has recorded its tokens. The next one will.'}
+                </span>
+              )}
+            </dd>
+          </>
+        )}
       </dl>
       {blocking.map((row) => (
         <p className="tr-notice" role="alert" key={row.name}>
@@ -564,7 +642,8 @@ export function ReadyCenter({
           again.
         </p>
       ))}
-      {running.length > MANY_LENSES && !blocking.length && (
+      {/* With a figure, it says it better. */}
+      {running.length > MANY_LENSES && !blocking.length && !priced && (
         <p className="tr-notice tr-notice--warn" role="note">
           <strong>{plural(running.length, 'reviewer')}.</strong> Each one reads the change
           on its own: a review this wide spends many tokens. Turn off below the lenses
@@ -583,7 +662,7 @@ export function ReadyCenter({
         </p>
       )}
       <ul
-        className="tr-lens-rows tr-lens-rows--switches"
+        className={`tr-lens-rows tr-lens-rows--switches${estimate?.recorded ? ' tr-lens-rows--estimate' : ''}`}
         aria-label={
           group
             ? `The lenses of ${group}, one per row: turn one off for this review`
@@ -621,6 +700,9 @@ export function ReadyCenter({
               >
                 {readyWords(row, lit, moved, choices, changed, group)}
               </span>
+              {estimate?.recorded && (
+                <Cost row={row} lit={lit} cost={costs.get(row.name)} />
+              )}
               {lit && row.state === 'failed' && row.reason && (
                 <p className="tr-lens-row-reason">{row.reason}</p>
               )}
@@ -691,7 +773,7 @@ export function ReadyCenter({
               : blocking.length
                 ? `Turn ${names(blocking)} off above, or fix ${blocking.length > 1 ? 'them' : 'it'} and build again.`
                 : running.length
-                  ? `${plural(running.length, 'reviewer')}${group ? ` of ${group}` : ''} start${running.length === 1 ? 's' : ''}${at}.`
+                  ? `${plural(running.length, 'reviewer')}${group ? ` of ${group}` : ''} start${running.length === 1 ? 's' : ''}${at}${priced ? ` · ${about}` : '.'}`
                   : 'No lens that is on reads the change: turn one on to start.'}
         </span>
         <a className="tr-btn tr-btn--link tr-ready-change" href="#settings/lenses">

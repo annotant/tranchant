@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { plural, type Finding, type ReviewAgent } from './domain'
 import { Markdown } from './markdown'
 import {
@@ -140,17 +140,29 @@ const STEPS_SHOWN = 6
 /** One lens: its verdict in a row; opened, its report, its findings and what it looked at. */
 function LensRow({
   report,
+  focused,
   onOpen,
 }: {
   report: LensReport
+  /** The Tokens screen's link names it: opened, and scrolled to. */
+  focused: boolean
   onOpen: (id: string) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(focused)
+  const [wasFocused, setWasFocused] = useState(focused)
+  if (focused !== wasFocused) {
+    setWasFocused(focused)
+    if (focused) setOpen(true)
+  }
   const [allSteps, setAllSteps] = useState(false)
+  const row = useRef<HTMLLIElement>(null)
+  useEffect(() => {
+    if (focused) row.current?.scrollIntoView?.({ block: 'start' })
+  }, [focused])
   const steps = allSteps ? report.steps : report.steps.slice(0, STEPS_SHOWN)
   const body = `tr-report-body-${report.lens}`
   return (
-    <li className="tr-report">
+    <li className="tr-report" id={`tr-report-${report.lens}`} ref={row}>
       <button
         type="button"
         className="tr-report-row"
@@ -305,6 +317,7 @@ export function ReviewAgents({
   others = NO_GROUPS,
   underWay = NO_GROUPS,
   stuck = NO_GROUPS,
+  report,
   onOpen,
   onControl,
 }: {
@@ -327,8 +340,15 @@ export function ReviewAgents({
   stuck?: readonly string[]
   /** Pause, Resume, Stop and Reset; absent, the panel offers none. */
   onControl?: ((control: ReviewControl) => Promise<boolean>) | undefined
+  /** The lens whose report `#report/<lens>` opens. */
+  report?: string | undefined
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(report !== undefined)
+  const [shownReport, setShownReport] = useState(report)
+  if (report !== shownReport) {
+    setShownReport(report)
+    if (report !== undefined) setOpen(true)
+  }
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   if (!agents.length && !planned.length) return null
@@ -660,8 +680,13 @@ export function ReviewAgents({
       )}
       {open && (
         <ul className="tr-reports" aria-label="What each lens checked">
-          {progress.reports.map((report) => (
-            <LensRow key={report.lens} report={report} onOpen={onOpen} />
+          {progress.reports.map((one) => (
+            <LensRow
+              key={one.lens}
+              report={one}
+              focused={one.lens === report}
+              onOpen={onOpen}
+            />
           ))}
         </ul>
       )}

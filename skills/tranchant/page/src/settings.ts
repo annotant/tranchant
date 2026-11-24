@@ -101,6 +101,18 @@ export interface LensEntry {
   /** Why it cannot be built now, and what fixes it. */
   problem?: string
   fix?: string
+  /** Its average over its last complete reviews in the project; absent with none. */
+  history?: LensHistory
+}
+
+/**
+ * A lens's average a review: `tokens` its reviewer's and its verifications',
+ * `confirmed` its findings that stood confirmed; `runs` the reviews averaged.
+ */
+export interface LensHistory {
+  tokens: number
+  confirmed: number
+  runs: number
 }
 
 /** A lens of a group: which one, by its scope and its name. */

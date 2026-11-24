@@ -77,6 +77,7 @@ import {
  * @property {true} [offInSettings] In a group's review: off in the settings, run by the group.
  * @property {'unchanged' | 'updated' | 'new'} [change] With `ready`: against the project's previous review.
  * @property {string} [version]
+ * @property {string} [hash] With `ready`: its built prompt's, as review.json records it: the estimate's history starts over where it changes.
  * @property {string} [reason] With `failed`; with `cleaning: 'failed'`, why its last version runs.
  * @property {string} [fix] With `failed`: what makes it build.
  * @property {'global' | 'local'} [scope] A lens the user added.
@@ -495,6 +496,7 @@ for (const [i, lens] of shown.entries()) {
     Object.assign(row, {
       state: 'ready',
       source: record.source,
+      hash,
       change: before === undefined ? 'new' : before === hash ? 'unchanged' : 'updated',
       ...(record.version && { version: record.version }),
       ...model.row,
@@ -512,7 +514,10 @@ for (const [i, lens] of shown.entries()) {
               ),
             }),
     })
-    records.push(record)
+    records.push({
+      ...record,
+      ...(Number.isSafeInteger(lens.files) && { files: lens.files }),
+    })
     built.push({
       name: lens.name,
       prompt: file,

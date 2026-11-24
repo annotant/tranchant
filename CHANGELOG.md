@@ -7,6 +7,38 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-24
+
+### Added
+
+- **Pick several sources at once in Settings › Lenses › Browse.** A box on
+  each item: a click checks one, Shift-click a range over the list as
+  shown, a source that is a lens already skipped. **Add N** opens one row
+  each under **Picked**, renamable, with one Where it lives.
+- **Each agent's tokens are recorded.** The summary agent, the reviewers,
+  the verifiers, the discussions, the fixes and the cleanings: on their
+  runs, and in a review's `usage.json` while they work and once a reset
+  removed them. `/api/review` sums them by kind, lens and finding.
+- **A review's tokens in the header.** A chip beside the review's status,
+  `2.90M tokens` (`so far` while an agent works, `paused` while
+  the review is paused and nothing runs, `at least` with an agent not reported or partial), opens the Tokens screen
+  (`#tokens`): by agent kind, and by lens with what each lens found,
+  confirmed and dropped, its tokens per confirmed finding and **nothing
+  confirmed** marked. A lens's name opens its reviewer's report.
+- **A finding's tokens in its Run section.** Each run's figure, a line for
+  its verification and one for its discussion, and the finding's sum under
+  them, `at least` when a part did not report.
+- **A lens's and a group's average in Settings › Lenses.** Under each lens,
+  `~140k tokens · 0.8 confirmed findings a review · ~175k tokens per
+  confirmed finding`, over its last 10 complete and verified reviews in the
+  project since its prompt last changed, a finding counted once a verifier
+  confirmed it; under each group, its lenses' averages summed, those with no
+  history named.
+
+### Changed
+
+- **Add a lens is Global by default**, for one source as for many.
+
 ## 0.7.0 - 2026-11-22
 
 ### Added

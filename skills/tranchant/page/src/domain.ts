@@ -13,6 +13,8 @@ interface LensRecord {
   source: string
   version?: string
   hash: string
+  /** How many changed files it reviews, as the plan counted them. */
+  files?: number
 }
 
 /** Why a review was refused: the lens, its source, the reason, and what fixes it. */
@@ -38,6 +40,8 @@ export interface LensRow {
   /** With `ready`: against the project's previous review. */
   change?: 'unchanged' | 'updated' | 'new'
   version?: string
+  /** With `ready`: its built prompt's hash. */
+  hash?: string
   /** With `failed`; with `cleaning: 'failed'`, why its last version runs. */
   reason?: string
   fix?: string
@@ -403,6 +407,102 @@ export interface Discussion {
   step?: Step
 }
 
+/** One model's counts in an agent's figure. */
+interface ModelUsage {
+  model: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/** A figure as `/api/review` answers it: `tokens`, its four counts summed over its models. */
+export interface Usage {
+  models: ModelUsage[]
+  tokens: number
+  usd?: number
+  hasUnknownPrice?: true
+  /** A last reading, or a sum with a part not reported: a floor. */
+  partial?: true
+}
+
+export type UsageKind =
+  'summary' | 'reviewers' | 'verifiers' | 'fixes' | 'discussions' | 'cleanings'
+
+interface KindUsage {
+  kind: UsageKind
+  agents: number
+  usage: Usage | null
+}
+
+/** A finding's verification, discussion or run: its agents summed; `usage` null when none reported. */
+export interface UsagePart {
+  usage: Usage | null
+  running?: true
+}
+
+/** What a finding's agents spent. */
+export interface FindingUsage {
+  id: string
+  /** Every fix's agent, the ones that ended with no run included. */
+  fixes: Usage | null
+  /** Null when it had none. */
+  verifier: UsagePart | null
+  discussion: UsagePart | null
+  /** One per run of its record, by the run's id. */
+  runs: (UsagePart & { id: string })[]
+  /** Its fixes' agents on no run: ended or at work before their claim. */
+  unclaimed: UsagePart | null
+  usage: Usage | null
+  running?: true
+}
+
+/** What the review's agents spent, summed by the server (`/api/review`'s `usage`). */
+export interface ReviewUsage {
+  /** Null when no agent reported a figure. */
+  total: Usage | null
+  kinds: KindUsage[]
+  /** The most tokens first. */
+  lenses: {
+    lens: string
+    reviewer: Usage | null
+    verifiers: Usage | null
+    tokens: number
+  }[]
+  /** By finding id, in id order. */
+  findings: FindingUsage[]
+  reset: {
+    usage: Usage | null
+    kinds: KindUsage[]
+    lenses: { lens: string; reviewer: Usage | null; verifiers: Usage | null }[]
+  } | null
+  /** By run name: `rv-bugs`, `rv-bugs#2`, `vf-f-03`, `ds-f-03`, `sm-summary`, `fix:f-03:r1`, `fix:f-03`, `cl-…`. */
+  notReported: string[]
+  partial: string[]
+  /** An agent it counts still works. */
+  running: boolean
+}
+
+/**
+ * What a review waiting to start should spend, from the project's past
+ * reviews (`/api/review`'s `estimate`). The page sums the lenses its switches
+ * turn on.
+ */
+export interface Estimate {
+  /** Whether a past review of the project recorded its tokens. */
+  recorded: boolean
+  /** The summary agent's median; null with none. */
+  summary: EstimatePart | null
+  /** Each lens that reads a changed file and has a past run, on or off. */
+  lenses: (EstimatePart & { name: string; perFile: number; runs: number })[]
+}
+
+/** A figure of the estimate, and the past reviews (folder names) it comes from. */
+interface EstimatePart {
+  tokens: number
+  reviews: string[]
+}
+
 /** What `GET /api/review` answers. */
 export interface ReviewPayload {
   review: Review
@@ -415,6 +515,10 @@ export interface ReviewPayload {
   lenses?: LensesProgress
   /** By finding id; absent from older servers. */
   discussions?: Record<string, Discussion>
+  /** Absent from older servers, and when it could not be read. */
+  usage?: ReviewUsage
+  /** While the review waits to start; absent from older servers, and when it could not be read. */
+  estimate?: Estimate
   head: { reviewed: string; current: string | null }
 }
 

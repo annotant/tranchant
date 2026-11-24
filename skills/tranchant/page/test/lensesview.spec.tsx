@@ -1,4 +1,12 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { useState } from 'react'
 import { expect, test, vi } from 'vitest'
 import type { SettingsChange } from '../src/api'
@@ -511,6 +519,8 @@ test('Add a lens names it after its source before the cleaning; a name taken in 
   try {
     const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    // This project's lenses are the ones these names meet.
+    toLocal()
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
       target: { value: '.claude/agents/abac.md' },
@@ -749,6 +759,14 @@ test('while a lens is added past the warning, the form alone says the count', ()
   expect(screen.getByText(/^With this one, 14 lenses are on/)).toBeDefined()
 })
 
+/** Add a lens's Where it lives set to This project: Global is preselected. */
+const toLocal = () =>
+  fireEvent.click(
+    within(screen.getByRole('form', { name: 'Add a lens' })).getByRole('button', {
+      name: 'This project',
+    }),
+  )
+
 /** The server's answer to every look: `/api/lens/matches` or `/api/lens/inside`. */
 function stubMatches(answer: unknown) {
   const fetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify(answer))))
@@ -775,6 +793,8 @@ test('a glob lists its matches: a taken name blocks until renamed, one that is n
   try {
     const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    // This project's lenses are the ones these names meet.
+    toLocal()
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
       target: { value: '.claude/agents/*-review.md' },
@@ -979,6 +999,8 @@ test('a match whose file is a lens already, or being added, says so and cannot b
   try {
     const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    // This project's lenses are the ones these names meet.
+    toLocal()
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
       target: { value: '.claude/agents/*-review.md' },
@@ -1040,6 +1062,8 @@ test("a plugin's command lists the agents it starts in place of a name; one that
   try {
     const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    // This project's lenses are the ones these names meet.
+    toLocal()
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
       target: { value: 'pr-review-toolkit:review-pr' },
@@ -1083,6 +1107,8 @@ test('a command whose read finds no agent offers an agent to look: one lens of i
   try {
     const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    // This project's lenses are the ones these names meet.
+    toLocal()
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
       target: { value: '.claude/commands/full-review.md' },
@@ -1125,6 +1151,8 @@ test("a glob's command shows the agents it starts under it, each once; its check
   try {
     const { onLens } = renderLenses()
     fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+    // This project's lenses are the ones these names meet.
+    toLocal()
     const form = within(screen.getByRole('form', { name: 'Add a lens' }))
     fireEvent.change(form.getByLabelText('Source'), {
       target: { value: '.claude/*/*review*.md' },
@@ -1295,9 +1323,9 @@ const answer = (status: number, body: unknown) =>
   Promise.resolve(new Response(JSON.stringify(body), { status }))
 
 /** The server as the picker asks it: the catalog, the folders, and nothing inside a source. */
-function stubPicker() {
+function stubPicker(catalog: unknown = CATALOG) {
   const fetch = vi.fn((url: string) => {
-    if (url === '/api/lens/catalog') return answer(200, CATALOG)
+    if (url === '/api/lens/catalog') return answer(200, catalog)
     if (url.startsWith('/api/lens/folder?go=')) {
       return url.includes('Documents')
         ? answer(409, {
@@ -1351,7 +1379,7 @@ test("Browse lists the plugins' agents: one picked fills Source, which stays edi
     expect(form.getByLabelText('Name')).toHaveProperty('value', 'code-reviewer-api')
     expect(onLens).toHaveBeenCalledWith('import', {
       source: 'workflow:code-reviewer-api',
-      scope: 'local',
+      scope: 'global',
       name: 'code-reviewer-api',
     })
   } finally {
@@ -1423,6 +1451,11 @@ test('Files: hidden files, links out and unreadable folders are shown, never ope
     fireEvent.click(picker.getByRole('button', { name: 'Go' }))
     await picker.findByText('review-checklist.md')
     expect(picker.getByRole('button', { name: /\.env/ })).toHaveProperty('disabled', true)
+    // A file can be checked; what cannot be picked has no box.
+    expect(
+      picker.getByRole('checkbox', { name: 'Check review-checklist.md' }),
+    ).toBeDefined()
+    expect(picker.queryByRole('checkbox', { name: 'Check .env' })).toBeNull()
     expect(picker.getByRole('button', { name: /shared/ })).toHaveProperty(
       'disabled',
       true,
@@ -1482,6 +1515,363 @@ test("Enter in the picker's search or Go to a folder never submits Add a lens; a
       expect(String(fetch.mock.calls.at(-1)?.at(0))).toBe(
         '/api/lens/folder?root=project&path=docs',
       ),
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+/** A team plugin of seven reviewers, review-db a lens already; the project's three agents, two whose names meet a lens. */
+const TEAM = {
+  ...CATALOG,
+  plugins: [
+    {
+      name: 'team',
+      version: '3.1.0',
+      folder: '~/.claude/plugins/team/',
+      enabled: true,
+      items: [
+        'review-a11y',
+        'review-api',
+        'review-db',
+        'review-docs',
+        'review-i18n',
+        'review-logging',
+        'review-security',
+      ].map((name) => ({
+        kind: 'agent',
+        name,
+        source: `team:${name}`,
+        ...(name === 'review-db' && { already: [{ scope: 'local', name: 'db' }] }),
+      })),
+    },
+  ],
+  project: {
+    folder: '.claude/',
+    items: ['bugs', 'abac', 'money-review'].map((name) => ({
+      kind: 'agent',
+      name,
+      source: `.claude/agents/${name}.md`,
+    })),
+  },
+}
+
+/** Add a lens, its picker open on the team plugin. */
+async function openPicker(plugin = 'team') {
+  const { onLens } = renderLenses()
+  fireEvent.click(screen.getByRole('button', { name: 'Add a lens' }))
+  const form = within(screen.getByRole('form', { name: 'Add a lens' }))
+  fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+  const picker = within(screen.getByRole('region', { name: 'Pick a source' }))
+  await picker.findByText(plugin)
+  const box = (name: string) => picker.getByRole('checkbox', { name: `Check ${name}` })
+  const count = () => picker.getByRole('status').textContent
+  return { onLens, form, picker, box, count }
+}
+
+const checkedNames = (picker: { getAllByRole: (role: 'checkbox') => HTMLElement[] }) =>
+  picker
+    .getAllByRole('checkbox')
+    .filter((one) => one instanceof HTMLInputElement && one.checked)
+    .map((one) => one.getAttribute('aria-label')?.replace(/^Check /, ''))
+
+test('Browse checks one item per click; Shift-click checks a range forward, skipping a lens already, and unchecks one backward', async () => {
+  stubPicker(TEAM)
+  try {
+    const { picker, box, count } = await openPicker()
+    expect(count()).toBe('Check several to add them at once; Shift-click checks a range.')
+    expect(picker.getByRole('button', { name: 'Add' })).toHaveProperty('disabled', true)
+    expect(box('review-db')).toHaveProperty('disabled', true)
+    fireEvent.click(box('review-a11y'))
+    expect(count()).toBe('1 checked: review-a11y.')
+    fireEvent.click(box('review-i18n'), { shiftKey: true })
+    expect(checkedNames(picker)).toEqual([
+      'review-a11y',
+      'review-api',
+      'review-docs',
+      'review-i18n',
+    ])
+    expect(count()).toBe(
+      'Shift-click checked review-a11y to review-i18n: 4. review-db is a lens already: skipped.',
+    )
+    expect(picker.getByRole('button', { name: 'Add 4' })).toHaveProperty(
+      'disabled',
+      false,
+    )
+    // Backward, from the last one clicked: the clicked one is checked, so the range unchecks.
+    fireEvent.click(box('review-docs'), { shiftKey: true })
+    expect(checkedNames(picker)).toEqual(['review-a11y', 'review-api'])
+    expect(count()).toBe('Shift-click unchecked review-i18n to review-docs: 2.')
+    // A plain click toggles one alone.
+    fireEvent.click(box('review-api'))
+    expect(checkedNames(picker)).toEqual(['review-a11y'])
+    // Closed and opened again, Browse keeps its checks.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Browse…' }))
+    const again = within(screen.getByRole('region', { name: 'Pick a source' }))
+    await again.findByText('team')
+    expect(checkedNames(again)).toEqual(['review-a11y'])
+    fireEvent.click(again.getByRole('button', { name: 'Uncheck all' }))
+    expect(checkedNames(again)).toEqual([])
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a Shift range runs over the list as the search shows it; checks stay across searches and tabs', async () => {
+  stubPicker(TEAM)
+  try {
+    const { picker, box, count } = await openPicker()
+    fireEvent.click(box('review-docs'))
+    fireEvent.change(picker.getByLabelText('Search by name'), { target: { value: 'o' } })
+    expect(picker.queryByRole('checkbox', { name: 'Check review-i18n' })).toBeNull()
+    fireEvent.click(box('review-logging'), { shiftKey: true })
+    expect(count()).toBe(
+      'Shift-click checked review-docs to review-logging: 2. The ones the search hides are left as they were.',
+    )
+    fireEvent.click(picker.getByRole('button', { name: 'Clear' }))
+    // review-i18n lies between them, hidden by the search: left as it was.
+    expect(checkedNames(picker)).toEqual(['review-docs', 'review-logging'])
+    fireEvent.click(picker.getByRole('tab', { name: /^This project/ }))
+    expect(picker.getByRole('tab', { name: /^Plugins/ }).textContent).toContain(
+      '2 checked',
+    )
+    fireEvent.click(box('money-review'))
+    expect(count()).toBe('3 checked: review-docs, review-logging, money-review.')
+    fireEvent.click(picker.getByRole('tab', { name: /^Plugins/ }))
+    expect(checkedNames(picker)).toEqual(['review-docs', 'review-logging'])
+    expect(picker.getByRole('tab', { name: /^This project/ }).textContent).toContain(
+      '1 checked',
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("one checked is today's flow: Source filled, Name derived, Global preselected; a name clicked picks that one alone", async () => {
+  stubPicker(TEAM)
+  try {
+    const { onLens, form, picker, box } = await openPicker()
+    fireEvent.click(box('review-a11y'))
+    fireEvent.click(box('review-api'))
+    // A name clicked drops the checks: that one alone.
+    fireEvent.click(picker.getByRole('button', { name: /review-docs/ }))
+    expect(form.getByLabelText('Source')).toHaveProperty('value', 'team:review-docs')
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const again = within(screen.getByRole('region', { name: 'Pick a source' }))
+    await again.findByText('team')
+    expect(checkedNames(again)).toEqual([])
+    fireEvent.click(again.getByRole('checkbox', { name: 'Check review-api' }))
+    fireEvent.click(again.getByRole('button', { name: 'Add 1' }))
+    expect(screen.queryByRole('region', { name: 'Pick a source' })).toBeNull()
+    expect(form.getByLabelText('Source')).toHaveProperty('value', 'team:review-api')
+    expect(
+      form.getByRole('button', { name: 'Global' }).getAttribute('aria-pressed'),
+    ).toBe('true')
+    expect(
+      form.getByText(
+        'Global: it runs on every project on this machine, never in a repository.',
+      ),
+    ).toBeDefined()
+    const add = form.getByRole('button', { name: 'Import and clean' })
+    await waitFor(() => expect(add).toHaveProperty('disabled', false))
+    fireEvent.click(add)
+    expect(onLens).toHaveBeenCalledWith('import', {
+      source: 'team:review-api',
+      scope: 'global',
+      name: 'code-reviewer-api',
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('several checked open one row each under Picked, with one Where it lives, Global preselected; a taken name blocks Add until renamed', async () => {
+  stubPicker(TEAM)
+  try {
+    const { onLens, form, picker, box } = await openPicker()
+    fireEvent.click(picker.getByRole('tab', { name: /^This project/ }))
+    fireEvent.click(box('bugs'))
+    fireEvent.click(box('money-review'), { shiftKey: true })
+    fireEvent.click(picker.getByRole('button', { name: 'Add 3' }))
+    expect(screen.queryByRole('region', { name: 'Pick a source' })).toBeNull()
+    expect(document.getElementById('tr-lns-add-source')?.textContent).toBe(
+      '3 sources picked in Browse',
+    )
+    expect(form.queryByLabelText('Name')).toBeNull()
+    expect(
+      form.getByRole('button', { name: 'Global' }).getAttribute('aria-pressed'),
+    ).toBe('true')
+    expect(
+      form.getByText(
+        'Global: they run on every project on this machine, never in a repository. The same for every one picked.',
+      ),
+    ).toBeDefined()
+    const list = within(form.getByRole('list', { name: 'Picked' }))
+    expect(list.getAllByRole('checkbox')).toHaveLength(3)
+    // The global bugs takes the name; this project's abac wins over a global one.
+    expect(
+      list.getByText(
+        'The global bugs is another lens, from /me/agents/bugs.md: give this one another name.',
+      ),
+    ).toBeDefined()
+    expect(list.getByText('shadowed')).toBeDefined()
+    expect(form.getByRole('button', { name: 'Add the 3 lenses' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    // Browse again: the same ones checked.
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const again = within(screen.getByRole('region', { name: 'Pick a source' }))
+    await again.findByText('team')
+    fireEvent.click(again.getByRole('tab', { name: /^This project/ }))
+    expect(checkedNames(again)).toEqual(['bugs', 'abac', 'money-review'])
+    fireEvent.click(form.getByRole('button', { name: 'Close' }))
+    fireEvent.change(list.getByLabelText('Lens name for .claude/agents/bugs.md'), {
+      target: { value: 'bugs-team' },
+    })
+    fireEvent.click(form.getByRole('button', { name: 'Add the 3 lenses' }))
+    expect(onLens).toHaveBeenCalledWith('import', {
+      sources: [
+        { source: '.claude/agents/bugs.md', name: 'bugs-team' },
+        { source: '.claude/agents/abac.md', name: 'abac' },
+        { source: '.claude/agents/money-review.md', name: 'money-review' },
+      ],
+      scope: 'global',
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a Shift-click whose anchor the search hides checks that one alone', async () => {
+  stubPicker(TEAM)
+  try {
+    const { picker, box } = await openPicker()
+    fireEvent.click(box('review-a11y'))
+    fireEvent.change(picker.getByLabelText('Search by name'), { target: { value: 'o' } })
+    fireEvent.click(box('review-logging'), { shiftKey: true })
+    fireEvent.click(picker.getByRole('button', { name: 'Clear' }))
+    expect(checkedNames(picker)).toEqual(['review-a11y', 'review-logging'])
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('under Picked, an unchecked row is left out and stays so, a renamed one keeps its name, when Browse adds more', async () => {
+  stubPicker(TEAM)
+  try {
+    const { onLens, form, picker, box } = await openPicker()
+    fireEvent.click(box('review-a11y'))
+    fireEvent.click(box('review-api'))
+    fireEvent.click(box('review-docs'))
+    fireEvent.click(picker.getByRole('button', { name: 'Add 3' }))
+    const list = within(form.getByRole('list', { name: 'Picked' }))
+    fireEvent.click(list.getByLabelText('team:review-api'))
+    fireEvent.change(list.getByLabelText('Lens name for team:review-a11y'), {
+      target: { value: 'a11y' },
+    })
+    fireEvent.click(form.getByRole('button', { name: 'Browse…' }))
+    const again = within(screen.getByRole('region', { name: 'Pick a source' }))
+    await again.findByText('team')
+    expect(checkedNames(again)).toEqual(['review-a11y', 'review-docs'])
+    fireEvent.click(again.getByRole('checkbox', { name: 'Check review-i18n' }))
+    fireEvent.click(again.getByRole('button', { name: 'Add 3' }))
+    fireEvent.click(form.getByRole('button', { name: 'Add the 3 lenses' }))
+    expect(onLens).toHaveBeenCalledWith('import', {
+      sources: [
+        { source: 'team:review-a11y', name: 'a11y' },
+        { source: 'team:review-docs', name: 'review-docs' },
+        { source: 'team:review-i18n', name: 'review-i18n' },
+      ],
+      scope: 'global',
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("a batch's source from a plugin turned off says the lens would not build; skills checked in Files are named as the server names them", async () => {
+  stubPicker()
+  try {
+    const { form, picker, box } = await openPicker('workflow')
+    fireEvent.click(box('sql-review'))
+    fireEvent.click(box('code-reviewer-api'))
+    fireEvent.click(picker.getByRole('button', { name: 'Add 2' }))
+    const list = within(form.getByRole('list', { name: 'Picked' }))
+    expect(list.getByText('plugin off')).toBeDefined()
+    expect(
+      list.getByText(
+        'Its plugin is turned off for this project: the lens would not build until it is turned on (/plugin).',
+      ),
+    ).toBeDefined()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) =>
+      url === '/api/lens/catalog'
+        ? answer(200, CATALOG)
+        : answer(200, {
+            root: 'project',
+            path: url.endsWith('api') ? '.claude/skills/api' : '.claude/skills/db',
+            label: '',
+            entries: [
+              {
+                name: 'SKILL.md',
+                kind: 'file',
+                // A plugin's own skill is written plugin:name.
+                source: url.endsWith('api')
+                  ? 'team:security-review'
+                  : '.claude/skills/db/SKILL.md',
+              },
+              { name: 'api', kind: 'folder' },
+            ],
+          }),
+    ),
+  )
+  try {
+    cleanup()
+    const { form, picker } = await openPicker('workflow')
+    fireEvent.click(picker.getByRole('tab', { name: 'Files' }))
+    fireEvent.click(await picker.findByRole('checkbox', { name: 'Check SKILL.md' }))
+    fireEvent.click(picker.getByRole('button', { name: /api\// }))
+    await waitFor(() =>
+      expect(picker.getByRole('checkbox', { name: 'Check SKILL.md' })).toHaveProperty(
+        'checked',
+        false,
+      ),
+    )
+    fireEvent.click(picker.getByRole('checkbox', { name: 'Check SKILL.md' }))
+    fireEvent.click(picker.getByRole('button', { name: 'Add 2' }))
+    const list = within(form.getByRole('list', { name: 'Picked' }))
+    expect(
+      list.getByLabelText('Lens name for .claude/skills/db/SKILL.md'),
+    ).toHaveProperty('value', 'db')
+    expect(list.getByLabelText('Lens name for team:security-review')).toHaveProperty(
+      'value',
+      'security-review',
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('Type a source instead leaves the batch for the field', async () => {
+  stubPicker(TEAM)
+  try {
+    const { form, box, picker } = await openPicker()
+    fireEvent.click(box('review-a11y'))
+    fireEvent.click(box('review-api'))
+    fireEvent.click(picker.getByRole('button', { name: 'Add 2' }))
+    expect(form.getByRole('list', { name: 'Picked' })).toBeDefined()
+    fireEvent.click(form.getByRole('button', { name: 'Type a source instead' }))
+    expect(form.queryByRole('list', { name: 'Picked' })).toBeNull()
+    expect(form.getByLabelText('Source')).toHaveProperty('value', '')
+    expect(form.getByRole('button', { name: 'Import and clean' })).toHaveProperty(
+      'disabled',
+      true,
     )
   } finally {
     vi.unstubAllGlobals()

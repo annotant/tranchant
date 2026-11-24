@@ -179,6 +179,13 @@ export const shortName = (source: string) =>
     .findLast(Boolean)
     ?.replace(/\.md$/i, '') ?? source
 
+/** A stem made a lens name, as the server makes it: letters, digits, - and _, 40 at most; `lens` when nothing is left. */
+export const lensNameOf = (stem: string) =>
+  stem
+    .replace(/[^\w-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'lens'
+
 const SCOPE_WORD = { local: "This project's", global: 'The global' } as const
 
 /** Why a lens cannot take `name` where it would live: not a lens name, or another lens's there. */
@@ -587,6 +594,27 @@ export function GlobMatches({
         Matches
       </span>
       <div className="tr-field-body tr-matches">{body}</div>
+    </div>
+  )
+}
+
+/** The sources checked in Browse, one row each to uncheck and rename. */
+export function PickedMatches(pick: PickProps) {
+  const checked = pick.rows.filter((row) => row.checked).length
+  return (
+    <div className="tr-field">
+      <span className="tr-field-label" id="tr-lns-add-picked">
+        Picked
+      </span>
+      <div className="tr-field-body tr-matches">
+        <MatchesHead title={`${pick.rows.length} sources`} checked={checked} {...pick} />
+        <MatchList label="tr-lns-add-picked" {...pick} />
+        <span className="tr-field-help">
+          {tooMany(checked)}
+          Each lens is named after its source; rename one before it is cleaned. Unchecked,
+          it is left out. Browse again to check more: the ones here stay checked.
+        </span>
+      </div>
     </div>
   )
 }

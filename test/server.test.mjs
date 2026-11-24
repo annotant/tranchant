@@ -20,6 +20,8 @@ import { before, test } from 'node:test'
 import { say } from '../skills/tranchant/scripts/lib/discussion.mjs'
 import { createStore, progressPath } from '../skills/tranchant/scripts/lib/store.mjs'
 import { hashOf } from '../skills/tranchant/scripts/lib/project.mjs'
+import { DEFAULTS } from '../skills/tranchant/scripts/lib/settings.mjs'
+import { describeLenses } from '../skills/tranchant/scripts/lib/userlens.mjs'
 import { buildPlayground } from './fixtures/playground.mjs'
 import { SCRIPTS, fixture, importReview, json, run, tempDir } from './helpers.mjs'
 
@@ -270,8 +272,13 @@ test('answers the review, its decisions, its runs and the heads', async () => {
     'review',
     'reviewers',
     'runs',
+    'usage',
   ])
   assert.deepEqual(body.reviewers, [])
+  // No agent ran: no figure, no zero.
+  assert.equal(body.usage.total, null)
+  assert.deepEqual(body.usage.kinds, [])
+  assert.equal(body.usage.running, false)
   assert.deepEqual(body.discussions, {})
   assert.equal(body.review.id, main.review.id)
   assert.equal(body.review.findings.length, 5)
@@ -279,6 +286,76 @@ test('answers the review, its decisions, its runs and the heads', async () => {
   assert.deepEqual(body.runs, {})
   assert.equal(body.head.reviewed, main.review.headSha)
   assert.match(body.head.current, /^[0-9a-f]{40}$/)
+})
+
+/** A figure of `n` tokens of each count. */
+const figure = (/** @type {number} */ n) => ({
+  models: [
+    { model: 'claude-opus-5-5', input: n, output: n, cacheRead: n, cacheWrite: n },
+  ],
+})
+
+test("answers what the review's agents spent: by kind, by lens, by finding, its cleanings too", async (t) => {
+  const server = await startServer(t, { name: 'ours', overrides: { verify: true } })
+  await mkdir(path.join(server.dir, 'reviewers'), { recursive: true })
+  await writeFile(
+    path.join(server.dir, 'reviewers', 'rv-bugs.jsonl'),
+    line({ at: 1, kind: 'start', model: 'm', agent: 'r1' }) +
+      line({ at: 2, kind: 'end', agent: 'r1', usage: figure(10) }),
+  )
+  await writeFile(
+    path.join(server.dir, 'reviewers', 'vf-f-02.jsonl'),
+    line({ at: 1, kind: 'start', model: 'm', lens: 'bugs', agent: 'v1' }) +
+      line({ at: 2, kind: 'end', agent: 'v1', usage: { ...figure(1), partial: true } }),
+  )
+  const store = createStore(server.dir)
+  await store.decide('f-02', { action: 'fix' })
+  await store.claim('f-02', { agent: 'x1' })
+  await store.done('f-02', 'Done.')
+  await store.recordUsage('f-02', 'x1', figure(5))
+  // A lens it cleaned again counts, its cleaning naming it, failed or not; another review's does not.
+  const cleanings = path.join(stateDir, hashOf(server.project), 'cleanings')
+  for (const [id, record] of /** @type {const} */ ([
+    ['c0ffee12-3456', { state: 'failed', review: server.dir, usage: figure(2) }],
+    ['c0ffee34-5678', { state: 'added', review: '/elsewhere/rev-2', usage: figure(9) }],
+    ['c0ffee56-7890', { state: 'added', usage: figure(9) }],
+  ])) {
+    await mkdir(path.join(cleanings, id), { recursive: true })
+    await writeFile(
+      path.join(cleanings, id, 'cleaning.json'),
+      JSON.stringify({ id, ...record }),
+    )
+  }
+  const { usage } = await json(await fetch(`${server.base}/api/review`))
+  assert.equal(usage.total.tokens, 4 * (10 + 1 + 5 + 2))
+  assert.equal(usage.total.partial, true)
+  assert.deepEqual(
+    usage.kinds.map((/** @type {any} */ one) => [one.kind, one.agents, one.usage.tokens]),
+    [
+      ['reviewers', 1, 40],
+      ['verifiers', 1, 4],
+      ['fixes', 1, 20],
+      ['cleanings', 1, 8],
+    ],
+  )
+  assert.deepEqual(
+    usage.lenses.map((/** @type {any} */ one) => [
+      one.lens,
+      one.reviewer.tokens,
+      one.verifiers.tokens,
+    ]),
+    [['bugs', 40, 4]],
+  )
+  assert.deepEqual(
+    usage.findings.map((/** @type {any} */ one) => [one.id, one.usage.tokens]),
+    [['f-02', 24]],
+  )
+  assert.deepEqual(usage.partial, ['vf-f-02'])
+  assert.deepEqual(usage.notReported, [])
+  assert.equal(usage.running, false)
+  // The run carries its own figure, as decisions.json holds it.
+  const body = await json(await fetch(`${server.base}/api/review`))
+  assert.deepEqual(body.findings['f-02'].runs[0].usage, figure(5))
 })
 
 /**
@@ -2057,6 +2134,64 @@ test('a tool forced on the other forge\u2019s host is refused: no token goes to 
 
 // The recipe in force, the imports, and the Lenses step's progress.
 
+test("/api/settings: a lens's average over the project's past reviews, its prompt's hash kept on the server", async (t) => {
+  const config = await tempDir(t, 'tranchant-config-')
+  const server = await startServer(t, { env: { XDG_CONFIG_HOME: config } })
+  const described = await describeLenses({
+    project: server.project,
+    base: 'main',
+    values: DEFAULTS,
+  })
+  const built = described.lenses.find((lens) => lens.name === 'correctness')
+  const hash = built && 'hash' in built ? built.hash : undefined
+  assert.ok(hash)
+  // Beside the fixture's review, which other tests import too: gone once read.
+  const past = path.join(path.dirname(server.dir), 'past-review')
+  t.after(() => rm(past, { recursive: true, force: true }))
+  await mkdir(path.join(past, 'reviewers'), { recursive: true })
+  await mkdir(path.join(past, 'findings'), { recursive: true })
+  await writeFile(
+    path.join(past, 'review.json'),
+    JSON.stringify({
+      version: 1,
+      createdAt: '2026-11-01T00:00:00.000Z',
+      verify: true,
+      lenses: [{ name: 'correctness', source: 'tranchant:correctness', hash, files: 2 }],
+      findings: [],
+    }),
+  )
+  const usage = {
+    models: [
+      {
+        model: 'claude-sonnet-5-5',
+        input: 10,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 40,
+      },
+    ],
+  }
+  await writeFile(
+    path.join(past, 'reviewers', 'rv-correctness.jsonl'),
+    `${JSON.stringify({ at: 1, kind: 'start', model: 'm', agent: 'a' })}\n${JSON.stringify({ at: 2, kind: 'end', agent: 'a', usage })}\n`,
+  )
+  await writeFile(
+    path.join(past, 'findings', 'correctness-1.json'),
+    JSON.stringify({ id: 'correctness-1', lens: 'correctness', verified: true }),
+  )
+  await writeFile(
+    path.join(past, 'reviewers', 'vf-correctness-1.jsonl'),
+    `${JSON.stringify({ at: 1, kind: 'start', model: 'm', agent: 'v', lens: 'correctness' })}\n${JSON.stringify({ at: 2, kind: 'end', agent: 'v', usage: { models: [{ model: 'claude-sonnet-5-5', input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }] } })}\n`,
+  )
+  const settings = await json(await fetch(`${server.base}/api/settings`))
+  const lenses = settings.lensSet.lenses
+  assert.ok(lenses.every((/** @type {any} */ lens) => lens.hash === undefined))
+  const find = (/** @type {string} */ name) =>
+    lenses.find((/** @type {any} */ lens) => lens.name === name)
+  assert.deepEqual(find('correctness').history, { tokens: 100, confirmed: 1, runs: 1 })
+  assert.equal(find('docs').history, undefined)
+})
+
 test('the review carries its Lenses step; /api/lens/* adds a cleaned lens, changes, shows and removes it', async (t) => {
   const config = await tempDir(t, 'tranchant-config-')
   const server = await startServer(t, { env: { XDG_CONFIG_HOME: config } })
@@ -2327,7 +2462,15 @@ test('a review waiting to start: Build and Start print their line with the choic
   const early = await send('start', { lenses: {}, remember: false })
   assert.equal(early.status, 409)
   await assert.rejects(readFile(choices))
+  // Not waiting yet: no estimate read.
+  assert.equal((await json(await fetch(`${server.base}/api/review`))).estimate, undefined)
   await waiting()
+  // While it waits, what it should spend: no past review of the project recorded any.
+  assert.deepEqual((await json(await fetch(`${server.base}/api/review`))).estimate, {
+    recorded: false,
+    summary: null,
+    lenses: [],
+  })
   assert.equal(
     (await send('start', { lenses: { bugs: 'no' }, remember: false })).status,
     400,

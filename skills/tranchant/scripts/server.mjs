@@ -112,6 +112,8 @@ import {
   writeSettings,
 } from './lib/settings.mjs'
 import { trackerOf } from './lib/tracker.mjs'
+import { estimateOf, lensHistories } from './lib/estimate.mjs'
+import { reviewUsage } from './lib/usage.mjs'
 import {
   MAX_ISSUE_BODY,
   MAX_ISSUE_TITLE,
@@ -405,7 +407,8 @@ function trackerOnce(values) {
  * What `GET /api/settings` answers: the file as it stands, the values in
  * force, the keys an environment variable locks, the recipe in force for
  * this review's project, every lens that could run on it (Settings ›
- * Lenses) and the lenses being cleaned.
+ * Lenses) with its average over the project's reviews, and the lenses
+ * being cleaned.
  */
 async function settingsPayload() {
   const { settings, values, locked, problem } = await loadSettings()
@@ -418,6 +421,16 @@ async function settingsPayload() {
     readGroups(lensRoot),
   ])
   const cleanings = withProcessAlready(listed, [...described.lenses, ...adding(listed)])
+  const histories = await lensHistories(dir, described.lenses).catch((error) => {
+    console.error(`tranchant server: lens histories: ${oneLine(String(error))}`)
+    return described.lenses.map(() => null)
+  })
+  const shown = described.lenses.map((one, i) => {
+    // The hash is the server's, to read the history by: not the page's.
+    const { hash: _hash, ...lens } = /** @type {typeof one & { hash?: string }} */ (one)
+    const history = histories[i]
+    return history ? { ...lens, history } : lens
+  })
   return {
     path: SETTINGS_FILE,
     settings,
@@ -429,7 +442,7 @@ async function settingsPayload() {
     lenses: described.lenses
       .filter((lens) => lens.scope === 'recipe')
       .map((lens) => lens.name),
-    lensSet: { dirs: described.dirs, lenses: described.lenses },
+    lensSet: { dirs: described.dirs, lenses: shown },
     cleanings,
     groups: {
       file: groups.file,
@@ -1154,9 +1167,32 @@ async function handle(req, res) {
         currentHead(),
         readLensesStep(),
       ])
+    // Summed here, never in the browser; unreadable, the review reads as one with no usage.
+    const usage = await reviewUsage(dir, {
+      review: latest,
+      decisions: decisions.findings,
+      since: SESSION_SINCE,
+    }).catch((error) => {
+      console.error(`tranchant server: /api/review: usage: ${String(error)}`)
+      return undefined
+    })
+    // While it waits to start: what it should spend, from the project's past reviews.
+    const estimate =
+      latest.status === 'preparing' &&
+      lenses?.state === 'waiting' &&
+      Array.isArray(lenses.lenses)
+        ? await estimateOf(dir, lenses.lenses, latest.createdAt).catch((error) => {
+            console.error(
+              `tranchant server: /api/review: estimate: ${error instanceof Error ? error.stack : String(error)}`,
+            )
+            return undefined
+          })
+        : undefined
     return send(res, 200, {
       review: latest,
       ...(lenses && { lenses }),
+      ...(usage && { usage }),
+      ...(estimate && { estimate }),
       findings: decisions.findings,
       runs,
       reviewers: agents.filter((agent) => !DISCUSSER.test(agent.name)),
@@ -2164,8 +2200,12 @@ async function changes() {
 
 /** Whether READY was printed: the hooks read it first, LANDED only after. */
 let ready = false
-/** The findings LANDED was printed for, once each. @type {Set<string>} */
-const landed = new Set()
+/**
+ * The findings LANDED was printed for, once each landing, with their
+ * `addedAt`: a reset and a landing between two reads leave only it changed.
+ * @type {Map<string, string | undefined>}
+ */
+const landed = new Map()
 
 /**
  * LANDED for each finding not verified yet, while a review whose findings
@@ -2175,13 +2215,14 @@ const landed = new Set()
 function announceLanded(latest) {
   // A finding gone (removed, or a reset) lands again under its id: said again.
   if (latest)
-    for (const id of landed)
-      if (!latest.findings.some((finding) => finding.id === id)) landed.delete(id)
+    for (const [id, addedAt] of landed)
+      if (!latest.findings.some((one) => one.id === id && one.addedAt === addedAt))
+        landed.delete(id)
   if (!ready || !latest?.verify || statusOf(latest) !== 'reviewing' || latest.stopped)
     return
   for (const finding of latest.findings) {
     if (finding.verified === true || landed.has(finding.id)) continue
-    landed.add(finding.id)
+    landed.set(finding.id, finding.addedAt)
     print(`LANDED ${finding.id}`)
   }
 }
