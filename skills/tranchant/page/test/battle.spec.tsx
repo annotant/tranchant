@@ -467,3 +467,70 @@ test('the comparison lists the pairs and the findings only one group found', asy
     }),
   )
 })
+
+test('switching groups clears the selection: a batch acts on the findings shown', async () => {
+  await renderBattle()
+  const option = document.getElementById('tr-option-correctness-1')
+  if (!option) throw new Error('no correctness-1 in the list')
+  fireEvent.click(within(option).getByRole('checkbox'))
+  expect(within(option).getByRole<HTMLInputElement>('checkbox').checked).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: /^B\s*3$/ }))
+  fireEvent.click(screen.getByRole('button', { name: /^A\s*2$/ }))
+  const again = document.getElementById('tr-option-correctness-1')
+  if (!again) throw new Error('no correctness-1 in the list')
+  expect(within(again).getByRole<HTMLInputElement>('checkbox').checked).toBe(false)
+})
+
+test('a stopped battle opens Compare, its review still reviewing', async () => {
+  await renderBattle(
+    battlePayload({ status: 'reviewing', stopped: { at: '2026-11-23T10:00:00Z' } }),
+  )
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Compare' }).disabled,
+  ).toBe(false)
+})
+
+test('the Review tab of a battle plans one group again, the default one; twice is sent with the battle', async () => {
+  const { onStart } = renderReady(BUILT, { ...GROUPS, default: 'team' })
+  fireEvent.click(screen.getByRole('checkbox', { name: /Run the shared lenses twice/ }))
+  await waitFor(() =>
+    expect(onStart).toHaveBeenLastCalledWith(true, {
+      lenses: {},
+      remember: false,
+      battle: { a: 'builtin', b: 'team', twice: true },
+    }),
+  )
+  fireEvent.click(screen.getByRole('tab', { name: 'Review' }))
+  await waitFor(() =>
+    expect(onStart).toHaveBeenLastCalledWith(true, {
+      lenses: {},
+      remember: false,
+      battle: null,
+      group: 'team',
+    }),
+  )
+})
+
+test('a battle picked but never built is dropped when the Review tab starts', async () => {
+  const onStart = vi.fn((_build: boolean, _next?: StartChoices) => Promise.resolve())
+  render(
+    <ReadyCenter
+      step={waiting()}
+      review={{ branch: 'feature/cart', base: 'main', ownership: 'ours' }}
+      choices={{ lenses: {}, remember: false, battle: { a: 'builtin', b: 'solo' } }}
+      cap={3}
+      model={null}
+      groups={GROUPS}
+      onChoices={() => undefined}
+      onStart={onStart}
+    />,
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Start the review' }))
+  await waitFor(() =>
+    expect(onStart).toHaveBeenCalledWith(false, {
+      lenses: {},
+      remember: false,
+      battle: null,
+    }),
+  )
+})

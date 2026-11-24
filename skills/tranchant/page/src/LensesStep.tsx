@@ -487,7 +487,13 @@ export function ReadyCenter({
   const act = (build: boolean, next?: StartChoices) => {
     setBusy(true)
     setError(undefined)
-    const asked = next ? onStart(build, next) : onStart(build)
+    // A battle picked but never built is no choice of the Review tab's: Start would wait on it for ever.
+    const stale = !next && !step.battle && choices.battle
+    const asked = next
+      ? onStart(build, next)
+      : stale
+        ? onStart(build, { ...choices, battle: null })
+        : onStart(build)
     asked
       .catch((refusal: unknown) =>
         setError(
@@ -508,7 +514,7 @@ export function ReadyCenter({
         onChoices(first)
         act(true, first)
       }
-    } else if (step.battle) {
+    } else if (step.battle || choices.battle) {
       const back: StartChoices = {
         lenses: {},
         remember: false,
@@ -602,9 +608,16 @@ export function ReadyCenter({
             Not started: {error}
           </p>
         )}
-        <p className="tr-muted" role="status">
-          {busy || !error ? 'Building the lenses of the review…' : ''}
-        </p>
+        {step.problem ? (
+          <p className="tr-notice" role="alert">
+            The review could not be planned again, the battle stands: {step.problem}. Pick
+            the battle again, or change the groups in Settings › Lenses › Groups.
+          </p>
+        ) : (
+          <p className="tr-muted" role="status">
+            Building the lenses of the review…
+          </p>
+        )}
       </main>
     )
   // The lenses on, plus the summary agent's: the figure follows the switches.

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   battleMarkdown,
   letterOf,
@@ -99,10 +99,20 @@ export function BattleCompare({
   const settled = review.findings.filter(
     (finding) => stateOf(records, finding.id) !== 'open',
   )
+  // Said a few seconds, then the count of findings settled again.
+  useEffect(() => {
+    if (copied === undefined) return undefined
+    const timer = setTimeout(() => setCopied(undefined), 4000)
+    return () => clearTimeout(timer)
+  }, [copied])
   const copy = () => {
-    const text = battleMarkdown({ review, view, score })
+    // No clipboard outside a secure context: said, never a click that does nothing.
+    if (!navigator.clipboard) {
+      setCopied('This browser gives the page no clipboard.')
+      return
+    }
     navigator.clipboard
-      ?.writeText(text)
+      .writeText(battleMarkdown({ review, view, score }))
       .then(() => setCopied('Copied: paste it in an issue or a note.'))
       .catch(() => setCopied('The browser refused to copy.'))
   }
@@ -157,9 +167,9 @@ export function BattleCompare({
           <span className="tr-muted">{shared.length + view.pairs.length}</span>
         </h3>
         <p className="tr-field-help">
-          Paired by file, overlapping lines and finding kind. A pair that is not the same
-          finding: <em>Not the same</em> splits it. A pair is settled once: deciding on
-          one of its findings settles the other.
+          Paired by file, topic and lines within three of each other. A pair that is not
+          the same finding: <em>Not the same</em> splits it. A pair is settled once:
+          deciding on one of its findings settles the other.
         </p>
         {shared.length + view.pairs.length > 0 ? (
           <ul className="tr-bt-pairlist">

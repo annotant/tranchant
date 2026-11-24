@@ -61,6 +61,8 @@ export function BattleBoard({
   project: string
 }) {
   const { battle } = view
+  const sideOf = (lens: string) =>
+    Object.hasOwn(battle.lenses, lens) ? battle.lenses[lens] : undefined
   const queued = phase === 'done' || phase === 'stopped' ? [] : undefined
   const planned = (keep: (side: string) => boolean) =>
     queued ??
@@ -70,8 +72,7 @@ export function BattleBoard({
   const ofSide = (side: Side) =>
     findings.filter((finding) => inSide(view.sides.get(finding.id), side))
   const shared = agents.filter(
-    (agent) =>
-      agent.name.startsWith('rv-') && battle.lenses[agent.name.slice(3)] === 'both',
+    (agent) => agent.name.startsWith('rv-') && sideOf(agent.name.slice(3)) === 'both',
   )
   const sharedProgress = progressOf(
     shared,
@@ -101,10 +102,7 @@ export function BattleBoard({
           const letter = letterOf(side)
           const own = sideAgents(agents, battle, side).filter(
             (agent) =>
-              !(
-                agent.name.startsWith('rv-') &&
-                battle.lenses[agent.name.slice(3)] === 'both'
-              ),
+              !(agent.name.startsWith('rv-') && sideOf(agent.name.slice(3)) === 'both'),
           )
           const mine = ofSide(side)
           const progress = progressOf(

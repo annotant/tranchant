@@ -2584,7 +2584,7 @@ test('review --group passes the group to prepare.mjs; with --recipe, or with no 
   expect(w.prepared).toHaveLength(1)
 })
 
-test('review --battle passes the two groups to prepare.mjs; with --group or --recipe, or with no groups, it is refused', async ($, on) => {
+test('review --battle passes the two groups to prepare.mjs; with --group or --recipe, or with no value, it is refused, on the tool too', async ($, on) => {
   const w = world(on)
   await review($, w, 'review --battle builtin,team')
   expect(w.prepared).toEqual([{ argv: ['--battle', 'builtin,team'], cwd: ROOT }])
@@ -2598,6 +2598,24 @@ test('review --battle passes the two groups to prepare.mjs; with --group or --re
     expect(answer.text).toMatch(/^Usage: \/tranchant review .*--battle <A,B>/)
   }
   expect(w.prepared).toHaveLength(1)
+  const both = await $.tool.call({
+    tool: 'mcp__tranchant__open',
+    run: true,
+    battle: 'builtin,team',
+    group: 'frontend',
+  })
+  expect(both.result).toMatch(/^Usage: \/tranchant review /)
+  expect(w.prepared).toHaveLength(1)
+  await w.exit(0)
+})
+
+test('the tool passes battle to prepare.mjs', async ($, on) => {
+  const w = world(on, { building: 'WAITING\n' })
+  const answer = $.tool.call({ tool: 'mcp__tranchant__open', run: true, battle: 'A,B' })
+  await w.print(READY)
+  expect((await answer).result).toMatch(/^The lenses are built/)
+  expect(w.prepared).toEqual([{ argv: ['--battle', 'A,B'], cwd: ROOT }])
+  await w.exit(0)
 })
 
 test("a fix's end puts the list's figure on its run; gone from the list, its last one, partial", async ($, on) => {

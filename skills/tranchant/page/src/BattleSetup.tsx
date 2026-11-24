@@ -63,6 +63,15 @@ export function BattleSetup({
 }) {
   const list = groups?.list ?? []
   const changed = step.changed ?? 0
+  // Not known yet, or unreadable: never said to be none.
+  if (!groups) return <p className="tr-muted">Reading the project’s groups…</p>
+  if (groups.problem)
+    return (
+      <p className="tr-notice" role="alert">
+        The project’s groups cannot be read: {groups.problem}. Fix them in Settings ›
+        Lenses › Groups.
+      </p>
+    )
   const target = (
     <>
       <code>
@@ -207,7 +216,7 @@ export function BattleSetup({
         </label>
         <span className="tr-field-help">
           {picked.twice
-            ? `Each shared lens runs once per group: ${plural(shared.length, 'more reviewer')}. Their findings may differ between the two runs, and that difference is the noise any comparison has to beat (#112).`
+            ? `Each shared lens runs once per group: ${plural(shared.length, 'more reviewer')}. Their findings may differ between the two runs, and that difference is the noise any comparison of two groups has to beat.`
             : `Off: each shared lens (${shared.map((one) => one.name).join(', ') || 'none'}) runs once, and its findings count for both groups. Cheaper, and the comparison shows only what the groups do differently.`}
         </span>
       </div>

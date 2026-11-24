@@ -37,7 +37,7 @@
 // groups and each lens's side are in lenses.json, and in review.json once it
 // runs (`battle`).
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -501,7 +501,11 @@ if (process.argv.includes('--check')) {
     const now = await standing(lens).catch((error) => stepFailed(message(error)))
     if (now?.now !== 'stale' || now.held || !lens.added) continue
     Object.assign(rows[i] ?? {}, { cleaning: 'running' })
-    stale.push({ name: lens.name, scope: lens.added.scope })
+    // A battle's lens run under another name is cleaned under its own, once.
+    const name = lens.of ?? lens.name
+    const scope = lens.added.scope
+    if (!stale.some((one) => one.name === name && one.scope === scope))
+      stale.push({ name, scope })
   }
   await writeProgress('resolving', rows)
   for (const one of stale) console.log(`STALE ${JSON.stringify(one)}`)
@@ -544,6 +548,20 @@ async function modelOf(lens, built) {
   return { line, row }
 }
 
+/**
+ * A battle's lens run under another name than its own (`of`): its prompt
+ * says its findings' ids start with the name it runs as, since a lens's own
+ * prompt may name its own prefix, and two reviewers would add the same ids.
+ * @param {PlannedLens} lens
+ * @param {{ text: string, hash: string, record: LensRecord }} made
+ */
+function renamed(lens, made) {
+  if (!lens.of) return made
+  const text = `${made.text}\n## This review runs this lens as ${lens.name}\n\nIn this battle review the lens runs as \`${lens.name}\`, its LENS: number its findings \`${lens.name}-1\`, \`${lens.name}-2\`…, never \`${lens.of}-<n>\`, whatever the text above says, and pass \`--lens ${lens.name}\` to add.mjs.\n`
+  const hash = createHash('sha256').update(text).digest('hex')
+  return { text, hash, record: { ...made.record, hash } }
+}
+
 const where = {
   origin: originOf(plan.recipe),
   folder: folderOf(plan.recipe),
@@ -559,7 +577,7 @@ for (const [i, lens] of shown.entries()) {
   try {
     // An added lens's paths are the project's, never the recipe's folder.
     const made = await buildLens(lens, lens.added ? whereOf(review.project) : where)
-    const { text, hash, record } = made
+    const { text, hash, record } = renamed(lens, made)
     const { file } = await storeLens(text, hash)
     const model = await modelOf(lens, made)
     const before = previous?.get(lens.name)

@@ -196,7 +196,8 @@ the plugin's front-end ones ([what the review looks at](#what-the-review-looks-a
 `--group <name>` to run one of the project's groups of lenses (Settings ›
 Lenses › Groups: a backend set and a frontend one, or A and B to compare,
 each lens running whatever its switch), `--battle <A,B>` to run two groups
-on the same change at once and compare them (below),
+on the same change at once and compare them ([a battle
+review](docs/review-file.md#a-battle-review)),
 and `--no-start` to build the lenses and wait: the page shows what will run, a
 switch on each lens for this review, and **Start the review** (Settings' **Start
 the review by itself**, on by default, does the same for every review when off;

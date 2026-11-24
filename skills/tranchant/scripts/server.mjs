@@ -1706,9 +1706,14 @@ async function handle(req, res) {
     if (!pair.every((id) => latest.findings.some((finding) => finding.id === id)))
       return send(res, 404, { error: 'a finding of the pair is not in the review' })
     try {
-      return send(res, 200, {
-        splits: await writeSplit(dir, pair[0], pair[1], input.split),
-      })
+      const splits = await writeSplit(dir, pair[0], pair[1], input.split)
+      // A reset that ran meanwhile removed the findings: its battle.json goes with them.
+      const now = await store.readReview()
+      if (!pair.every((id) => now.findings.some((finding) => finding.id === id))) {
+        await rm(path.join(dir, 'battle.json'), { force: true })
+        return send(res, 409, { error: 'the review was reset meanwhile' })
+      }
+      return send(res, 200, { splits })
     } catch (error) {
       if (error instanceof BattleRefusal) return send(res, 409, { error: error.message })
       throw error

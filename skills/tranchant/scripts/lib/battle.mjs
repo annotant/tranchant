@@ -59,7 +59,7 @@ export const sameBattle = (x, y) =>
     ? x === y
     : x.a === y.a && x.b === y.b && !x.twice === !y.twice
 
-/** Which lens it is: its scope, its name and the files it reads. @param {PlannedLens} lens */
+/** Which lens it is: its scope, its name and its paths. @param {PlannedLens} lens */
 const identity = (lens) =>
   JSON.stringify([lens.added?.scope ?? 'recipe', lens.name, lens.paths.toSorted()])
 
@@ -68,7 +68,7 @@ const suffixed = (name, side) => `${name.slice(0, 38)}-${side}`
 
 /**
  * The lenses of a battle, from each group's: the shared ones first, then
- * A's and B's in turn, so the queue moves both reviews at once. Throws when
+ * A's and B's in turn, so the queue moves both groups at once. Throws when
  * two lenses end up under one name.
  * @param {PlannedLens[]} a
  * @param {PlannedLens[]} b
@@ -178,30 +178,44 @@ const MAX_SPLITS = 500
 const splitsFile = (/** @type {string} */ dir) => path.join(dir, 'battle.json')
 
 /**
- * The pairs the user split, each two finding ids in order. None when the
- * file is missing; none too, said on stderr, when it is not one this
- * Tranchant reads.
- * @param {string} dir The review's folder.
- * @returns {Promise<[string, string][]>}
+ * The pairs split, and why the file is not one this Tranchant reads, when
+ * it is not; missing, none.
+ * @param {string} dir
+ * @returns {Promise<{ splits: [string, string][], problem?: string }>}
  */
-export async function readSplits(dir) {
+async function splitsOf(dir) {
   let raw
   try {
     raw = JSON.parse(await readFile(splitsFile(dir), 'utf8'))
   } catch (error) {
-    if (errorCode(error) !== 'ENOENT')
-      console.error(
-        `battle.json not read: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    return []
+    if (errorCode(error) === 'ENOENT') return { splits: [] }
+    return { splits: [], problem: error instanceof Error ? error.message : String(error) }
   }
-  if (raw?.version !== SPLITS_VERSION || !Array.isArray(raw.splits)) return []
-  return raw.splits.filter(
+  if (raw?.version !== SPLITS_VERSION || !Array.isArray(raw.splits))
+    return {
+      splits: [],
+      problem: `version ${SPLITS_VERSION} with splits is the only one read`,
+    }
+  const splits = raw.splits.filter(
     (/** @type {unknown} */ pair) =>
       Array.isArray(pair) &&
       pair.length === 2 &&
       pair.every((id) => typeof id === 'string' && FINDING_ID.test(id)),
   )
+  return { splits }
+}
+
+/**
+ * The pairs the user split, each two finding ids in order. None when the
+ * file is missing; none too, said on stderr, when it is not one this
+ * Tranchant reads, which is then never written over.
+ * @param {string} dir The review's folder.
+ * @returns {Promise<[string, string][]>}
+ */
+export async function readSplits(dir) {
+  const { splits, problem } = await splitsOf(dir)
+  if (problem) console.error(`battle.json not read: ${problem}`)
+  return splits
 }
 
 /** The two ids of a pair, in one order whichever came first. @param {string} x @param {string} y @returns {[string, string]} */
@@ -218,7 +232,13 @@ const ordered = (x, y) => (x < y ? [x, y] : [y, x])
 export function writeSplit(dir, x, y, split) {
   return withFileLock(splitsFile(dir), async () => {
     const [one, two] = ordered(x, y)
-    const kept = (await readSplits(dir)).filter(([a, b]) => !(a === one && b === two))
+    const read = await splitsOf(dir)
+    // Written over, the pairs it holds would be lost.
+    if (read.problem)
+      throw new BattleRefusal(
+        `battle.json cannot be read, so it is not changed: ${read.problem}`,
+      )
+    const kept = read.splits.filter(([a, b]) => !(a === one && b === two))
     const splits = split ? [...kept, /** @type {[string, string]} */ ([one, two])] : kept
     if (splits.length > MAX_SPLITS)
       throw new BattleRefusal(`${MAX_SPLITS} pairs split at most`)

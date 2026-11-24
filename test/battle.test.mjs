@@ -22,6 +22,8 @@ after(() =>
 const { groupsFile } = await import('../skills/tranchant/scripts/lib/groups.mjs')
 const { BattleRefusal, mergeBattle, parseBattle, readSplits, writeSplit } =
   await import('../skills/tranchant/scripts/lib/battle.mjs')
+const { identityOf, validateEnvelope } =
+  await import('../skills/tranchant/scripts/lib/format.mjs')
 
 const PREPARE = path.join(SCRIPTS, 'prepare.mjs')
 const OPEN = path.join(SCRIPTS, 'open.mjs')
@@ -338,7 +340,118 @@ test('the pairs split are kept, in one order, and paired again', async (t) => {
   ])
   assert.deepEqual(await writeSplit(dir, 'money-1', 'bugs-2', false), [['a-1', 'b-1']])
   assert.deepEqual(await readSplits(dir), [['a-1', 'b-1']])
-  // One it cannot read reads as none.
-  await writeFile(path.join(dir, 'battle.json'), '{ nope')
-  assert.deepEqual(await readSplits(dir), [])
+  // One it cannot read reads as none, and is never written over: its pairs would be lost.
+  for (const text of [
+    '{ nope',
+    JSON.stringify({ version: 2, splits: [['a-1', 'b-1']] }),
+  ]) {
+    await writeFile(path.join(dir, 'battle.json'), text)
+    assert.deepEqual(await readSplits(dir), [])
+    await assert.rejects(
+      writeSplit(dir, 'a-1', 'b-2', true),
+      (error) => error instanceof BattleRefusal && /cannot be read/.test(error.message),
+    )
+    assert.equal(await readFile(path.join(dir, 'battle.json'), 'utf8'), text)
+  }
+})
+
+test("review.json's battle is checked, and leaves the review's identity alone", async () => {
+  const envelope = {
+    version: 1,
+    id: 'b96fae58-5cc3-426b-9632-77f3a7f8f866',
+    createdAt: '2026-11-23T10:00:00.000Z',
+    project: '/x',
+    branch: 'feature/x',
+    base: 'main',
+    headSha: 'a'.repeat(40),
+    ownership: 'ours',
+    title: 'X',
+    summary: '',
+    strengths: [],
+    findings: [],
+    status: 'reviewing',
+  }
+  const battle = { a: 'A', b: 'B', lenses: { bugs: 'both', money: 'b' } }
+  assert.deepEqual(validateEnvelope({ ...envelope, battle }), [])
+  assert.deepEqual(
+    validateEnvelope({ ...envelope, battle: { ...battle, twice: true } }),
+    [],
+  )
+  for (const wrong of [
+    { ...battle, b: 'A' },
+    { ...battle, lenses: { bugs: 'c' } },
+    { ...battle, twice: false },
+    { ...battle, a: '../x' },
+    { a: 'A', b: 'B' },
+  ])
+    assert.ok(
+      validateEnvelope({ ...envelope, battle: wrong }).some((one) =>
+        one.startsWith('battle:'),
+      ),
+      JSON.stringify(wrong),
+    )
+  assert.equal(identityOf({ ...envelope, battle }), identityOf(envelope))
+})
+
+test('a battle that cannot be planned keeps the last plan, waiting, and says why', async (t) => {
+  const dir = await repository(t)
+  await recipe(t)
+  await writeGroups(dir)
+  const waiting = await prepare(dir, ['--battle', 'A,B'])
+  assert.equal(waiting.code, 0, waiting.stdout + waiting.stderr)
+  const opened = await run(process.execPath, [OPEN, String(waiting.inbox), '--verify'], {
+    env: env(),
+  })
+  const review = opened.stdout.trim().replace(/^REVIEW /, '')
+  await writeFile(
+    path.join(review, 'choices.json'),
+    JSON.stringify({ lenses: {}, remember: false, battle: { a: 'A', b: 'C' } }),
+  )
+  const ran = await run(
+    process.execPath,
+    [LENSES, '--review', review, '--plan', String(waiting.planFile), '--replan'],
+    { env: env() },
+  )
+  assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+  const progress = JSON.parse(await readFile(path.join(review, 'lenses.json'), 'utf8'))
+  assert.equal(progress.state, 'waiting')
+  assert.match(progress.problem, /no lens of group C applies/)
+  assert.deepEqual(progress.battle, { a: 'A', b: 'B' })
+})
+
+test('a battle that runs its shared lenses twice records each, its prompt naming the ids it adds', async (t) => {
+  const dir = await repository(t)
+  await recipe(t)
+  await writeGroups(dir)
+  const waiting = await prepare(dir, ['--battle', 'A,B'])
+  const opened = await run(process.execPath, [OPEN, String(waiting.inbox), '--verify'], {
+    env: env(),
+  })
+  const review = opened.stdout.trim().replace(/^REVIEW /, '')
+  const battle = { a: 'A', b: 'B', twice: true }
+  await writeFile(
+    path.join(review, 'choices.json'),
+    JSON.stringify({ lenses: {}, remember: false, battle }),
+  )
+  const ran = await run(
+    process.execPath,
+    [LENSES, '--review', review, '--plan', String(waiting.planFile), '--start'],
+    { env: env() },
+  )
+  assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+  const envelope = JSON.parse(await readFile(path.join(review, 'review.json'), 'utf8'))
+  assert.deepEqual(envelope.battle, {
+    ...battle,
+    lenses: { 'js-a': 'a', 'js-b': 'b', api: 'a', all: 'b' },
+  })
+  const lines = ran.stdout
+    .split('\n')
+    .filter((line) => line.startsWith('LENS '))
+    .map((line) => JSON.parse(line.slice('LENS '.length)))
+  const prompt = async (/** @type {string} */ name) =>
+    readFile(lines.find((one) => one.name === name)?.prompt, 'utf8')
+  // Two reviewers of one prompt would add the same ids: each is told its own.
+  assert.match(await prompt('js-a'), /number its findings `js-a-1`/)
+  assert.match(await prompt('js-b'), /number its findings `js-b-1`/)
+  assert.doesNotMatch(await prompt('api'), /This review runs this lens as/)
 })

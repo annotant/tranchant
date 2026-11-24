@@ -460,9 +460,18 @@ export default function App() {
   const review = payload?.review
   const records = useMemo(() => payload?.findings ?? {}, [payload])
   // A battle: one group's findings at a time, or the comparison once both are done.
-  const [battlePick, setBattlePick] = useState<BattleShown>('a')
+  const [battlePick, setPick] = useState<BattleShown>('a')
+  // A selection is one group's: kept across a switch, a batch would act on findings not shown.
+  const setBattlePick = useCallback((next: BattleShown) => {
+    setPick(next)
+    setSelected(new Set())
+  }, [])
   const battle = useMemo(
-    () => (review ? battleView(review, payload?.splits) : undefined),
+    // A battle reset waits to start again: no findings to switch between yet.
+    () =>
+      review && review.status !== 'preparing' && review.status !== 'refused'
+        ? battleView(review, payload?.splits)
+        : undefined,
     [review, payload?.splits],
   )
   const compareReady = !!review && !!battle && (!isReviewing(review) || !!review.stopped)
@@ -575,9 +584,12 @@ export default function App() {
         applied = decisions
           .filter((one) => result.applied.includes(targetOf(one.id)))
           .map((one) => one.id)
+        // A refusal named as the page asked it: the twin's id is not in the list shown.
+        const asked = (id: string) =>
+          decisions.find((one) => targetOf(one.id) === id)?.id ?? id
         setNotice(
           result.refused.length
-            ? `Refused: ${result.refused.map((one) => `${one.id} (${one.reason})`).join(', ')}`
+            ? `Refused: ${result.refused.map((one) => `${asked(one.id)} (${one.reason})`).join(', ')}`
             : undefined,
         )
         setSelected((current) => {
@@ -668,7 +680,13 @@ export default function App() {
     async (pair: [string, string]) => {
       try {
         await postSplit(pair, true)
-        setNotice(undefined)
+        // One that read as its twin's decision is its own again: open, said.
+        const reopened = pair.filter((id) => latest.current.target?.has(id))
+        setNotice(
+          reopened.length
+            ? `${reopened.join(', ')} read${reopened.length > 1 ? '' : 's'} as ${reopened.length > 1 ? 'their' : 'its'} twin’s decision: split, ${reopened.length > 1 ? 'they are' : 'it is'} to do again.`
+            : undefined,
+        )
       } catch (failure) {
         setNotice(failure instanceof Error ? failure.message : 'The pair was not split.')
       }
@@ -999,7 +1017,7 @@ export default function App() {
       ) : (
         <>
           <strong>Only {letterOf(side)} found it.</strong>
-          <span>No finding of {letterOf(otherOf(side))} on these lines.</span>
+          <span>No finding of {letterOf(otherOf(side))} pairs with it.</span>
         </>
       )}
     </div>

@@ -39,10 +39,14 @@ type Placed = Pick<Finding, 'id' | 'path' | 'line' | 'topic' | 'marks' | 'lens'>
 /** The lenses of a battle, by name. */
 const lensNames = (battle: BattleRecord) => Object.keys(battle.lenses)
 
+/** The side a lens runs for, by its name: never an object's own property such as `constructor`. */
+const sideOfLens = (battle: BattleRecord, lens: string): LensSide | undefined =>
+  Object.hasOwn(battle.lenses, lens) ? battle.lenses[lens] : undefined
+
 /** The side a lens's agent or finding counts for, by the lens its name or its id starts with. */
 const sideOfName = (battle: BattleRecord, name: string): LensSide | undefined => {
   const lens = lensOf(name, lensNames(battle))
-  return lens === undefined ? undefined : battle.lenses[lens]
+  return lens === undefined ? undefined : sideOfLens(battle, lens)
 }
 
 /** Each finding's side, by its lens (never read from its id when it names one). */
@@ -55,13 +59,13 @@ export function sidesOf(
     const side =
       finding.lens === undefined
         ? sideOfName(battle, finding.id)
-        : battle.lenses[finding.lens]
+        : sideOfLens(battle, finding.lens)
     if (side) sides.set(finding.id, side)
   }
   return sides
 }
 
-/** How far apart two findings' lines are: 0 when their lines overlap. */
+/** The most lines apart two findings may be and still pair. */
 const NEAR = 3
 
 /** The lines a finding is about: its anchor and its marks'. */
@@ -140,14 +144,17 @@ export function battleView(
   return { battle, sides, pairs, twins }
 }
 
-/** The review as one side shows it: the findings that count for it. */
+/** The review as one side shows it: the findings that count for it, and those of no lens of the battle, never hidden. */
 export const sideReview = <R extends Pick<Review, 'findings'>>(
   review: R,
   view: BattleView,
   side: Side,
 ): R => ({
   ...review,
-  findings: review.findings.filter((finding) => inSide(view.sides.get(finding.id), side)),
+  findings: review.findings.filter((finding) => {
+    const lens = view.sides.get(finding.id)
+    return lens === undefined || inSide(lens, side)
+  }),
 })
 
 /**
@@ -175,7 +182,10 @@ export function mirrorRecords(
 export function whoOf(view: BattleView, id: string, side: Side) {
   const letter = letterOf(side)
   const other = letterOf(otherOf(side))
-  if (view.sides.get(id) === 'both')
+  const lens = view.sides.get(id)
+  if (lens === undefined)
+    return { label: 'no group', both: false, title: 'Its lens is none of the battle’s' }
+  if (lens === 'both')
     return { label: 'A + B', both: true, title: 'A lens both groups share, run once' }
   const twin = view.twins.get(id)
   if (twin)
@@ -211,7 +221,7 @@ export function sideAgents(
     const name = agent.name.slice(3)
     // A reviewer is its lens's, by name; a verifier its finding's, by the lens its id starts with.
     const lens = agent.name.startsWith('rv-')
-      ? battle.lenses[name]
+      ? sideOfLens(battle, name)
       : agent.name.startsWith('vf-')
         ? sideOfName(battle, name)
         : undefined
@@ -232,7 +242,7 @@ export function tokensOf(
   side: Side,
 ) {
   const lenses = (usage?.lenses ?? []).filter((one) =>
-    inSide(battle.lenses[one.lens], side),
+    inSide(sideOfLens(battle, one.lens), side),
   )
   return lenses.length ? lenses.reduce((sum, one) => sum + one.tokens, 0) : undefined
 }
@@ -346,7 +356,7 @@ export function scoreOf({
       of('a').length,
       of('b').length,
       undefined,
-      review.verify ? 'kept by the verifier' : undefined,
+      review.verify ? 'those the verifier kept, or did not check yet' : undefined,
     ),
     row('Found by both', both, both),
     row('Only this group', only.a, only.b, true),
@@ -394,7 +404,7 @@ export function scoreOf({
     },
     {
       label: 'Time',
-      help: 'from its first reviewer’s start to its last agent’s step',
+      help: 'from the earliest step of its agents shown to the latest: about',
       a: time.a === undefined ? '—' : formatDuration(time.a),
       b: time.b === undefined ? '—' : formatDuration(time.b),
       ...(timeWin && { win: timeWin }),
@@ -408,8 +418,12 @@ const anchorOf = (finding: Pick<Finding, 'path' | 'line'>) =>
 /** A table cell's text: a pipe would end it. */
 const cell = (text: string) => text.replaceAll('|', '\\|')
 
+/** A reviewer's words on one line, as plain text: pasted, they make no heading, link or mention. */
+const plain = (text: string) =>
+  text.replaceAll(/\s+/g, ' ').replaceAll(/([\\`*_[\]<>#|@!~])/g, '\\$1')
+
 const item = (finding: Finding | undefined) =>
-  finding ? `\`${finding.id}\` ${finding.title} (${anchorOf(finding)})` : ''
+  finding ? `\`${finding.id}\` ${plain(finding.title)} (${anchorOf(finding)})` : ''
 
 /** The comparison as Markdown, for Copy as Markdown. */
 export function battleMarkdown({
@@ -429,7 +443,7 @@ export function battleMarkdown({
   const lines = [
     `# Battle review: ${battle.a} (A) against ${battle.b} (B)`,
     '',
-    `${review.title} · \`${review.branch} → ${review.base}\``,
+    `${plain(review.title)} · \`${review.branch} → ${review.base}\``,
     '',
     '| | A | B |',
     '| --- | --- | --- |',
