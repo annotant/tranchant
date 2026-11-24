@@ -22,6 +22,10 @@ released to the `stable` branch.
 - **A finding's tokens in its Run section.** Each run's figure, a line for
   its verification and one for its discussion, and the finding's sum under
   them, `at least` when a part did not report.
+- **A lens's and a group's average in Settings › Lenses.** Under each lens,
+  `~140k tokens a review · 0.8 confirmed`, over its last 10 complete
+  reviews in the project since its prompt last changed; under each group,
+  its lenses' averages summed, those with no history said.
 
 ## 0.7.0 - 2026-11-22
 
