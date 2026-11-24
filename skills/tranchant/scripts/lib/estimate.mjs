@@ -20,15 +20,16 @@ import { pastAgents } from './usage.mjs'
  * none when one of its reviewer's runs reported no whole figure;
  * `verifications` one per finding whose verifiers all reported one;
  * `findings` the findings it sent to verification, whole or not;
- * `confirmed` those of its findings that stand confirmed (all that stand, in
- * a review not verified); `verified` whether every finding it landed had its
- * verification whole, those still queued at a stop included.
+ * `confirmed` those of its findings a verifier confirmed; `verified` whether
+ * every finding it landed had its verification whole, those still queued at
+ * a stop included.
  * @typedef {{ hash: string, files?: number, reviewer?: number, verifications: number[], findings: number, confirmed: number, verified: boolean }} PastLens
  */
 /**
  * `complete`: its status says so and no stop cut it; a review cut or still
- * under way says little of what a lens costs.
- * @typedef {{ id: string, createdAt: number, complete: boolean, recorded: boolean, summary?: number, lenses: Map<string, PastLens> }} PastReview
+ * under way says little of what a lens costs. `verify`: its findings went to
+ * verifiers.
+ * @typedef {{ id: string, createdAt: number, complete: boolean, verify: boolean, recorded: boolean, summary?: number, lenses: Map<string, PastLens> }} PastReview
  */
 /**
  * What `/api/review` answers as `estimate` while a review waits: `recorded`
@@ -44,7 +45,8 @@ import { pastAgents } from './usage.mjs'
 /**
  * A lens's average over its last reviews, as Settings › Lenses says it:
  * `tokens` its reviewer's and its verifications', `confirmed` its findings
- * that stood confirmed, a review; `runs` the reviews averaged.
+ * a verifier confirmed (to two decimals: the page divides by it), a review;
+ * `runs` the reviews averaged.
  * @typedef {{ tokens: number, confirmed: number, runs: number }} LensHistory
  */
 
@@ -151,11 +153,10 @@ async function readSmall(file, max) {
  * `lens` alone. Undefined when one cannot be read: its tokens still count for
  * the estimate, its averages are unknown.
  * @param {string} dir
- * @param {boolean} verify Whether its findings were verified.
  */
-async function standingOf(dir, verify) {
+async function standingOf(dir) {
   try {
-    return await readStanding(dir, verify)
+    return await readStanding(dir)
   } catch (error) {
     say(
       `${dir}: a finding cannot be read (${why(error)}), left out of the lenses' averages`,
@@ -164,8 +165,8 @@ async function standingOf(dir, verify) {
   }
 }
 
-/** @param {string} dir @param {boolean} verify */
-async function readStanding(dir, verify) {
+/** @param {string} dir */
+async function readStanding(dir) {
   /** @type {Map<string, { ids: Set<string>, confirmed: number }>} */
   const byLens = new Map()
   const files = (await filesOf(dir, 'findings', '.json')).slice(0, MAX_FINDINGS)
@@ -187,7 +188,7 @@ async function readStanding(dir, verify) {
       continue
     const lens = byLens.get(finding.lens) ?? { ids: new Set(), confirmed: 0 }
     lens.ids.add(finding.id)
-    if (!verify || finding.verified === true) lens.confirmed += 1
+    if (finding.verified === true) lens.confirmed += 1
     byLens.set(finding.lens, lens)
   }
   return byLens
@@ -211,7 +212,7 @@ async function readPast(dir) {
     return undefined
   const agents = await pastAgents(dir)
   const verify = review.verify === true
-  const standing = await standingOf(dir, verify)
+  const standing = await standingOf(dir)
   const of = (/** @type {string} */ kind, /** @type {string} */ lens) =>
     agents.filter((one) => one.kind === kind && one.lens === lens)
   /** @type {Map<string, PastLens>} */
@@ -253,6 +254,7 @@ async function readPast(dir) {
     createdAt,
     complete:
       (review.status === undefined || review.status === 'complete') && !review.stopped,
+    verify,
     recorded: agents.some((one) => one.usage),
     ...(summary !== undefined && { summary }),
     lenses,
@@ -421,8 +423,8 @@ export async function estimateOf(dir, rows, createdAt) {
 
 /**
  * A lens's average over its last AVERAGED complete reviews since its prompt
- * last changed (its hash; unknown, its last run's), its reviewer and every
- * verification whole; null with none.
+ * last changed (its hash; unknown, its last run's), verified, its reviewer and
+ * every verification whole; null with none.
  * @param {PastReview[]} past
  * @param {string} name
  * @param {string | undefined} hash
@@ -438,7 +440,14 @@ function averageOf(past, name, hash) {
     prompt ??= lens.hash
     // The same rule as the estimate's: a prompt changed starts its history over.
     if (lens.hash !== prompt) break
-    if (!review.complete || lens.reviewer === undefined || !lens.verified) continue
+    // A review not verified confirmed nothing: its findings would read as none found.
+    if (
+      !review.complete ||
+      !review.verify ||
+      lens.reviewer === undefined ||
+      !lens.verified
+    )
+      continue
     runs.push({
       tokens: lens.reviewer + lens.verifications.reduce((sum, one) => sum + one, 0),
       confirmed: lens.confirmed,
@@ -450,7 +459,7 @@ function averageOf(past, name, hash) {
     runs.reduce((sum, one) => sum + one[key], 0) / runs.length
   return {
     tokens: capped(mean('tokens')),
-    confirmed: Math.round(mean('confirmed') * 10) / 10,
+    confirmed: Math.round(mean('confirmed') * 100) / 100,
     runs: runs.length,
   }
 }

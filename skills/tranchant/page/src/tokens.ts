@@ -550,8 +550,17 @@ export function findingCostOf(
   return { rows, runs, foot }
 }
 
-/** `0.8`, `2`: a count a review, to one decimal. */
-const perReview = (count: number) => String(Math.round(count * 10) / 10)
+/** `0.8 confirmed findings`, `1 confirmed finding`: a count a review, to one decimal. */
+const confirmedOf = (count: number) => {
+  const rounded = Math.round(count * 10) / 10
+  return `${rounded} confirmed ${rounded === 1 ? 'finding' : 'findings'}`
+}
+
+/** `· ~175k tokens per confirmed finding`; nothing with none confirmed to divide by. */
+const ratioOf = (tokens: number, confirmed: number) =>
+  confirmed > 0
+    ? ` · ~${formatTokens(Math.round(tokens / confirmed))} tokens per confirmed finding`
+    : ''
 
 /** What a lens's or a group's line under its row says, and its tooltip. */
 export interface HistoryLine {
@@ -563,26 +572,35 @@ export interface HistoryLine {
 export function lensHistoryOf(history: LensHistory | undefined): HistoryLine | undefined {
   if (!history) return undefined
   return {
-    text: `~${formatTokens(history.tokens)} tokens a review · ${perReview(history.confirmed)} confirmed`,
-    title: `Its reviewer's and its verifications' tokens, and its findings that stood confirmed: the average of its last ${plural(history.runs, 'complete review')} in this project since its prompt last changed`,
+    text: `~${formatTokens(history.tokens)} tokens · ${confirmedOf(history.confirmed)} a review${ratioOf(history.tokens, history.confirmed)}`,
+    title: `Its reviewer's and its verifications' tokens, and its findings a verifier confirmed: the average of its last ${plural(history.runs, 'complete review')} in this project since its prompt last changed, those run without verification left out`,
   }
+}
+
+/** A group's member, by name, with its average when it has one. */
+export interface GroupMember {
+  name: string
+  history?: LensHistory | undefined
 }
 
 /**
  * A group's line in Settings › Lenses › Groups: the averages of its lenses
- * still there summed, those with none said; none when none of them has one.
+ * still there summed, those with none named; none when none of them has one.
  */
-export function groupHistoryOf(
-  members: readonly (LensHistory | undefined)[],
-): HistoryLine | undefined {
-  const known = members.flatMap((one) => (one ? [one] : []))
+export function groupHistoryOf(members: readonly GroupMember[]): HistoryLine | undefined {
+  const known = members.flatMap((one) => (one.history ? [one.history] : []))
   if (!known.length) return undefined
   const tokens = known.reduce((sum, one) => sum + one.tokens, 0)
   const confirmed = known.reduce((sum, one) => sum + one.confirmed, 0)
-  const missing = members.length - known.length
+  const missing = members.flatMap((one) => (one.history ? [] : [one.name]))
+  const unknown = !missing.length
+    ? ''
+    : missing.length > 3
+      ? ` · ${missing.length} lenses have no history yet, not counted`
+      : ` · ${listed(missing)} ${missing.length === 1 ? 'has' : 'have'} no history yet, not counted`
   return {
-    text: `~${formatTokens(tokens)} tokens a review · ${perReview(confirmed)} confirmed${missing ? ` · ${plural(missing, 'lens', 'lenses')} with no history, not counted` : ''}`,
+    text: `~${formatTokens(tokens)} tokens · ${confirmedOf(confirmed)} a review${ratioOf(tokens, confirmed)}${unknown}`,
     title:
-      "Its lenses' averages summed, each over its last complete reviews in this project: what a review spends and finds when every one of them runs",
+      "Its lenses' averages summed, each over its last complete and verified reviews in this project: what a review spends and what its verifiers confirm when every one of them runs",
   }
 }
