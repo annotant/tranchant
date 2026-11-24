@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-24
+
 ### Added
 
 - **Pick several sources at once in Settings › Lenses › Browse.** A box on
