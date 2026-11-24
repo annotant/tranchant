@@ -6,8 +6,8 @@
 // an entry whose process is gone, and removes its file; one whose pid another
 // process took since is dropped too, as it does not answer as that server.
 import { randomBytes } from 'node:crypto'
-import { unlinkSync } from 'node:fs'
-import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { constants, unlinkSync } from 'node:fs'
+import { mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
 import { alive } from './filelock.mjs'
@@ -133,6 +133,23 @@ export async function registerServer(entry, dir = SERVERS_DIR) {
 }
 
 /**
+ * The entry in `file`, checked on the file opened: a regular file of its size
+ * alone (a FIFO would hang the read, and a check before the open could be of
+ * another file).
+ * @param {string} file
+ */
+async function readEntryFile(file) {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK)
+  try {
+    const found = await handle.stat()
+    if (!found.isFile() || found.size > MAX_ENTRY) return undefined
+    return readEntry(JSON.parse(await handle.readFile('utf8')))
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
  * Whether `entry`'s server answers as that server: its pid may be another
  * process's now, after a crash and a reboot.
  * @param {ServerEntry} entry
@@ -169,10 +186,7 @@ export async function listServers(dir = SERVERS_DIR, { probe = true } = {}) {
     const file = path.join(dir, name)
     let entry
     try {
-      // A regular file alone: a FIFO would hang the read.
-      const found = await lstat(file)
-      if (!found.isFile() || found.size > MAX_ENTRY) continue
-      entry = readEntry(JSON.parse(await readFile(file, 'utf8')))
+      entry = await readEntryFile(file)
     } catch {
       continue
     }

@@ -1491,7 +1491,7 @@ function serveDashboard($: $, opensBrowser: boolean): DashboardWatch {
     }
     let pending = ''
     let errors = ''
-    let exit = 'the dashboard exited'
+    let exit: string
     try {
       for (;;) {
         const piece = await pieces.next()

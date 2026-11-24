@@ -20,7 +20,7 @@ const LIB = path.join(SCRIPTS, 'lib')
 async function twice(env, body) {
   const go = Date.now() + 400
   const source = `
-    const lib = (name) => import(${JSON.stringify(`${LIB}/`)} + name + '.mjs')
+    const lib = (name) => import(process.env.TRANCHANT_LIB + '/' + name + '.mjs')
     const WHO = process.env.WHO
     while (Date.now() < ${go}) {}
     ${body}
@@ -28,7 +28,8 @@ async function twice(env, body) {
   const both = await Promise.all(
     ['a', 'b'].map((who) =>
       run(process.execPath, ['--input-type=module', '-e', source], {
-        env: { ...env, WHO: who },
+        // The path through the environment: never written into the code run.
+        env: { ...env, WHO: who, TRANCHANT_LIB: LIB },
       }),
     ),
   )

@@ -22,9 +22,10 @@ async function inState(state, body) {
     [
       '--input-type=module',
       '-e',
-      `const lib = (name) => import(${JSON.stringify(`${LIB}/`)} + name + '.mjs')\n${body}`,
+      `const lib = (name) => import(process.env.TRANCHANT_LIB + '/' + name + '.mjs')\n${body}`,
     ],
-    { env: { TRANCHANT_STATE_DIR: state } },
+    // The path through the environment: never written into the code run.
+    { env: { TRANCHANT_STATE_DIR: state, TRANCHANT_LIB: LIB } },
   )
   assert.equal(ran.code, 0, ran.stderr)
   return ran.stdout.trim() ? JSON.parse(ran.stdout) : undefined
@@ -109,14 +110,14 @@ test('a server told to stop by a signal removes its entry', async (t) => {
     [
       '--input-type=module',
       '-e',
-      `const { registerServer, removeOnExit } = await import(${JSON.stringify(`${LIB}/registry.mjs`)})
+      `const { registerServer, removeOnExit } = await import(process.env.TRANCHANT_LIB + '/registry.mjs')
       const { remove } = await registerServer({ kind: 'dashboard', port: 1, url: 'http://127.0.0.1:1' })
       removeOnExit(remove)
       console.log('REGISTERED')
       setInterval(() => {}, 1000)`,
     ],
     {
-      env: { ...process.env, TRANCHANT_STATE_DIR: state },
+      env: { ...process.env, TRANCHANT_STATE_DIR: state, TRANCHANT_LIB: LIB },
       stdio: ['ignore', 'pipe', 'inherit'],
     },
   )
