@@ -47,6 +47,21 @@ const buildOptions = {
 const PAGE = path.join(options.outdir, 'page.js')
 const CHUNKS = path.join(options.outdir, 'chunks')
 
+// The dashboard: a bundle of its own in dashboard/, sharing kit/ with the page
+// at build time only, never a chunk: a change to one page never reloads the other.
+const DASHBOARD_DIR = path.join(options.outdir, 'dashboard')
+/** @type {import('esbuild').BuildOptions & { metafile: true }} */
+const dashboardOptions = {
+  ...buildOptions,
+  entryPoints: { dashboard: 'dashboard/main.tsx' },
+  outdir: DASHBOARD_DIR,
+  splitting: false,
+  chunkNames: undefined,
+  banner: {
+    js: '/* tranchant dashboard: served by the tranchant skill on 127.0.0.1 only */',
+  },
+}
+
 if (options.watch) {
   const ctx = await context({
     ...buildOptions,
@@ -62,8 +77,26 @@ if (options.watch) {
             // Old chunks stay: an open page, never reloaded, still imports them by name.
             mkdirSync(CHUNKS, { recursive: true })
             for (const file of result.outputFiles) writeFileSync(file.path, file.contents)
-            writeLicenses(result.metafile)
+            writeLicenses(result.metafile, options.outdir, 'page.js and chunks/')
             console.log(`REBUILT ${PAGE}`)
+          })
+        },
+      },
+    ],
+  })
+  const dashboardCtx = await context({
+    ...dashboardOptions,
+    write: false,
+    plugins: [
+      {
+        name: 'rebuilt',
+        setup(rebuilt) {
+          rebuilt.onEnd((result) => {
+            if (result.errors.length || !result.metafile || !result.outputFiles) return
+            mkdirSync(DASHBOARD_DIR, { recursive: true })
+            for (const file of result.outputFiles) writeFileSync(file.path, file.contents)
+            writeLicenses(result.metafile, DASHBOARD_DIR, 'dashboard.js')
+            console.log(`REBUILT ${path.join(DASHBOARD_DIR, 'dashboard.js')}`)
           })
         },
       },
@@ -71,6 +104,7 @@ if (options.watch) {
   })
   mkdirSync(options.outdir, { recursive: true })
   await ctx.watch()
+  await dashboardCtx.watch()
   // esbuild does not type-check: tsc reports the type errors, and never holds a rebuild back.
   const typescript = createRequire(import.meta.url).resolve('typescript/package.json')
   const tsc = spawn(
@@ -92,7 +126,12 @@ if (options.watch) {
   }
 } else {
   rmSync(CHUNKS, { recursive: true, force: true })
-  writeLicenses((await build(buildOptions)).metafile)
+  writeLicenses(
+    (await build(buildOptions)).metafile,
+    options.outdir,
+    'page.js and chunks/',
+  )
+  writeLicenses((await build(dashboardOptions)).metafile, DASHBOARD_DIR, 'dashboard.js')
 }
 
 /**
@@ -115,8 +154,10 @@ function licenseText(dir) {
 /**
  * Writes THIRD_PARTY_LICENSES.txt next to the bundle.
  * @param {import('esbuild').Metafile} metafile
+ * @param {string} outdir
+ * @param {string} bundled What the notice covers.
  */
-function writeLicenses(metafile) {
+function writeLicenses(metafile, outdir, bundled) {
   const packageDirs = new Set()
   for (const input of Object.keys(metafile.inputs)) {
     const match = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//.exec(input)
@@ -133,14 +174,11 @@ function writeLicenses(metafile) {
       return `${pkg.name} ${pkg.version}${name}\n\n${text}\n`
     })
   // The font is vendored, not a package: its license sits next to it.
-  const ofl = readFileSync(
-    new URL('src/assets/fonts/OFL.txt', import.meta.url),
-    'utf8',
-  ).trim()
+  const ofl = readFileSync(new URL('kit/fonts/OFL.txt', import.meta.url), 'utf8').trim()
   notices.push(`Figtree (OFL-1.1)\n\n${ofl}\n`)
   writeFileSync(
-    path.join(options.outdir, 'THIRD_PARTY_LICENSES.txt'),
-    `The Tranchant page (page.js and chunks/) bundles the following packages and font.\n\n${notices.join(
+    path.join(outdir, 'THIRD_PARTY_LICENSES.txt'),
+    `The Tranchant page (${bundled}) bundles the following packages and font.\n\n${notices.join(
       `\n${'-'.repeat(80)}\n\n`,
     )}`,
   )

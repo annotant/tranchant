@@ -10,6 +10,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
+import { withFileLock } from './filelock.mjs'
 
 /** The settings version this code reads and writes; any other is refused. */
 const SETTINGS_VERSION = 1
@@ -210,12 +211,34 @@ export async function readSettings(file = SETTINGS_FILE) {
 
 /**
  * Writes `settings`, validated, as the whole file: a temp file renamed over
- * it, so a reader never sees half of it.
+ * it, so a reader never sees half of it; under the file's lock, so it never
+ * lands in the middle of another server's `updateSettings`.
  * @param {unknown} input
  * @param {string} [file]
  * @returns {Promise<Settings>} What was written.
  */
-export async function writeSettings(input, file = SETTINGS_FILE) {
+export const writeSettings = (input, file = SETTINGS_FILE) =>
+  withFileLock(file, () => writeUnlocked(input, file))
+
+/**
+ * Changes the settings as they stand when the lock is taken: every server of
+ * every project writes the one file, and a read then a write apart would lose
+ * another server's change made between them. `change` gets the file read
+ * anew, and what `problem` says when it cannot be (then never written over):
+ * it answers the settings to write, or `undefined` to write nothing.
+ * @param {(settings: Settings, problem?: string) => unknown} change
+ * @param {string} [file]
+ * @returns {Promise<Settings | undefined>} What was written.
+ */
+export const updateSettings = (change, file = SETTINGS_FILE) =>
+  withFileLock(file, async () => {
+    const { settings, problem } = await readSettings(file)
+    const next = change(settings, problem)
+    return next === undefined || problem ? undefined : writeUnlocked(next, file)
+  })
+
+/** @param {unknown} input @param {string} file */
+async function writeUnlocked(input, file) {
   const settings = validateSettings(input)
   await mkdir(path.dirname(file), { recursive: true })
   // A name of its own: two writes at once (two pages) never share a temp file.

@@ -10,7 +10,7 @@ import type {
   ReviewUsage,
   Usage,
 } from '../src/domain'
-import { applyTheme } from '../src/theme'
+import { applyTheme } from '../kit/theme'
 import {
   chipOf,
   findingCostOf,

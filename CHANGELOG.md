@@ -7,6 +7,23 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **The dashboard: every review, across projects.** `/tranchant dashboard`
+  opens one page that lists every review of every project, grouped by
+  where it stands (Needs you, Running, Ready to start, Done, folded), with
+  a filter by project. It follows the state folder live, with no reload;
+  **Open** opens a running review's own page in a new tab. One dashboard
+  per machine: a second session opens the same page.
+
+### Fixed
+
+- **Several Tranchant instances at once.** Two servers saving the settings,
+  or changing one global lens, no longer lose each other's change; a queued
+  lens's cleaning starts one agent even with its page open in two sessions;
+  a session that serves two reviews gives each review's finding of the same
+  id (`f-01`) its own agent, hooks and stop.
+
 ## 0.8.0 - 2026-11-24
 
 ### Added

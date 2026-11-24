@@ -11,8 +11,11 @@ const POLL_MS = 15
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** @param {number} pid */
-function alive(pid) {
+/**
+ * Whether process `pid` runs, ours or another user's.
+ * @param {number} pid
+ */
+export function alive(pid) {
   try {
     process.kill(pid, 0)
     return true

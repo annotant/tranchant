@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
+import { withFileLock } from './filelock.mjs'
 import { LENS_NAME, TOPICS } from './format.mjs'
 import { hashOf } from './project.mjs'
 import {
@@ -83,6 +84,18 @@ export const scopeDir = (/** @type {Scope} */ scope, /** @type {string} */ proje
   scope === 'global'
     ? path.join(SETTINGS_DIR, 'lenses')
     : path.join(SETTINGS_DIR, 'projects', hashOf(project), 'lenses')
+
+/**
+ * Runs `task` holding the lock every write of a user's lens takes, global or
+ * local: a global lens is every project's, and the servers of two projects
+ * (or two sessions in one) would each read it, change it and write it back,
+ * one losing the other's change; a name checked free would be taken twice.
+ * Outside the lenses' folders: a lens moved between scopes keeps no lock.
+ * @template T
+ * @param {() => Promise<T>} task
+ */
+export const withLensFiles = (task) =>
+  withFileLock(path.join(SETTINGS_DIR, 'lenses'), task)
 
 /** A lens's folder, from its name: a name, never a path. */
 export function lensDir(
@@ -424,6 +437,11 @@ export function staleness(lens, now) {
 export async function updateUserLens(project, scope, name, change) {
   if (!change || typeof change !== 'object' || Array.isArray(change))
     refuse('the change is not an object')
+  return withLensFiles(() => changeUserLens(project, scope, name, change))
+}
+
+/** updateUserLens's change, its lock held. @param {string} project @param {Scope} scope @param {string} name @param {any} change */
+async function changeUserLens(project, scope, name, change) {
   const dir = lensDir(scope, project, name)
   const lens = await readUserLens(dir)
   const to = change.scope ?? scope
@@ -486,8 +504,10 @@ export async function removeUserLens(
   /** @type {string} */ name,
 ) {
   const dir = lensDir(scope, project, name)
-  if (!existsSync(dir)) throw new LensFileRefusal(`no lens ${name} here`)
-  await rm(dir, { recursive: true, force: true })
+  await withLensFiles(async () => {
+    if (!existsSync(dir)) throw new LensFileRefusal(`no lens ${name} here`)
+    await rm(dir, { recursive: true, force: true })
+  })
 }
 
 /**

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Diagram as DiagramSource } from './domain'
 import type { Rendered } from './mermaid'
 import { sanitizeSvg } from './svg'
-import { useTheme } from './theme'
+import { useTheme } from '../kit/theme'
 
 export function Diagram({ diagram }: { diagram: DiagramSource }) {
   return (

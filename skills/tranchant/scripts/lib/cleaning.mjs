@@ -16,6 +16,8 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { open, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { errorCode } from './errors.mjs'
+import { withFileLock } from './filelock.mjs'
 import { insideOf, insideRefusal, lensNameOf, nameOfSource } from './inside.mjs'
 import { AUTO_MODEL, LensRefusal, buildLens } from './lens.mjs'
 import { STATE_ROOT, hashOf } from './project.mjs'
@@ -32,6 +34,7 @@ import {
   readUserLens,
   recordedSource,
   whereOf,
+  withLensFiles,
   writeJson,
   writeText,
   writeUserLens,
@@ -115,6 +118,36 @@ export async function cleaningOf(
       throw new CleaningRefusal(`no cleaning ${id}`)
     }),
   }
+}
+
+/**
+ * Runs `task` holding cleaning `dir`'s lock: the servers of two sessions with
+ * its page open, the hooks' clean.mjs and the page each read its record and
+ * write it back, and a check then a write apart let two of them act on one
+ * state (two agents started, one lens added twice).
+ * @template T
+ * @param {string} dir
+ * @param {() => Promise<T>} task
+ */
+async function withCleaning(dir, task) {
+  try {
+    return await withFileLock(path.join(dir, 'cleaning.json'), task)
+  } catch (error) {
+    // Discarded while this waited for its lock: its folder went with the lock.
+    if (errorCode(error) === 'ENOENT' && !existsSync(dir))
+      throw new CleaningRefusal(`no cleaning ${path.basename(dir)}`)
+    throw error
+  }
+}
+
+/** Cleaning `id`'s record, read under its lock, and `task`'s answer. */
+async function lockedCleaning(
+  /** @type {string} */ project,
+  /** @type {string} */ id,
+  /** @type {(found: { dir: string, record: Cleaning }) => Promise<any>} */ task,
+) {
+  const { dir } = await cleaningOf(project, id)
+  return withCleaning(dir, async () => task(await cleaningOf(project, id)))
 }
 
 /**
@@ -286,18 +319,21 @@ export async function createCleanings({ project, scope, from, sources }) {
  * @param {string} project
  * @param {string} id
  */
-export async function startedCleaning(project, id) {
-  const { dir, record } = await cleaningOf(project, id)
-  if (record.state !== 'cleaning')
-    throw new CleaningRefusal(`the cleaning ${id} is ${record.state} already`)
-  // Two sessions with its page open both queue it: the first one starts it.
-  if (!record.queued) throw new CleaningRefusal(`the cleaning ${id} is started already`)
-  const { queued: _queued, ...rest } = record
-  /** @type {Cleaning} */
-  const next = { ...rest, startedAt: new Date().toISOString() }
-  await writeJson(path.join(dir, 'cleaning.json'), next)
-  return { dir, record: next }
-}
+export const startedCleaning = (
+  /** @type {string} */ project,
+  /** @type {string} */ id,
+) =>
+  lockedCleaning(project, id, async ({ dir, record }) => {
+    if (record.state !== 'cleaning')
+      throw new CleaningRefusal(`the cleaning ${id} is ${record.state} already`)
+    // Two sessions with its page open both queue it: the first one starts it.
+    if (!record.queued) throw new CleaningRefusal(`the cleaning ${id} is started already`)
+    const { queued: _queued, ...rest } = record
+    /** @type {Cleaning} */
+    const next = { ...rest, startedAt: new Date().toISOString() }
+    await writeJson(path.join(dir, 'cleaning.json'), next)
+    return { dir, record: next }
+  })
 
 /** Whether a cleaning still `cleaning` lost its agent, or the session that would start it. */
 function isLost(/** @type {Cleaning} */ record) {
@@ -454,7 +490,11 @@ async function readOutput(dir) {
  * @param {{ stopped?: boolean, usage?: import('./format.mjs').Usage }} [options]
  * @returns {Promise<Cleaning>}
  */
-export async function checkCleaning(dir, { stopped = false, usage } = {}) {
+export const checkCleaning = (dir, { stopped = false, usage } = {}) =>
+  withCleaning(dir, () => checkLocked(dir, { stopped, usage }))
+
+/** checkCleaning's check, its lock held. @param {string} dir @param {{ stopped: boolean, usage: import('./format.mjs').Usage | undefined }} options @returns {Promise<Cleaning>} */
+async function checkLocked(dir, { stopped, usage }) {
   const record = await readCleaning(dir)
   if (record.state !== 'cleaning') {
     // Read again just before: the page may have added the lens meanwhile.
@@ -501,10 +541,8 @@ export async function checkCleaning(dir, { stopped = false, usage } = {}) {
       const lens = record.again ? await promoted(record, report) : fresh(record, report)
       await builds(record, lens, domain)
       if (record.again)
-        await writeUserLens(
-          lensDir(record.scope, record.project, record.name),
-          lens,
-          domain,
+        await withLensFiles(() =>
+          writeUserLens(lensDir(record.scope, record.project, record.name), lens, domain),
         )
       next = { ...record, state: record.again ? 'added' : 'ready' }
     }
@@ -595,15 +633,17 @@ async function recordFailure(
   /** @type {string} */ reason,
 ) {
   const dir = lensDir(record.scope, record.project, record.name)
-  const lens = await readUserLens(dir).catch(() => undefined)
-  if (!lens) return
-  await writeUserLens(dir, {
-    ...lens,
-    failedCleaning: {
-      at: new Date().toISOString(),
-      reason: reason.slice(0, 1000),
-      sourceHash: record.sourceHash,
-    },
+  await withLensFiles(async () => {
+    const lens = await readUserLens(dir).catch(() => undefined)
+    if (!lens) return
+    await writeUserLens(dir, {
+      ...lens,
+      failedCleaning: {
+        at: new Date().toISOString(),
+        reason: reason.slice(0, 1000),
+        sourceHash: record.sourceHash,
+      },
+    })
   })
 }
 
@@ -616,8 +656,14 @@ async function recordFailure(
  * @param {string} id
  * @param {any} [edits]
  */
-export async function addCleaned(project, id, edits = {}) {
-  const { dir, record } = await cleaningOf(project, id)
+export const addCleaned = (
+  /** @type {string} */ project,
+  /** @type {string} */ id,
+  /** @type {any} */ edits = {},
+) => lockedCleaning(project, id, (held) => addLocked(project, held, edits))
+
+/** addCleaned's add, the cleaning's lock held. @param {string} project @param {{ dir: string, record: Cleaning }} found @param {any} edits */
+async function addLocked(project, { dir, record }, edits) {
   if (record.again) throw new CleaningRefusal('this cleaning updates its lens on its own')
   if (record.state === 'added') throw new CleaningRefusal('this lens is added already')
   if (record.state !== 'ready')
@@ -672,23 +718,26 @@ export async function addCleaned(project, id, edits = {}) {
     if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
     throw error
   }
-  if (existsSync(target))
-    throw new CleaningRefusal(
-      `a lens named ${name} is ${scope === 'global' ? 'global' : "this project's"} already`,
-    )
-  try {
-    await writeUserLens(target, clean, output.domain)
-    // Beside the lens, never in the repository: its cleaning again reads it.
-    const extract = await readFile(path.join(dir, 'extract.md'), 'utf8').catch(
-      () => undefined,
-    )
-    if (record.reviewer && extract)
-      await writeText(path.join(target, 'extract.md'), extract)
-  } catch (error) {
-    await rm(target, { recursive: true, force: true }).catch(() => undefined)
-    if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
-    throw error
-  }
+  // Checked and written under one lock: another project's page may add a global lens of that name.
+  await withLensFiles(async () => {
+    if (existsSync(target))
+      throw new CleaningRefusal(
+        `a lens named ${name} is ${scope === 'global' ? 'global' : "this project's"} already`,
+      )
+    try {
+      await writeUserLens(target, clean, output.domain)
+      // Beside the lens, never in the repository: its cleaning again reads it.
+      const extract = await readFile(path.join(dir, 'extract.md'), 'utf8').catch(
+        () => undefined,
+      )
+      if (record.reviewer && extract)
+        await writeText(path.join(target, 'extract.md'), extract)
+    } catch (error) {
+      await rm(target, { recursive: true, force: true }).catch(() => undefined)
+      if (error instanceof LensFileRefusal) throw new CleaningRefusal(error.message)
+      throw error
+    }
+  })
   await writeJson(path.join(dir, 'cleaning.json'), { ...record, state: 'added' })
   return { scope, name }
 }
@@ -705,8 +754,18 @@ export async function addCleaned(project, id, edits = {}) {
  * @param {unknown} picks
  * @param {string} [scope]
  */
-export async function addReviewers(project, id, picks, scope) {
-  const { dir, record } = await cleaningOf(project, id)
+export const addReviewers = (
+  /** @type {string} */ project,
+  /** @type {string} */ id,
+  /** @type {unknown} */ picks,
+  scope,
+) =>
+  lockedCleaning(project, id, ({ dir, record }) =>
+    addPicked(project, dir, record, picks, scope),
+  )
+
+/** addReviewers's picks, the process's lock held. @param {string} project @param {string} dir @param {Cleaning} record @param {unknown} picks @param {string | undefined} scope */
+async function addPicked(project, dir, record, picks, scope) {
   if (record.state !== 'process')
     throw new CleaningRefusal(
       record.state === 'added'
@@ -761,11 +820,12 @@ export async function discardCleaning(
   /** @type {string} */ project,
   /** @type {string} */ id,
 ) {
-  const { dir, record } = await cleaningOf(project, id)
-  // Waiting, no agent reads it yet: the hooks find it gone and start the next one.
-  if (record.state === 'cleaning' && !record.queued && !isLost(record))
-    throw new CleaningRefusal('the cleaning agent is still at work')
-  await rm(dir, { recursive: true, force: true })
+  await lockedCleaning(project, id, async ({ dir, record }) => {
+    // Waiting, no agent reads it yet: the hooks find it gone and start the next one.
+    if (record.state === 'cleaning' && !record.queued && !isLost(record))
+      throw new CleaningRefusal('the cleaning agent is still at work')
+    await rm(dir, { recursive: true, force: true })
+  })
 }
 
 /**

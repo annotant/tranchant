@@ -6,7 +6,7 @@
 // no model turn, three at a time (the settings may say otherwise); a stop ends it.
 //
 // Claude Code runs none of this module's hooks for an agent it starts, so each
-// finding's agent is a type of its own, `tranchant:tr-<id>`, whose settings
+// finding's agent is a type of its own, `tranchant:tr-<id>-<review>`, whose settings
 // hooks run scripts/hook.mjs around each of its tools with the finding written
 // in: file locks, refused Bash writes, and the steps the page shows.
 //
@@ -446,6 +446,17 @@ const tag = (id: string) => short(id, 16)
 /** A finding's agent's name; `tranchant:` before it makes its type. */
 // A type name is 64 characters at most: a long id is cut, and tagged to stay its own.
 const agentName = (id: string) => `tr-${shorten(id.replace(/[^\w-]/g, '-'), 32)}`
+/**
+ * A finding's key in `workers`, `handed`, `starting` and `afterTurn`: ids
+ * repeat across reviews (`f-01` is the convention), and a session may serve
+ * several, each finding its own agent.
+ */
+const fixKey = (dir: string, id: string) => `${id}@${dir}`
+/** The finding id a key names; a key from before keys held the review is the id. */
+const idOfKey = (key: string) => {
+  const at = key.indexOf('@')
+  return at === -1 ? key : key.slice(0, at)
+}
 /** `text` whole within `max` characters, else cut and tagged with its hash. */
 const shorten = (text: string, max: number) =>
   text.length <= max
@@ -690,7 +701,8 @@ async function registerFindingAgent($: $, review: Review, id: string) {
     { type: 'command', command: hookArgv($, mode, id, review).map(shellQuote).join(' ') },
   ]
   const { agent } = await $.agent.register({
-    name: agentName(id),
+    // Its hooks name the review: another review's finding of that id registers its own type.
+    name: reviewAgentType(agentName(id), review),
     description: `Tranchant: finding ${tag(id)}. Only the plugin's hooks start it.`,
     prompt: await readWorkerPrompt($),
     model: (await settingsOf($)).fixModel ?? INHERIT,
@@ -771,7 +783,7 @@ async function ended($: $, id: string, worker: Worker) {
 const watches = new Map<string, Watch>()
 /** The servers that ended on their own, by review folder, and why: until served again. */
 const endedWatches = new Map<string, string>()
-/** Findings whose agent is starting, and whether a stop came meanwhile. */
+/** Findings whose agent is starting, by `fixKey`, and whether a stop came meanwhile. */
 const starting = new Map<string, { dir: string; since: number; stop: boolean }>()
 let dispatching: Promise<void> = Promise.resolve()
 
@@ -809,20 +821,21 @@ function fenced(line: string, what = "the server's line about the finding") {
 /** The decision a line hands over: `fix@<line>`, the same line again starts nothing. */
 const handKey = (line: string) => `fix@${line}`
 
-async function wasHandedOver($: $, id: string, line: string) {
-  if ((await read($, handed))[id] !== handKey(line)) return false
+async function wasHandedOver($: $, dir: string, id: string, line: string) {
+  if ((await read($, handed))[fixKey(dir, id)] !== handKey(line)) return false
   await debug($, `${tag(id)}: ignored ${line.split(' ')[0]}, already handed over`)
   return true
 }
 
-const markHandedOver = ($: $, id: string, line: string) =>
-  update($, handed, (all) => ({ ...all, [id]: handKey(line) }))
+const markHandedOver = ($: $, dir: string, id: string, line: string) =>
+  update($, handed, (all) => ({ ...all, [fixKey(dir, id)]: handKey(line) }))
 
 /** The finding's agent ended or was stopped: a fix asked again starts a new one. */
-const forgetHandOver = ($: $, id: string) =>
+const forgetHandOver = ($: $, dir: string, id: string) =>
   update($, handed, (all) => {
-    if (!(id in all)) return all
-    const { [id]: _, ...rest } = all
+    const key = fixKey(dir, id)
+    if (!(key in all)) return all
+    const { [key]: _, ...rest } = all
     return rest
   })
 
@@ -834,15 +847,19 @@ const forgetServed = ($: $, dir: string) =>
   })
 
 async function setWorker($: $, id: string, worker: Worker) {
-  await update($, workers, (all) => ({ ...all, [id]: worker }))
+  await update($, workers, (all) => ({ ...all, [fixKey(worker.review, id)]: worker }))
   await showStatus($)
 }
+
+/** The worker of finding `id` of the review at `dir`. */
+const workerAt = async ($: $, dir: string, id: string) =>
+  (await read($, workers))[fixKey(dir, id)]
 
 async function workerOf($: $, agent: string) {
   const found = Object.entries(await read($, workers)).find(
     ([, worker]) => worker.agent === agent,
   )
-  return found && { id: found[0], worker: found[1] }
+  return found && { id: idOfKey(found[0]), worker: found[1] }
 }
 
 /** Agents at work, and those starting: what the cap counts. */
@@ -858,7 +875,8 @@ async function startQueued($: $) {
     const watched = [...watches.values()].find((one) => one.queue.length)
     const next = watched?.queue.shift()
     if (!watched || !next) return
-    if (!(await read($, workers))[next.id]?.running) await startWorker($, watched, next)
+    if (!(await workerAt($, watched.dir, next.id))?.running)
+      await startWorker($, watched, next)
   }
 }
 
@@ -888,7 +906,7 @@ async function registerRunning($: $) {
   await Promise.all(
     all
       .filter(([, worker]) => worker.running)
-      .map(([id, worker]) => registerAgain($, id, worker)),
+      .map(([key, worker]) => registerAgain($, idOfKey(key), worker)),
   )
 }
 
@@ -912,7 +930,8 @@ async function startWorker($: $, watched: Watch, { id, line }: Queued) {
   const review = watched.review
   if (!review) return
   const name = spawnName(id, watched.dir)
-  starting.set(id, { dir: watched.dir, since: Date.now(), stop: false })
+  const key = fixKey(watched.dir, id)
+  starting.set(key, { dir: watched.dir, since: Date.now(), stop: false })
   const started = await spawnWorker($, review, id, name, line).catch(
     (error: unknown) => ({
       deny: message(error),
@@ -927,8 +946,8 @@ async function startWorker($: $, watched: Watch, { id, line }: Queued) {
     (started.deny === undefined
       ? (await $.agent.list().catch(() => [])).findLast((one) => one.name === name)?.id
       : undefined)
-  const meanwhile = starting.get(id)
-  starting.delete(id)
+  const meanwhile = starting.get(key)
+  starting.delete(key)
   if (!agent) {
     const why = started.deny ?? 'no agent started'
     $.ui.toast(`Tranchant could not start an agent for finding ${tag(id)}: ${why}`)
@@ -948,7 +967,7 @@ async function startWorker($: $, watched: Watch, { id, line }: Queued) {
         ? started.model
         : await $.session.model().catch(() => INHERIT),
   }
-  await markHandedOver($, id, line)
+  await markHandedOver($, watched.dir, id, line)
   await setWorker($, id, worker)
   await debug($, `${tag(id)}: agent ${agent} started`)
   if (meanwhile?.stop) await stopWorker($, watched, id)
@@ -957,24 +976,26 @@ async function startWorker($: $, watched: Watch, { id, line }: Queued) {
 /** A finding needs an agent: once, however many times the server says so. */
 async function dispatch($: $, watched: Watch, next: Queued) {
   // Asked again while its last agent still ends its turn (a change, an answer): once it ended.
-  if ((await read($, workers))[next.id]?.running) {
-    afterTurn.set(next.id, { ...next, dir: watched.dir })
+  const key = fixKey(watched.dir, next.id)
+  if ((await workerAt($, watched.dir, next.id))?.running) {
+    afterTurn.set(key, { ...next, dir: watched.dir })
     return
   }
-  if (await wasHandedOver($, next.id, next.line)) return
-  if (starting.has(next.id) || watched.queue.some((one) => one.id === next.id)) return
+  if (await wasHandedOver($, watched.dir, next.id, next.line)) return
+  if (starting.has(key) || watched.queue.some((one) => one.id === next.id)) return
   watched.queue.push(next)
   await pump($)
 }
 
-/** The lines that came for a finding while its agent ran, by finding id. */
+/** The lines that came for a finding while its agent ran, by `fixKey`. */
 const afterTurn = new Map<string, Queued & { dir: string }>()
 
 /** The finding's agent ended: a fix asked meanwhile gets its agent, if the finding still waits for one. */
-async function dispatchAfterTurn($: $, id: string) {
-  const next = afterTurn.get(id)
+async function dispatchAfterTurn($: $, dir: string, id: string) {
+  const key = fixKey(dir, id)
+  const next = afterTurn.get(key)
   if (!next) return
-  afterTurn.delete(id)
+  afterTurn.delete(key)
   const watched = watches.get(next.dir)
   if (watched && (await isQueued($, next.dir, id)))
     await dispatch($, watched, { id: next.id, line: next.line })
@@ -1012,21 +1033,21 @@ async function endWorker($: $, id: string, worker: Worker, why: string) {
     return false
   }
   await setWorker($, id, { ...worker, running: false })
-  await forgetHandOver($, id)
+  await forgetHandOver($, worker.review, id)
   await ended($, id, worker)
   await debug($, `${tag(id)}: agent ${worker.agent} stopped: ${why}`)
-  await dispatchAfterTurn($, id)
+  await dispatchAfterTurn($, worker.review, id)
   return true
 }
 
 async function stopWorker($: $, watched: Watch, id: string) {
   watched.queue = watched.queue.filter((one) => one.id !== id)
-  const pending = starting.get(id)
+  const pending = starting.get(fixKey(watched.dir, id))
   if (pending) {
     pending.stop = true
     return
   }
-  const worker = (await read($, workers))[id]
+  const worker = await workerAt($, watched.dir, id)
   if (!worker?.running) return
   await endWorker($, id, worker, 'the reviewer stopped the finding')
   void pump($)
@@ -1127,9 +1148,15 @@ function serve($: $, dir: string, opensBrowser: boolean): Watch {
     }
     let since = 0
     await update($, sessionSince, (known) => (since = known || Date.now()))
+    // The session's folder: the dashboard says where the review runs.
+    const cwd = normalize(await $.session.cwd().catch(() => ''))
     const stream = $.process.spawn({
       argv: ['node', `${skillDir($)}/scripts/server.mjs`, '--review', dir],
-      env: { TRANCHANT_HOOKS: '1', TRANCHANT_SESSION_SINCE: String(since) },
+      env: {
+        TRANCHANT_HOOKS: '1',
+        TRANCHANT_SESSION_SINCE: String(since),
+        ...(cwd && { TRANCHANT_SESSION_CWD: cwd }),
+      },
     })
     const pieces = stream[Symbol.asyncIterator]()
     watched.stop = () => {
@@ -1277,6 +1304,7 @@ async function openReview($: $, given: string) {
 }
 
 async function stopServing($: $) {
+  const dashboard = await stopDashboard($)
   endedWatches.clear()
   const titles = [...watches.values()].map(titleOf)
   for (const watched of watches.values()) watched.stop()
@@ -1286,14 +1314,17 @@ async function stopServing($: $) {
   const reviewing = await stopReviewing($)
   const running = Object.entries(await read($, workers)).filter(([, one]) => one.running)
   let fixes = 0
-  for (const [id, worker] of running)
-    if (await endWorker($, id, worker, '/tranchant stop')) fixes += 1
+  for (const [key, worker] of running)
+    if (await endWorker($, idOfKey(key), worker, '/tranchant stop')) fixes += 1
   await showStatus($)
   const left = reviewing.left + running.length - fixes
   if (!titles.length && !running.length && !reviewing.ended && !left)
-    return 'Tranchant is not serving any review in this session.'
+    return dashboard
+      ? 'Tranchant stopped its dashboard; it served no review in this session.'
+      : 'Tranchant is not serving any review in this session.'
   return [
     ...(titles.length ? [`Tranchant stopped serving ${titles.join(', ')}.`] : []),
+    ...(dashboard ? ['Tranchant stopped its dashboard.'] : []),
     ...(reviewing.ended ? [`Ended ${reviewing.ended} agent(s) reviewing.`] : []),
     ...(fixes ? [`Ended ${fixes} agent(s) at work on fixes.`] : []),
     ...(left
@@ -1346,10 +1377,17 @@ async function statusText($: $) {
       .map((one) => one.review),
     ...[...startingReview.values()].map((one) => one.dir),
   ])
+  const dashboard = dashboardWatch?.first?.startsWith('READY')
+    ? [`Dashboard: ${dashboardWatch.first.split(' ')[1] ?? ''}`]
+    : []
   if (!dirs.size)
-    return 'Tranchant is not serving any review in this session: /tranchant <review.json> or /tranchant review starts it.'
+    return [
+      ...dashboard,
+      'Tranchant is not serving any review in this session: /tranchant <review.json> or /tranchant review starts it.',
+    ].join('\n')
   const settings = await settingsOf($)
   const lines = [
+    ...dashboard,
     `Tranchant: ${running.length + starting.size} of ${settings.maxFixAgents} agents at work in this session.`,
   ]
   for (const dir of dirs) {
@@ -1357,10 +1395,13 @@ async function statusText($: $) {
     const working = [
       ...[...starting]
         .filter(([, one]) => one.dir === dir)
-        .map(([id, one]) => `${tag(id)}: agent starting, for ${ago(one.since)}`),
+        .map(
+          ([key, one]) => `${tag(idOfKey(key))}: agent starting, for ${ago(one.since)}`,
+        ),
       ...running
         .filter(([, worker]) => worker.review === dir)
-        .map(([id, worker]) => {
+        .map(([key, worker]) => {
+          const id = idOfKey(key)
           const model = worker.model ?? "the session's model"
           const since = worker.since === undefined ? '' : `, for ${ago(worker.since)}`
           return `${tag(id)}: agent ${worker.agent} on ${model}${since}`
@@ -1388,6 +1429,133 @@ async function statusText($: $) {
   return lines.join('\n')
 }
 
+// ---------------------------------------------------------------------------
+// `/tranchant dashboard`: the dashboard's server, every review of every
+// project, for the session's life; one per machine, so a session that finds
+// another's running opens that one's page.
+
+type DashboardWatch = {
+  /** The server's first line: `READY <url>`, `RUNNING <url>`, an error line, or `ENDED <why>`. */
+  started: Promise<string>
+  first?: string
+  stopped: boolean
+  stop: () => void
+}
+/** The dashboard this module runs: it dies with the module. */
+let dashboardWatch: DashboardWatch | undefined
+/** Whether this session serves the dashboard: a reload starts it again. */
+const dashboardServed = atom({ plugin: 'tranchant', key: 'dashboard' } as const, false)
+
+/** Starts the dashboard's server and reads its lines, until it ends. */
+function serveDashboard($: $, opensBrowser: boolean): DashboardWatch {
+  let settle: (line: string) => void = ignore
+  const watched: DashboardWatch = {
+    started: new Promise<string>((done) => (settle = done)),
+    stopped: false,
+    stop: () => {
+      watched.stopped = true
+    },
+  }
+  dashboardWatch = watched
+  void watched.started.then((line) => (watched.first = line))
+  void (async () => {
+    const stream = $.process.spawn({
+      argv: ['node', `${skillDir($)}/scripts/dashboard.mjs`],
+    })
+    const pieces = stream[Symbol.asyncIterator]()
+    watched.stop = () => {
+      watched.stopped = true
+      void pieces.return?.({ code: null, signal: null })
+    }
+    let pending = ''
+    let errors = ''
+    let exit = 'the dashboard exited'
+    try {
+      for (;;) {
+        const piece = await pieces.next()
+        if (piece.done) {
+          const { code, signal } = piece.value ?? { code: null, signal: null }
+          exit = `the dashboard exited (${signal ?? `code ${code}`})`
+          break
+        }
+        if (piece.value.stream === 'stderr') {
+          errors = (errors + piece.value.text).slice(-2_000)
+          continue
+        }
+        const lines = (pending + piece.value.text).split('\n')
+        pending = lines.pop() ?? ''
+        for (const line of lines.map((one) => one.trim()).filter(Boolean)) {
+          const [kind, url = ''] = line.split(' ')
+          if (watched.first !== undefined) continue
+          settle(line)
+          watched.first = line
+          if (kind === 'READY') await update($, dashboardServed, () => true)
+          if ((kind === 'READY' || kind === 'RUNNING') && opensBrowser)
+            await openBrowser($, url)
+        }
+      }
+    } catch (error) {
+      exit = `the dashboard could not run: ${message(error)}`
+    }
+    const why = errors.trim().split('\n').at(-1)
+    settle(`ENDED ${exit}${why ? `: ${short(why, 300)}` : ''}`)
+    if (dashboardWatch === watched) dashboardWatch = undefined
+    if (watched.stopped || !watched.first?.startsWith('READY')) return
+    await update($, dashboardServed, () => false)
+    $.ui.toast(
+      `Tranchant's dashboard stopped: ${exit}. /tranchant dashboard starts it again.`,
+    )
+  })().catch(ignore)
+  return watched
+}
+
+/** What `/tranchant dashboard` answers, from the server's first line. */
+function dashboardText(first: string | undefined, again: boolean) {
+  if (first === undefined)
+    return "Tranchant's dashboard has not answered yet; it keeps starting in the background."
+  const [kind = '', ...rest] = first.split(' ')
+  const said = rest.join(' ')
+  switch (kind) {
+    case 'READY':
+      return [
+        `Tranchant's dashboard ${again ? 'is' : 'runs'} at ${said}${again ? ', opened again' : ''}: every review of every project, as it goes.`,
+        'It stops with this session; /tranchant stop ends it.',
+      ].join('\n')
+    case 'RUNNING':
+      return `Another session runs Tranchant's dashboard at ${said}: opened.`
+    case 'PAGE_MISSING':
+      return `Tranchant runs from a clone that has no page built: ${said}, then /tranchant dashboard again.`
+    case 'PORT_BUSY':
+      return `Tranchant's dashboard cannot start: port ${said}.`
+    default:
+      return `Tranchant's dashboard did not start: ${said}`
+  }
+}
+
+async function openDashboard($: $) {
+  const known = dashboardWatch
+  if (known?.first?.startsWith('READY')) {
+    await openBrowser($, known.first.split(' ')[1] ?? '')
+    return dashboardText(known.first, true)
+  }
+  const watched = known ?? serveDashboard($, true)
+  const first = await Promise.race([
+    watched.started,
+    $.clock.sleep(START_MS).then(() => undefined),
+  ])
+  return dashboardText(first, false)
+}
+
+/** Ends the dashboard this session serves; whether there was one. */
+async function stopDashboard($: $) {
+  const watched = dashboardWatch
+  dashboardWatch = undefined
+  await update($, dashboardServed, () => false)
+  if (!watched) return false
+  watched.stop()
+  return true
+}
+
 /** A slash command, or a line in the trace when Claude Code refuses its name. */
 async function registerCommand($: $, command: Parameters<$['command']['register']>[0]) {
   await $.command
@@ -1402,6 +1570,7 @@ async function openCommand($: $, args: string) {
   const word = args.trim()
   if (word === 'stop') return stopServing($)
   if (word === 'status') return statusText($)
+  if (word === 'dashboard') return openDashboard($)
   const [first, ...rest] = word.split(/\s+/)
   if (first === 'comments')
     return rest.length > 1 ? COMMENTS_USAGE : startComments($, rest[0])
@@ -1416,7 +1585,7 @@ async function openCommand($: $, args: string) {
     return 'error' in parsed ? parsed.error : startImport($, parsed)
   }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file> | --group <name>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] | comments [<pull request or merge request url>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file> | --group <name>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] | comments [<pull request or merge request url>] | dashboard | status | stop'
   return openReview($, word)
 }
 
@@ -1447,6 +1616,7 @@ async function rearm($: $) {
   for (const dir of Object.keys(await read($, serving))) {
     if (!watches.has(dir)) void serveAgain($, dir).catch(ignore)
   }
+  if (!dashboardWatch && (await read($, dashboardServed))) serveDashboard($, false)
 }
 
 /** What Claude Code writes before a finished agent's report, and after it. */
@@ -1489,7 +1659,7 @@ async function ownReport($: $, from: string | undefined, text: string) {
 /** The agent the hooks spawned under `name`, a fix's or the review's, and whether it runs. */
 async function spawnedBy($: $, name: string) {
   const worker = Object.entries(await read($, workers)).find(
-    ([id, one]) => spawnName(id, one.review) === name,
+    ([key, one]) => spawnName(idOfKey(key), one.review) === name,
   )
   if (worker) return { agent: worker[1].agent, running: worker[1].running }
   const reviewing = Object.values(await read($, reviewAgents)).find(
@@ -1507,12 +1677,12 @@ async function workerDone($: $, agent: string, answer: string) {
   const done = await workerOf($, agent)
   if (!done?.worker.running) return
   await setWorker($, done.id, { ...done.worker, running: false })
-  await forgetHandOver($, done.id)
+  await forgetHandOver($, done.worker.review, done.id)
   await ended($, done.id, done.worker)
   const said = answer.trim().split('\n')[0] ?? ''
   await debug($, `${tag(done.id)}: turn ended: ${short(said, 120)}`)
   if (said) $.ui.toast(`${tag(done.id)}: ${short(said, 200)}`)
-  await dispatchAfterTurn($, done.id)
+  await dispatchAfterTurn($, done.worker.review, done.id)
   void pump($)
 }
 
@@ -3369,7 +3539,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: 'open',
       description:
-        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with import, cleans a team's reviewer into a lens the page shows before it is added; with comments, opens the unresolved review threads of a pull request or merge request; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
+        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with import, cleans a team's reviewer into a lens the page shows before it is added; with comments, opens the unresolved review threads of a pull request or merge request; with dashboard, opens the dashboard of every review of every project; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -3387,6 +3557,11 @@ export const register: Register = (on) => {
           status: {
             type: 'boolean',
             description: 'true answers what runs instead; review is then left out.',
+          },
+          dashboard: {
+            type: 'boolean',
+            description:
+              "true opens Tranchant's dashboard instead, every review of every project; review is then left out.",
           },
           run: {
             type: 'boolean',
@@ -3441,9 +3616,9 @@ export const register: Register = (on) => {
     await registerCommand($, {
       name: 'tranchant',
       description:
-        'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, the comments of a PR/MR, status, or stop)',
+        'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, the comments of a PR/MR, the dashboard, status, or stop)',
       argumentHint:
-        '<review.json> | review [<branch> | <mr url>] [--group <name>] [--no-start] | import [<source>] [--to global|local] | comments [<pr/mr url>] | status | stop',
+        '<review.json> | review [<branch> | <mr url>] [--group <name>] [--no-start] | import [<source>] [--to global|local] | comments [<pr/mr url>] | dashboard | status | stop',
       immediate: true,
     })
     await registerRunning($)
@@ -3463,6 +3638,7 @@ export const register: Register = (on) => {
   on('tool.call', { tool: OPEN_TOOL }, async ($, e) => {
     if (e.stop === true) return { result: await stopServing($) }
     if (e.status === true) return { result: await statusText($) }
+    if (e.dashboard === true) return { result: await openDashboard($) }
     if (typeof e.import === 'string') {
       // As /tranchant import refuses --context: a caller from before its removal is told.
       if (e.context !== undefined) return { result: IMPORT_USAGE }

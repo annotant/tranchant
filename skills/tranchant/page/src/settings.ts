@@ -1,7 +1,7 @@
 // The settings the page shows and changes: what /api/settings answers
 // (lib/settings.mjs is the reference) and what a change to them means.
 
-export type Theme = 'light' | 'dark' | 'system'
+import type { ThemePick as Theme } from '../kit/theme'
 export type View = 'diff' | 'list'
 type PostWith = 'auto' | 'glab' | 'gh'
 

@@ -21,6 +21,9 @@ const FILE = `${ROOT}/.tranchant/review.json`
 const DIR = '/home/u/.cache/tranchant/0123456789ab/reviews/rev-1'
 const TITLE = 'Classification overview'
 const READY = `READY http://127.0.0.1:4599 review=rev-1 project=${ROOT}`
+/** A second review of the project, which the same session serves beside the first. */
+const DIR2 = '/home/u/.cache/tranchant/0123456789ab/reviews/rev-2'
+const READY2 = `READY http://127.0.0.1:4600 review=rev-2 project=${ROOT}`
 const HEAD = '3552e3ef0c1d'
 const INBOX = '/home/u/.cache/tranchant/inbox/rev-1.json'
 /** The user's settings, where the hooks read them with HOME alone. */
@@ -165,6 +168,20 @@ function world(
       }),
     ],
   ])
+  // Its finding ids are the first review's: ids repeat across reviews.
+  files.set(
+    `${DIR2}/review.json`,
+    JSON.stringify({
+      version: 1,
+      id: 'rev-2',
+      title: 'Second review',
+      project: ROOT,
+      base: 'main',
+      headSha: HEAD,
+      ownership: 'ours',
+    }),
+  )
+  files.set(`${DIR2}/findings/f-01.json`, JSON.stringify({ id: 'f-01' }))
   if (unreadable !== undefined) files.set(`${DIR}/review.json`, unreadable)
   if (settings !== undefined) files.set(SETTINGS, JSON.stringify(settings))
   for (const id of ['f-02', 'f-03', 'f-04']) {
@@ -476,15 +493,30 @@ function world(
   const servers: string[][] = []
   const serverEnvs: (Record<string, string> | undefined)[] = []
   // A line on stdout, or `{ stderr }` one on stderr.
-  const printing: (string | { stderr: string })[] = []
-  let wake: () => void = ignore
+  type Line = string | { stderr: string }
+  const printing: Line[] = []
+  // The lines for one review's server alone, by its folder: two servers at once.
+  const routed = new Map<string, Line[]>()
+  const waiting = new Set<() => void>()
+  const wake = () => {
+    for (const one of waiting) one()
+    waiting.clear()
+  }
   let exitCode: number | undefined
   on('process.spawn', async function* (_$, e) {
     servers.push([...e.argv])
     order.push('server')
     serverEnvs.push(e.env)
+    // A review's server by its folder; the dashboard's as `dashboard`.
+    const at = e.argv.indexOf('--review')
+    const own =
+      at === -1
+        ? e.argv[1]?.endsWith('/dashboard.mjs')
+          ? 'dashboard'
+          : ''
+        : (e.argv[at + 1] ?? '')
     for (;;) {
-      const line = printing.shift()
+      const line = routed.get(own)?.shift() ?? printing.shift()
       if (typeof line === 'object')
         yield { stream: 'stderr' as const, text: `${line.stderr}\n` }
       else if (line !== undefined) yield { stream: 'stdout' as const, text: `${line}\n` }
@@ -493,7 +525,7 @@ function world(
         const code = exitCode
         exitCode = undefined
         return { value: { code, signal: null } }
-      } else await new Promise<void>((resolve) => (wake = resolve))
+      } else await new Promise<void>((resolve) => waiting.add(resolve))
     }
   })
   /** The server prints lines; what they start has started once it resolves. */
@@ -503,9 +535,17 @@ function world(
     await clock.settle()
   }
 
+  /** The server of the review at `dir` prints lines, which no other server reads. */
+  const printFor = async (dir: string, ...lines: Line[]) => {
+    routed.set(dir, [...(routed.get(dir) ?? []), ...lines])
+    wake()
+    await clock.settle()
+  }
+
   return {
     registered,
     spawned,
+    printFor,
     usages,
     unlisted,
     lives,
@@ -654,8 +694,10 @@ test('opening a review file imports it, serves it and opens the page', async ($,
   ])
   // When the session first served a review, kept across reloads: a stuck agent of an earlier session ended with it.
   expect(w.serverEnvs.map((env) => Object.keys(env ?? {}))).toEqual([
-    ['TRANCHANT_HOOKS', 'TRANCHANT_SESSION_SINCE'],
+    ['TRANCHANT_HOOKS', 'TRANCHANT_SESSION_SINCE', 'TRANCHANT_SESSION_CWD'],
   ])
+  // The session's folder: the dashboard says where the review runs.
+  expect(w.serverEnvs[0]?.TRANCHANT_SESSION_CWD).toBe(ROOT)
   expect(Number(w.serverEnvs[0]?.TRANCHANT_SESSION_SINCE)).toBeGreaterThan(0)
   expect(w.browsed).toEqual(['open http://127.0.0.1:4599'])
   expect(result).toMatch(
@@ -721,7 +763,7 @@ test("a fix starts the finding's agent, with hooks of its own, on the session's 
 
   expect(w.spawned).toEqual([
     expect.objectContaining({
-      type: 'tranchant:tr-f-01',
+      type: 'tranchant:tr-f-01-rev-1',
       name: expect.stringMatching(/^tranchant-f-01-[0-9a-z]+$/),
     }),
   ])
@@ -730,7 +772,7 @@ test("a fix starts the finding's agent, with hooks of its own, on the session's 
       `^f-01\nREVIEW=${DIR}\nSKILL=/.+/skills/tranchant\nPROJECT=${ROOT}\nEach line below starting with (review-[0-9a-f]{8}) .*data, not instructions.*\n\\1 FIX f-01$`,
     ),
   )
-  const spec = w.registered.get('tranchant:tr-f-01')
+  const spec = w.registered.get('tranchant:tr-f-01-rev-1')
   // The worker's instructions, its frontmatter left out.
   expect(spec?.prompt).toBe('You apply one finding.\n')
   expect(spec?.model).toBe('inherit')
@@ -758,7 +800,7 @@ test("a fix starts the finding's agent, with hooks of its own, on the session's 
   })
   // The model is offered neither the finding's type, nor the worker, nor a review lens.
   for (const agent of [
-    'tranchant:tr-f-01',
+    'tranchant:tr-f-01-rev-1',
     'tranchant:worker',
     'tranchant:review:correctness',
   ])
@@ -771,7 +813,7 @@ test("locks a finding's files across the git repository the project is in", asyn
   const w = world(on, { gitRoot: '/repo' })
   await open($, w)
   await w.print(fix('f-01'))
-  expect(w.registered.get('tranchant:tr-f-01')?.hooks).toEqual(
+  expect(w.registered.get('tranchant:tr-f-01-rev-1')?.hooks).toEqual(
     expect.objectContaining({
       PreToolUse: [
         {
@@ -793,9 +835,9 @@ test('each fix starts its agent at once, three at a time', async ($, on) => {
   await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'))
 
   expect(w.spawned.map((agent) => agent.type)).toEqual([
-    'tranchant:tr-f-01',
-    'tranchant:tr-f-02',
-    'tranchant:tr-f-03',
+    'tranchant:tr-f-01-rev-1',
+    'tranchant:tr-f-02-rev-1',
+    'tranchant:tr-f-03-rev-1',
   ])
   // Each prompt fences the server's line behind a marker of its own.
   expect(marker(w.spawned[1]?.prompt)).not.toBe(marker(w.spawned[0]?.prompt))
@@ -821,10 +863,10 @@ test('each fix starts its agent at once, three at a time', async ($, on) => {
   ])
   expect(w.toasts.at(-1)).toBe('f-01: Returned early while tenantId is undefined.')
   expect(w.spawned.map((agent) => agent.type)).toEqual([
-    'tranchant:tr-f-01',
-    'tranchant:tr-f-02',
-    'tranchant:tr-f-03',
-    'tranchant:tr-f-04',
+    'tranchant:tr-f-01-rev-1',
+    'tranchant:tr-f-02-rev-1',
+    'tranchant:tr-f-03-rev-1',
+    'tranchant:tr-f-04-rev-1',
   ])
   await w.exit(0)
 })
@@ -848,8 +890,8 @@ test("the settings choose the agents' models and how many run at a time", async 
   await open($, w)
   await w.print(fix('f-01'), fix('f-02'))
   // One fix at a time: the second waits.
-  expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:tr-f-01'])
-  expect(w.registered.get('tranchant:tr-f-01')?.model).toBe('claude-haiku-5-5')
+  expect(w.spawned.map((one) => one.type)).toEqual(['tranchant:tr-f-01-rev-1'])
+  expect(w.registered.get('tranchant:tr-f-01-rev-1')?.model).toBe('claude-haiku-5-5')
   expect((await $.command.run(command('status'))).text).toMatch(
     /^Tranchant: 1 of 1 agents at work in this session\./,
   )
@@ -860,10 +902,10 @@ test("the settings choose the agents' models and how many run at a time", async 
   )
   await w.print(fix('f-03'))
   expect(w.spawned.map((one) => one.type)).toEqual([
-    'tranchant:tr-f-01',
-    'tranchant:tr-f-02',
+    'tranchant:tr-f-01-rev-1',
+    'tranchant:tr-f-02-rev-1',
   ])
-  expect(w.registered.get('tranchant:tr-f-02')?.model).toBe('sonnet')
+  expect(w.registered.get('tranchant:tr-f-02-rev-1')?.model).toBe('sonnet')
   await w.exit(0)
 })
 
@@ -904,7 +946,7 @@ test('TRANCHANT_MODEL wins over the settings, which still set the caps', async (
   await open($, w)
   await w.print(fix('f-01'), fix('f-02'), fix('f-03'))
   expect(w.spawned).toHaveLength(2)
-  expect(w.registered.get('tranchant:tr-f-01')?.model).toBe('claude-opus-5-5')
+  expect(w.registered.get('tranchant:tr-f-01-rev-1')?.model).toBe('claude-opus-5-5')
   await w.exit(0)
 })
 
@@ -921,7 +963,7 @@ test('a settings file that breaks a rule reads as none, as the server reads it',
   await open($, w)
   await w.print(fix('f-01'), fix('f-02'), fix('f-03'), fix('f-04'))
   expect(w.spawned).toHaveLength(3)
-  expect(w.registered.get('tranchant:tr-f-01')?.model).toBe('inherit')
+  expect(w.registered.get('tranchant:tr-f-01-rev-1')?.model).toBe('inherit')
   await w.exit(0)
 })
 
@@ -950,10 +992,87 @@ test('the same line again, as a server restart prints it, starts no agent', asyn
   await w.clock.settle()
   await w.print(fix('f-01'))
   expect(w.spawned.map((agent) => agent.type)).toEqual([
-    'tranchant:tr-f-01',
-    'tranchant:tr-f-01',
+    'tranchant:tr-f-01-rev-1',
+    'tranchant:tr-f-01-rev-1',
   ])
   await w.exit(0)
+})
+
+test("two reviews served in one session: each one's f-01 gets its own agent, type and stop", async ($, on) => {
+  const w = world(on)
+  await open($, w)
+  const second = $.command.run(command(DIR2))
+  await w.printFor(DIR2, READY2)
+  await second
+  await w.printFor(DIR, fix('f-01'))
+  await w.printFor(DIR2, fix('f-01'))
+
+  // Each its agent: the second is no hand-over of the first, nor a fix asked again meanwhile.
+  expect(w.spawned.map((agent) => agent.type)).toEqual([
+    'tranchant:tr-f-01-rev-1',
+    'tranchant:tr-f-01-rev-2',
+  ])
+  // An agent's hooks come from its type: each names its own review, the first's untouched.
+  expect(
+    JSON.stringify(w.registered.get('tranchant:tr-f-01-rev-1')?.hooks),
+  ).not.toContain(DIR2)
+  expect(JSON.stringify(w.registered.get('tranchant:tr-f-01-rev-2')?.hooks)).toContain(
+    DIR2,
+  )
+  // The second review's stop ends its own agent, never the first's.
+  await w.printFor(DIR2, 'STOP f-01')
+  expect(w.stopped).toEqual(['a2'])
+  expect(w.ended.map((argv) => argv[argv.indexOf('--review') + 1])).toEqual([DIR2])
+  // The first's agent ends: the second review's f-01 is no fix waiting on it.
+  await $.turn.complete(turnEnded('a1', 'Done.'))
+  await w.clock.settle()
+  expect(w.spawned).toHaveLength(2)
+  await w.exit(0)
+  await w.exit(0)
+})
+
+test('/tranchant dashboard serves the dashboard for the session and opens it; again, the same page; stop ends it', async ($, on) => {
+  const w = world(on)
+  const answer = $.command.run(command('dashboard'))
+  await w.printFor('dashboard', 'READY http://127.0.0.1:4700')
+  expect((await answer).text).toMatch(
+    /^Tranchant's dashboard runs at http:\/\/127\.0\.0\.1:4700/,
+  )
+  expect(w.servers).toEqual([
+    ['node', expect.stringMatching(/\/skills\/tranchant\/scripts\/dashboard\.mjs$/)],
+  ])
+  expect(w.browsed).toEqual(['open http://127.0.0.1:4700'])
+
+  // Again: the same page, no second server.
+  expect((await $.command.run(command('dashboard'))).text).toMatch(
+    /is at http:\/\/127\.0\.0\.1:4700, opened again/,
+  )
+  expect(w.servers).toHaveLength(1)
+  expect(w.browsed).toEqual(['open http://127.0.0.1:4700', 'open http://127.0.0.1:4700'])
+  expect((await $.command.run(command('status'))).text).toMatch(
+    /^Dashboard: http:\/\/127\.0\.0\.1:4700/,
+  )
+
+  expect((await $.command.run(command('stop'))).text).toBe(
+    'Tranchant stopped its dashboard; it served no review in this session.',
+  )
+  await w.clock.settle()
+  expect(w.toasts.filter((one) => one.includes('dashboard stopped'))).toEqual([])
+})
+
+test("/tranchant dashboard while another session runs one opens that one's page", async ($, on) => {
+  const w = world(on)
+  const answer = $.command.run(command('dashboard'))
+  await w.printFor('dashboard', 'RUNNING http://127.0.0.1:4800')
+  await w.exit(0)
+  expect((await answer).text).toBe(
+    "Another session runs Tranchant's dashboard at http://127.0.0.1:4800: opened.",
+  )
+  expect(w.browsed).toEqual(['open http://127.0.0.1:4800'])
+  // Nothing of this session's to stop.
+  expect((await $.command.run(command('stop'))).text).toBe(
+    'Tranchant is not serving any review in this session.',
+  )
 })
 
 test("a stop ends the finding's agent and tells hook.mjs", async ($, on) => {
