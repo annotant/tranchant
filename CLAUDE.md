@@ -19,7 +19,7 @@ pattern, read how annotant does it.
   no model turn; the server runs `post.mjs` per post and `issue.mjs` per
   issue. Claude Code runs none of a
   mod's hooks for an agent the plugin starts: each fix's agent is registered
-  as a type of its own (`tranchant:tr-<id>`) whose settings hooks run
+  as a type of its own (`tranchant:tr-<id>-<review>`) whose settings hooks run
   `skills/tranchant/scripts/hook.mjs` (file locks, steps) around its tools.
   `/tranchant review` starts the review agents the same way: the summary
   agent, queued first (`tranchant:sm-summary-<review>`), which writes the review's
@@ -34,6 +34,10 @@ pattern, read how annotant does it.
   Add a lens, a review whose added lens's source changed) is cleaned by one
   agent (`tranchant:cl-<cleaning>`), which `hook.mjs --cleaner` lets write
   its lens and its report alone; the review waits for it.
+  `/tranchant dashboard` runs the dashboard's server (`dashboard.mjs`) for
+  the session's life, unless another session's runs: that one's page opens.
+  The fixes' `$.state` is keyed by finding id and review folder (`fixKey`):
+  ids repeat across reviews, and a session may serve several.
   Their `$.state` values are typed in `types/index.d.ts`.
 - `agents/worker.md`: the instructions of each fix's agent, which the hooks
   start with only the finding id, `REVIEW`, `SKILL` and `PROJECT`;
@@ -68,9 +72,20 @@ pattern, read how annotant does it.
   what the review's agents spent (`/api/review`'s `usage`), each figure read
   through `lib/format.mjs`'s `readUsage`; `lib/estimate.mjs` what a review
   waiting to start should spend, from the project's past reviews.
-- `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
-  esbuild into `page/dist/`, which is git-ignored: the Release workflow
-  publishes it on the `stable` branch users install from.
+  `dashboard.mjs` serves the dashboard, one per machine; `lib/catalog.mjs`
+  reads every review of every project for it (read only), `lib/registry.mjs`
+  owns the registry of running servers (`<state>/servers/`, one file per
+  server); `lib/http.mjs` what both servers answer alike. A file several
+  instances write is changed under its `lib/filelock.mjs` lock: the
+  settings (`updateSettings`), the user's lenses (`withLensFiles`), a
+  cleaning's record. See [docs/dashboard.md](docs/dashboard.md).
+- `skills/tranchant/page/src/`: the review page (React, TypeScript),
+  bundled by esbuild into `page/dist/`, which is git-ignored: the Release
+  workflow publishes it on the `stable` branch users install from.
+  `page/dashboard/`: the dashboard's page, its own bundle
+  (`dist/dashboard/dashboard.js`). `page/kit/`: what both build on, the
+  palette, the font, the theme and Annotant's UI kit components, copied in
+  one by one as a page needs them; neither page imports the other's code.
 - `site/`: the website on GitHub Pages (Jekyll), its landing page and
   layouts; `.github/scripts/site.mjs` builds its docs pages from the Markdown
   files its `PAGES` lists (never copied into `site/`), and `.github/workflows/pages.yml`
@@ -78,7 +93,8 @@ pattern, read how annotant does it.
   it. Its poster (`site/assets/demo-poster.png`) is the page on
   `test/fixtures/review-ours.json`, `f-01` working.
 - `docs/review-file.md`: the review, decisions and run files, their schemas
-  and the findings' states. `docs/settings.md`: the settings file, its
+  and the findings' states. `docs/dashboard.md`: the dashboard's structure,
+  its server and API, the registry, and what several instances share. `docs/settings.md`: the settings file, its
   schema, its precedence and its routes. `docs/studies/`: the decisions a
   study issue ended on, and the pieces left to build.
 - `test/`: `node:test` suites for the scripts and the server;

@@ -17,6 +17,7 @@ folder: nothing is installed in a repository to review it.
 | `choices.json`                    | Next to it                            | A review waiting to start: the page's switches, `{ lenses: { <name>: true \| false }, remember, group? }` | The server, on Start the review and Build the lenses again                                                             |
 | `lenses/<sha256>.md`              | `<state>/`                            | A lens's prompt as the Lenses step built it, one file per hash, shared by every review       | `lenses.mjs`, once per hash                                                                                            |
 | `cleanings/<cleaning id>/`        | `<state>/<hash>/`                     | A lens's cleaning: `cleaning.json` (its source, the lens it makes or cleans again, where it stands), `lens.md` and `report.json` (what its agent wrote), `rules.md` (the rules the user edited, given back to the agent) | `clean.mjs`, the server's `/api/lens/*`; the cleaning agent (`lens.md` and `report.json` alone)                |
+| `servers/<kind>-<pid>-<tag>.json` | `<state>/`                            | One running server: a review's or the dashboard's, its URL and what it serves ([the dashboard](dashboard.md#the-registry)) | The server itself, on `READY`; removed as it exits, or by a reader once its process is gone                       |
 
 `<state>` is `TRANCHANT_STATE_DIR`, else `$XDG_CACHE_HOME/tranchant`, else
 `~/.cache/tranchant`. `<hash>` is the first 12 hex digits of the SHA-1 of the

@@ -151,8 +151,9 @@ declare module 'claude-code' {
   interface McpToolInputs {
     /**
      * The skill's way in: `review` is a review file to import and open, or a
-     * review folder already imported; `stop` ends the server and every agent;
-     * `status` says what runs; `run` reviews `target` (a branch, a merge
+     * review folder already imported; `stop` ends the servers, the dashboard
+     * and every agent; `status` says what runs; `dashboard` opens the
+     * dashboard of every review of every project; `run` reviews `target` (a branch, a merge
      * request url, or a folder starting with `.` or `/`, another repository
      * at its current branch; the current branch when absent) with `recipe`.
      */
@@ -160,6 +161,7 @@ declare module 'claude-code' {
       review?: string
       stop?: boolean
       status?: boolean
+      dashboard?: boolean
       run?: boolean
       target?: string
       recipe?: string
@@ -177,7 +179,7 @@ declare module 'claude-code' {
   }
   interface PluginState {
     tranchant: {
-      /** By finding id. */
+      /** By `<finding id>@<review folder>`: ids repeat across reviews. */
       workers: Record<string, Worker>
       /**
        * The reviews `/tranchant` serves, by review folder: their servers die
@@ -185,12 +187,14 @@ declare module 'claude-code' {
        */
       serving: Record<string, Served>
       /**
-       * By finding id, the decision an agent or a post last took, `<action>@<at>`:
+       * By `<finding id>@<review folder>`, the decision an agent or a post last took, `<action>@<at>`:
        * a line about it again starts nothing. Kept until the session ends.
        */
       handed: Record<string, string>
       /** The reviews `/tranchant review` runs, by review folder, until they complete. */
       reviewRuns: Record<string, ReviewRun>
+      /** Whether this session serves the dashboard: a reload starts it again. */
+      dashboard: boolean
       /** When this session first served a review, in ms: a stuck agent noted before ended with an earlier session. */
       sessionSince: number
       /** By `<name>@<review folder>`: the review agents started, running or ended. */

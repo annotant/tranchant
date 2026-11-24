@@ -25,6 +25,8 @@
       "ignoreDependencies": ["claude-code", "playwright"]
     },
     "skills/tranchant/page": {
+      // The two pages build.mjs bundles: the review page and the dashboard.
+      "entry": ["src/main.tsx", "dashboard/main.tsx"],
       // Its Vitest suites (vitest.config.ts), not every file under test/.
       "node": false
     }

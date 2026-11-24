@@ -187,6 +187,7 @@ run script.
 /tranchant comments                   # the unresolved review threads of the current branch's PR/MR
 /tranchant comments <PR or MR url>    # those of another one
 /tranchant <review.json>              # import a review and open its page
+/tranchant dashboard                  # every review of every project, on one page
 /tranchant status                     # what is running
 /tranchant stop                       # stop the server and every agent
 ```

@@ -11,8 +11,9 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   "/tranchant import [<source>]" cleans a team's reviewer into a lens;
   "/tranchant comments [<pr/mr url>]" brings the unresolved review threads
   of the user's own PR/MR to the page, one finding each;
-  "/tranchant status" says what runs, "/tranchant stop" ends the server and
-  every agent. Use when the user wants
+  "/tranchant dashboard" opens the list of every review of every project;
+  "/tranchant status" says what runs, "/tranchant stop" ends the servers, the
+  dashboard and every agent. Use when the user wants
   to settle, triage or act on review findings from a page, to open a review
   file, to check or stop running fixes, or says "/tranchant".
 ---
@@ -28,7 +29,7 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   for the file.
 
 Read the arguments as `[mode] [file]`: the mode is `review`, `import`, `comments`,
-`stop` or `status`, or none for the open; any other argument is the review file
+`dashboard`, `stop` or `status`, or none for the open; any other argument is the review file
 (`/tranchant .tranchant/review.json`, `/tranchant ~/Downloads/review.json`).
 After `review` come an optional branch, merge request url or folder, an optional
 `--recipe <file>` or `--group <name>`, and `--no-start` or `--start`. After `comments` comes an optional pull or merge
@@ -47,7 +48,7 @@ Call the tool `mcp__tranchant__open` with `{ "review": "<file>" }` and give
 the user its answer: it validates and imports the file (`open.mjs`), starts
 the server for the session's life, opens the page in the browser and prints
 its URL. For `stop`, call it with `{ "stop": true }`; for `status`, with
-`{ "status": true }`; for `review`, with `{ "run": true }`, plus `"target"`
+`{ "status": true }`; for `dashboard`, with `{ "dashboard": true }`; for `review`, with `{ "run": true }`, plus `"target"`
 (the branch, merge request url or folder), `"recipe"` when given and `"start": false`
 for `--no-start` (`true` for `--start`): the hooks review
 the change in the background, one agent per lens, and the page fills as the

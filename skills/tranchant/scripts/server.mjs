@@ -27,6 +27,8 @@
 // the Lenses step's progress (lenses.json) with the review, and prints START
 // or BUILD when the page starts a review waiting to start, or builds its
 // lenses again, the page's choices in choices.json.
+// On READY it writes its entry in the registry of running servers
+// (lib/registry.mjs), which the dashboard reads, and removes it as it exits.
 // Only runs while a session watches (/tranchant): no server, no page.
 import { spawn } from 'node:child_process'
 import { execFile } from 'node:child_process'
@@ -47,6 +49,16 @@ import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
+import { LockBusy } from './lib/filelock.mjs'
+import {
+  CLIENT_ERRORS,
+  CSP,
+  ClientError,
+  checkOrigin,
+  escapeHtml,
+  readJson,
+  send,
+} from './lib/http.mjs'
 import {
   PLUGIN_ROOT,
   PLUGIN_VERSION,
@@ -109,8 +121,10 @@ import {
   SETTINGS_FILE,
   SettingsRefusal,
   loadSettings,
+  updateSettings,
   writeSettings,
 } from './lib/settings.mjs'
+import { registerServer, removeOnExit } from './lib/registry.mjs'
 import { trackerOf } from './lib/tracker.mjs'
 import { estimateOf, lensHistories } from './lib/estimate.mjs'
 import { reviewUsage } from './lib/usage.mjs'
@@ -180,54 +194,6 @@ const DISCUSSER = /^ds-/
 /** The server's own origins, once it listens: the page's requests carry one of them. */
 const origins = new Set()
 
-function send(res, status, body, headers = {}) {
-  const json = body === undefined ? '' : JSON.stringify(body)
-  res.writeHead(status, {
-    ...headers,
-    ...(json && { 'content-type': 'application/json' }),
-    'x-content-type-options': 'nosniff',
-    'cache-control': 'no-store',
-  })
-  res.end(json)
-}
-
-/** What the server answers to a request the client got wrong, by status. */
-const CLIENT_ERRORS = /** @type {const} */ ({
-  400: 'invalid JSON',
-  403: 'origin not allowed',
-  413: 'body too large',
-})
-
-/**
- * A request the client got wrong. The response takes its text from
- * CLIENT_ERRORS, never from the exception: no exception text reaches a client.
- */
-class ClientError extends Error {
-  /** @param {keyof typeof CLIENT_ERRORS} status */
-  constructor(status) {
-    super(CLIENT_ERRORS[status])
-    this.status = status
-  }
-}
-
-const MAX_BODY = 500_000
-
-async function readJson(req) {
-  if (Number(req.headers['content-length']) > MAX_BODY) throw new ClientError(413)
-  // Decoded as a whole: a character split between two chunks stays one.
-  req.setEncoding('utf8')
-  let raw = ''
-  for await (const chunk of req) {
-    raw += chunk
-    if (raw.length > MAX_BODY) throw new ClientError(413)
-  }
-  try {
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    throw new ClientError(400)
-  }
-}
-
 const ID = /^[\w-]{1,64}$/
 const RUN_ID = /^r\d{1,6}$/
 const MAX_RUNS = 50
@@ -263,9 +229,6 @@ function sanitiseDecision(input) {
   }
 }
 
-/** @param {string} value */
-const escapeHtml = (value) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
-
 /**
  * The page's shell: the bundle draws everything in #root. The theme the
  * settings pick is on `<html>` from the start, so nothing flashes.
@@ -287,21 +250,6 @@ const shell = (theme) =>
     '</html>',
     '',
   ].join('\n')
-
-// The page draws inline SVG the producer wrote: a script in it, missed by the
-// page's sanitizer, would still not run.
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join('; ')
 
 const gitExec = promisify(execFile)
 
@@ -1115,12 +1063,8 @@ function diffOnce() {
 
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`)
-  // A page of another site may send a request it cannot read the answer of:
-  // it would decide findings, and start agents.
-  const { origin } = req.headers
-  if (origin && !origins.has(origin)) throw new ClientError(403)
-  // A same-origin GET carries no Origin: a rebound DNS name would read the answers.
-  if (!origins.has(`http://${req.headers.host}`)) throw new ClientError(403)
+  // Another site's page would decide findings, and start agents.
+  checkOrigin(req, origins)
 
   if (req.method === 'GET' && url.pathname === '/') {
     const { values } = await loadSettings()
@@ -1891,7 +1835,7 @@ async function rememberChoices(lenses, rows) {
   const recipe = named.filter(([name]) => !scopes.get(name))
   const turn = settingsWriting.then(async () => {
     // Checked before anything is written: a choice saved in part is said nowhere.
-    const { settings, problem } = await loadSettings()
+    const { problem } = await loadSettings()
     if (problem && recipe.length) return `the settings cannot be saved: ${problem}`
     try {
       for (const [name, on] of named) {
@@ -1899,12 +1843,19 @@ async function rememberChoices(lenses, rows) {
         if (scope) await updateUserLens(lensRoot, scope, name, { on })
       }
       if (recipe.length) {
-        const off = new Set(settings.disabledLenses ?? [])
-        for (const [name, on] of recipe) {
-          if (on) off.delete(name)
-          else off.add(name)
-        }
-        await writeSettings({ ...settings, disabledLenses: [...off] })
+        /** @type {string | undefined} */
+        let unreadable
+        // Read again under the lock: another project's server may have written it since.
+        await updateSettings((settings, broken) => {
+          unreadable = broken
+          const off = new Set(settings.disabledLenses ?? [])
+          for (const [name, on] of recipe) {
+            if (on) off.delete(name)
+            else off.add(name)
+          }
+          return { ...settings, disabledLenses: [...off] }
+        })
+        if (unreadable) return `the settings cannot be saved: ${unreadable}`
         watchFolders()
         settingsChanged()
       }
@@ -2420,6 +2371,11 @@ const server = http.createServer((req, res) => {
       send(res, 409, { error: error.message })
       return
     }
+    // Another server holds a shared file's lock (the settings, a lens): a try again, said as such.
+    if (error instanceof LockBusy) {
+      send(res, 503, { error: error.message })
+      return
+    }
     if (error instanceof ClientError) {
       // The rest of a body too large is never read: a client reusing the
       // connection would wait on it forever.
@@ -2502,9 +2458,35 @@ server.listen(port, '127.0.0.1', async () => {
   await mkdir(agentsDir, { recursive: true })
   await mkdir(discussionsDir, { recursive: true })
   await refreshNext(true)
-  console.log(
-    `READY http://127.0.0.1:${listening} review=${review.id} project=${project}`,
+  const url = `http://127.0.0.1:${listening}`
+  // Before READY: the dashboard links the review as soon as the page is up.
+  // Without it the review still runs, but the dashboard reads it as stopped.
+  await registerServer({
+    kind: 'review',
+    port: listening,
+    url,
+    review: review.id,
+    dir,
+    project,
+    target: {
+      ...(review.branch && { branch: review.branch }),
+      ...(review.base && { base: review.base }),
+      ...(review.mr?.url && { mr: review.mr.url }),
+    },
+    runner: {
+      kind: 'session',
+      ...(process.env.TRANCHANT_SESSION_CWD && {
+        cwd: process.env.TRANCHANT_SESSION_CWD,
+      }),
+    },
+  }).then(
+    ({ remove }) => removeOnExit(remove),
+    (error) =>
+      console.error(
+        `tranchant server: not in the dashboard's registry, which lists this review as stopped: ${oneLine(String(error))}`,
+      ),
   )
+  console.log(`READY ${url} review=${review.id} project=${project}`)
   ready = true
   watchFolders()
   await resumeQueued()

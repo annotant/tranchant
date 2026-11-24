@@ -11,8 +11,11 @@ const POLL_MS = 15
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** @param {number} pid */
-function alive(pid) {
+/**
+ * Whether process `pid` runs, ours or another user's.
+ * @param {number} pid
+ */
+export function alive(pid) {
   try {
     process.kill(pid, 0)
     return true
@@ -82,6 +85,9 @@ async function breakStale(lock, token, staleMs) {
   }
 }
 
+/** A lock another process still holds once the wait is over: worth trying again, never a crash. */
+export class LockBusy extends Error {}
+
 /**
  * Runs `task` holding `<file>.lock`.
  * @template T
@@ -115,7 +121,7 @@ export async function withFileLock(
       await breakStale(lock, stale, staleMs)
       continue
     }
-    if (Date.now() > deadline) throw new Error(`${lock} is still held; try again`)
+    if (Date.now() > deadline) throw new LockBusy(`${lock} is still held; try again`)
     await sleep(POLL_MS)
   }
   try {

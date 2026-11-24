@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { Diagram } from '../src/Diagram'
-import { applyTheme } from '../src/theme'
+import { applyTheme } from '../kit/theme'
 import { ThemeToggle } from '../src/ThemeToggle'
 
 const renderMermaid = vi.fn(async () => ({

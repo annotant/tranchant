@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { PAGE_CSS } from '../src/styles'
-import { applyTheme } from '../src/theme'
+import { applyTheme } from '../kit/theme'
 import { ThemeToggle } from '../src/ThemeToggle'
 
 const html = document.documentElement

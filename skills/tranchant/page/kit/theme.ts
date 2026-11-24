@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react'
-import type { Theme as Pick } from './settings'
+
+/** What the settings pick: a theme, or the system's. */
+export type ThemePick = Theme | 'system'
 
 /** A theme in force: the settings' pick, or the system's when they say `system`. */
 export type Theme = 'light' | 'dark'
@@ -24,7 +26,7 @@ const currentTheme = (): Theme => chosen() ?? systemTheme()
  * Puts the settings' pick on `<html>`: the server put it there before the
  * page loaded, so nothing flashes; this follows a change.
  */
-export function applyTheme(theme: Pick) {
+export function applyTheme(theme: ThemePick) {
   if (theme === 'system') document.documentElement.removeAttribute('data-theme')
   else document.documentElement.setAttribute('data-theme', theme)
   notify()
