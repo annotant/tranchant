@@ -1,4 +1,4 @@
-// Numbers and times as both pages word them.
+// Numbers as both pages word them.
 
 /** `2.90M`, `412k`, `950`. */
 export function formatTokens(count: number) {

@@ -85,6 +85,9 @@ async function breakStale(lock, token, staleMs) {
   }
 }
 
+/** A lock another process still holds once the wait is over: worth trying again, never a crash. */
+export class LockBusy extends Error {}
+
 /**
  * Runs `task` holding `<file>.lock`.
  * @template T
@@ -118,7 +121,7 @@ export async function withFileLock(
       await breakStale(lock, stale, staleMs)
       continue
     }
-    if (Date.now() > deadline) throw new Error(`${lock} is still held; try again`)
+    if (Date.now() > deadline) throw new LockBusy(`${lock} is still held; try again`)
     await sleep(POLL_MS)
   }
   try {

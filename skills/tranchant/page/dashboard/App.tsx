@@ -55,7 +55,7 @@ export default function App() {
   else {
     const { reviews, state, home } = feed.listing
     const projects = projectsOf(reviews)
-    // A project gone from the list leaves the filter with it.
+    // A project gone from the list is ignored while it is gone: none checked shows them all.
     const kept = new Set(
       [...checked].filter((key) => projects.some((one) => one.key === key)),
     )

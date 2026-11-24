@@ -12,8 +12,8 @@ description: Tranchant settles a code review from a page. A producer (combined-r
   "/tranchant comments [<pr/mr url>]" brings the unresolved review threads
   of the user's own PR/MR to the page, one finding each;
   "/tranchant dashboard" opens the list of every review of every project;
-  "/tranchant status" says what runs, "/tranchant stop" ends the server and
-  every agent. Use when the user wants
+  "/tranchant status" says what runs, "/tranchant stop" ends the servers, the
+  dashboard and every agent. Use when the user wants
   to settle, triage or act on review findings from a page, to open a review
   file, to check or stop running fixes, or says "/tranchant".
 ---

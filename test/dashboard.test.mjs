@@ -3,7 +3,7 @@
 // (dashboard.mjs), one per machine, which pushes the list as it changes.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { test } from 'node:test'
 import { SCRIPTS, importReview, run, tempDir } from './helpers.mjs'
@@ -69,7 +69,7 @@ test('many servers register at once: each its own entry; an entry whose process 
         while (Date.now() < ${go}) {}
         const { entry, remove } = await registerServer({ kind: 'review', port: ${5000 + i}, url: 'http://127.0.0.1:${5000 + i}', review: 'r${i}', dir: '/state/r${i}', project: '/p' })
         const { listServers } = await lib('registry')
-        const seen = (await listServers()).some((one) => one.review === 'r${i}')
+        const seen = (await listServers(undefined, { probe: false })).some((one) => one.review === 'r${i}')
         remove()
         console.log(JSON.stringify({ seen, pid: entry.pid }))`,
       ),
@@ -95,7 +95,7 @@ test('many servers register at once: each its own entry; an entry whose process 
   assert.deepEqual(
     await inState(
       state,
-      `const { listServers } = await lib('registry'); console.log(JSON.stringify(await listServers()))`,
+      `const { listServers } = await lib('registry'); console.log(JSON.stringify(await listServers(undefined, { probe: false })))`,
     ),
     [],
   )
@@ -288,8 +288,8 @@ test('the dashboard serves the list, pushes it as a review changes, and runs onc
   )
 
   // Every finding settled: the page hears it, with no reload.
+  // The stream's first event is the list as it stands; the change comes next.
   const settled = nextListing(dashboard.url, (now) => now.reviews[0]?.state === 'settled')
-  await new Promise((resolve) => setTimeout(resolve, 200))
   await decide(review.dir, {
     'f-01': 'fixed',
     'f-02': 'fixed',
@@ -347,4 +347,83 @@ test('two dashboards started at once: one serves, the other opens its page', asy
   assert.equal(ready.length, 1, both.map((one) => one.first).join('\n'))
   assert.equal(running.length, 1)
   assert.equal(running[0]?.url, ready[0]?.url)
+})
+
+test("a dashboard's entry left by a crash, its pid another process's: a new dashboard starts all the same", async (t) => {
+  const state = await tempDir(t)
+  const config = await tempDir(t, 'tranchant-config-')
+  const servers = path.join(state, 'servers')
+  await mkdir(servers, { recursive: true })
+  // This test's own pid: alive, and nothing answers on port 9.
+  const stale = path.join(servers, `dashboard-${process.pid}-0a0b0c0d.json`)
+  await writeFile(
+    stale,
+    JSON.stringify({
+      version: 1,
+      kind: 'dashboard',
+      pid: process.pid,
+      port: 9,
+      url: 'http://127.0.0.1:9',
+      startedAt: new Date().toISOString(),
+    }),
+  )
+  const dashboard = await startDashboard(t, state, config)
+  assert.match(dashboard.first, /^READY http:\/\/127\.0\.0\.1:\d+$/)
+  assert.ok(!(await readdir(servers)).includes(path.basename(stale)))
+})
+
+test("a review's server registers itself: the dashboard lists it running, with its page and its session's folder", async (t) => {
+  const state = await tempDir(t)
+  const config = await tempDir(t, 'tranchant-config-')
+  const review = await importReview(t, 'ours', state, {
+    status: 'reviewing',
+    findings: [],
+  })
+  const page = path.join(await tempDir(t), 'page.js')
+  await writeFile(page, '/* page */\n')
+  const server = spawn(
+    process.execPath,
+    [path.join(SCRIPTS, 'server.mjs'), '--review', review.dir],
+    {
+      env: {
+        ...process.env,
+        TRANCHANT_STATE_DIR: state,
+        XDG_CONFIG_HOME: config,
+        TRANCHANT_HOOKS: '1',
+        TRANCHANT_PAGE: page,
+        TRANCHANT_POLL_MS: '600000',
+        TRANCHANT_SESSION_CWD: '/work/session',
+      },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    },
+  )
+  t.after(() => server.kill())
+  const ready = await new Promise((resolve) => {
+    let output = ''
+    server.stdout.on('data', (chunk) => {
+      output += chunk
+      const line = output.split('\n').find((one) => one.startsWith('READY '))
+      if (line) resolve(line)
+    })
+  })
+  const url = String(ready).split(' ')[1]
+  const dashboard = await startDashboard(t, state, config)
+  /** @type {any} */
+  const listing = await (await fetch(`${dashboard.url}/api/reviews`)).json()
+  assert.equal(listing.reviews[0].state, 'running')
+  assert.deepEqual(listing.reviews[0].live, { url, cwd: '/work/session' })
+
+  // Stopped by the hooks, with a signal: its entry goes, and the review reads as stopped.
+  const stopped = nextListing(dashboard.url, (now) => now.reviews[0]?.state === 'stopped')
+  server.kill('SIGTERM')
+  await new Promise((resolve) => server.on('exit', resolve))
+  assert.deepEqual(
+    (await readdir(path.join(state, 'servers'))).filter((name) =>
+      name.startsWith('review-'),
+    ),
+    [],
+  )
+  // The poll is off here: a change in the state folder makes the dashboard read again.
+  await writeFile(path.join(state, 'nudge'), '')
+  assert.equal((await stopped).reviews[0].live, undefined)
 })

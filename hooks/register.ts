@@ -26,9 +26,14 @@
 // `/tranchant import`, the page's Add a lens (the server's CLEAN line), and a
 // review whose added lens's source changed, whose reviewers wait for it.
 //
-// The workers, the reviews served and run, the review agents and the fixes
-// handed over live in $.state, so they survive a reload of the module and
-// vanish with the session, like the agents themselves.
+// `/tranchant dashboard` serves the dashboard of every review of every
+// project for the session's life, unless another session's runs.
+//
+// The workers, the reviews served and run, the review agents, the fixes
+// handed over and whether the dashboard runs live in $.state, so they
+// survive a reload of the module and vanish with the session, like the
+// agents themselves. The fixes are keyed by review and finding id: ids
+// repeat across reviews, and a session may serve several.
 //
 // The user's settings (~/.config/tranchant/settings.json, docs/settings.md)
 // choose the agents' models and how many run at a time: read anew before
@@ -443,7 +448,7 @@ async function liveUsage($: $, agent: string) {
 const skillDir = ($: $) => `${$.plugin.root}/skills/tranchant`
 /** A finding's id as the person reads it. */
 const tag = (id: string) => short(id, 16)
-/** A finding's agent's name; `tranchant:` before it makes its type. */
+/** A finding's agent's name, before its review's tag: `reviewAgentType` makes its type. */
 // A type name is 64 characters at most: a long id is cut, and tagged to stay its own.
 const agentName = (id: string) => `tr-${shorten(id.replace(/[^\w-]/g, '-'), 32)}`
 /**
@@ -696,13 +701,13 @@ const hookArgv = ($: $, mode: string, id: string, review: Review) => [
  * settings choose (else the session's), and hook.mjs around each tool, the
  * finding and review written in. Re-registered for each agent the finding gets.
  */
-async function registerFindingAgent($: $, review: Review, id: string) {
+async function registerFindingAgent($: $, review: Review, id: string, legacy = false) {
   const run = (mode: string) => [
     { type: 'command', command: hookArgv($, mode, id, review).map(shellQuote).join(' ') },
   ]
   const { agent } = await $.agent.register({
     // Its hooks name the review: another review's finding of that id registers its own type.
-    name: reviewAgentType(agentName(id), review),
+    name: legacy ? agentName(id) : reviewAgentType(agentName(id), review),
     description: `Tranchant: finding ${tag(id)}. Only the plugin's hooks start it.`,
     prompt: await readWorkerPrompt($),
     model: (await settingsOf($)).fixModel ?? INHERIT,
@@ -890,23 +895,37 @@ function pump($: $) {
  * The finding's agent type again: a reload of the plugin unloads its agent
  * types, and with them the hooks of the agents running as one.
  */
-async function registerAgain($: $, id: string, worker: Worker) {
+async function registerAgain($: $, id: string, worker: Worker, legacy = false) {
   const review = await loadReview($, worker.review).catch(() => undefined)
   if (!review) return
-  await registerFindingAgent($, review, id).then(
+  await registerFindingAgent($, review, id, legacy).then(
     () => debug($, `${tag(id)}: agent type registered again after a reload`),
     (error: unknown) =>
       debug($, `${tag(id)}: could not register its agent type: ${message(error)}`),
   )
 }
 
-/** After a reload, the agents at work get their hooks back. */
+/**
+ * After a reload, the agents at work get their hooks back. A worker kept by
+ * a Tranchant from before keys held the review is keyed anew, and its agent
+ * gets its type back under the name it was spawned as.
+ */
 async function registerRunning($: $) {
   const all = Object.entries(await read($, workers))
+  const legacy = new Set(all.flatMap(([key]) => (key.includes('@') ? [] : [key])))
+  if (legacy.size)
+    await update($, workers, (now) =>
+      Object.fromEntries(
+        Object.entries(now).map(([key, worker]) => [
+          key.includes('@') ? key : fixKey(worker.review, key),
+          worker,
+        ]),
+      ),
+    )
   await Promise.all(
     all
       .filter(([, worker]) => worker.running)
-      .map(([key, worker]) => registerAgain($, idOfKey(key), worker)),
+      .map(([key, worker]) => registerAgain($, idOfKey(key), worker, legacy.has(key))),
   )
 }
 
@@ -1438,6 +1457,8 @@ type DashboardWatch = {
   /** The server's first line: `READY <url>`, `RUNNING <url>`, an error line, or `ENDED <why>`. */
   started: Promise<string>
   first?: string
+  /** Nobody waits for its first line any more (the command answered first, or a reload started it): a failure is toasted. */
+  unheard: boolean
   stopped: boolean
   stop: () => void
 }
@@ -1451,6 +1472,7 @@ function serveDashboard($: $, opensBrowser: boolean): DashboardWatch {
   let settle: (line: string) => void = ignore
   const watched: DashboardWatch = {
     started: new Promise<string>((done) => (settle = done)),
+    unheard: !opensBrowser,
     stopped: false,
     stop: () => {
       watched.stopped = true
@@ -1497,14 +1519,20 @@ function serveDashboard($: $, opensBrowser: boolean): DashboardWatch {
     } catch (error) {
       exit = `the dashboard could not run: ${message(error)}`
     }
-    const why = errors.trim().split('\n').at(-1)
+    // Node's last line is its version: the error's own line says why.
+    const why = errors.trim() && crashOf(errors)
     settle(`ENDED ${exit}${why ? `: ${short(why, 300)}` : ''}`)
     if (dashboardWatch === watched) dashboardWatch = undefined
-    if (watched.stopped || !watched.first?.startsWith('READY')) return
+    if (watched.stopped) return
+    const first = await watched.started
+    // Not this session's any more: a reload must not start it again.
     await update($, dashboardServed, () => false)
-    $.ui.toast(
-      `Tranchant's dashboard stopped: ${exit}. /tranchant dashboard starts it again.`,
-    )
+    if (first.startsWith('READY'))
+      $.ui.toast(
+        `Tranchant's dashboard stopped: ${exit}. /tranchant dashboard starts it again.`,
+      )
+    else if (watched.unheard && !first.startsWith('RUNNING'))
+      $.ui.toast(dashboardText(first, false))
   })().catch(ignore)
   return watched
 }
@@ -1543,6 +1571,7 @@ async function openDashboard($: $) {
     watched.started,
     $.clock.sleep(START_MS).then(() => undefined),
   ])
+  if (first === undefined) watched.unheard = true
   return dashboardText(first, false)
 }
 
@@ -3539,7 +3568,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: 'open',
       description:
-        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with import, cleans a team's reviewer into a lens the page shows before it is added; with comments, opens the unresolved review threads of a pull request or merge request; with dashboard, opens the dashboard of every review of every project; with stop, ends the server and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
+        "Opens a code review in Tranchant: imports the review file, serves its page for the session's life and starts one background agent per fix the reviewer asks for; with run, reviews a branch or a merge request in the background and streams the findings to the page; with import, cleans a team's reviewer into a lens the page shows before it is added; with comments, opens the unresolved review threads of a pull request or merge request; with dashboard, opens the dashboard of every review of every project; with stop, ends the servers, the dashboard and every agent; with status, tells what runs. Call it only when the tranchant skill says so.",
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -3552,7 +3581,7 @@ export const register: Register = (on) => {
           stop: {
             type: 'boolean',
             description:
-              'true ends the server and every agent instead; review is then left out.',
+              'true ends the servers, the dashboard and every agent instead; review is then left out.',
           },
           status: {
             type: 'boolean',

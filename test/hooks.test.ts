@@ -1060,6 +1060,22 @@ test('/tranchant dashboard serves the dashboard for the session and opens it; ag
   expect(w.toasts.filter((one) => one.includes('dashboard stopped'))).toEqual([])
 })
 
+test("a dashboard that crashes before it serves says the error, not Node's version", async ($, on) => {
+  const w = world(on)
+  const answer = $.command.run(command('dashboard'))
+  await w.printFor(
+    'dashboard',
+    { stderr: "Error: EACCES: permission denied, mkdir '/home/u/.cache/tranchant'" },
+    { stderr: '' },
+    { stderr: 'Node.js v24.21.0' },
+  )
+  await w.exit(1)
+  expect((await answer).text).toBe(
+    "Tranchant's dashboard did not start: the dashboard exited (code 1): Error: EACCES: permission denied, mkdir '/home/u/.cache/tranchant'",
+  )
+  expect(w.browsed).toEqual([])
+})
+
 test("/tranchant dashboard while another session runs one opens that one's page", async ($, on) => {
   const w = world(on)
   const answer = $.command.run(command('dashboard'))

@@ -16,8 +16,8 @@ import { reviewUsage } from './usage.mjs'
 /** @typedef {import('./registry.mjs').ServerEntry} ServerEntry */
 
 /**
- * Where a review stands. `stopped`: it was preparing or reviewing when no
- * server served it any more, its session ended mid-way.
+ * Where a review stands. `stopped`: preparing (its lenses not built yet) or
+ * reviewing when no server served it any more, its session ended mid-way.
  * @typedef {'preparing' | 'ready' | 'running' | 'stopped' | 'needs' | 'settled'} ReviewState
  */
 /**
@@ -28,7 +28,7 @@ import { reviewUsage } from './usage.mjs'
  * @property {string} project
  * @property {string} title
  * @property {string} createdAt
- * @property {number} activeAt When one of its files last changed, in ms.
+ * @property {number} activeAt When its review.json, decisions.json, lenses.json or usage.json last changed, in ms.
  * @property {string} [branch]
  * @property {string} [base]
  * @property {'ours' | 'theirs'} ownership
@@ -212,6 +212,7 @@ async function factsOf(dir) {
  * @param {string} project
  */
 async function repoOf(project) {
+  // `transient`: git timed out or is missing, which says nothing of the folder: asked again later.
   try {
     const { stdout } = await run(
       'git',
@@ -221,10 +222,20 @@ async function repoOf(project) {
     const common = stdout.trim()
     const key = path.basename(common) === '.git' ? path.dirname(common) : common
     return { key, name: path.basename(key) }
-  } catch {
-    return { key: project, name: path.basename(project) }
+  } catch (error) {
+    const transient =
+      errorCode(error) === 'ENOENT' ||
+      (error instanceof Error && 'killed' in error && error.killed === true)
+    return { key: project, name: path.basename(project), transient }
   }
 }
+
+/** The names in folder `dir`; none when it is not there, any other failure thrown. */
+const namesIn = (/** @type {string} */ dir) =>
+  readdir(dir).catch((error) => {
+    if (errorCode(error) === 'ENOENT') return []
+    throw error
+  })
 
 /**
  * The catalog: reads every review, each read again only once its files
@@ -237,23 +248,25 @@ export function createCatalog({ root = STATE_ROOT } = {}) {
   /** @type {Map<string, Promise<{ key: string, name: string }>>} */
   const repos = new Map()
 
+  /** @type {Map<string, string>} The folders that could not be read, and why: said once each. */
+  const unreadable = new Map()
+
   /** @param {string} project */
-  const repo = (project) => {
-    let found = repos.get(project)
-    if (!found) {
-      found = repoOf(project)
-      repos.set(project, found)
-    }
+  const repo = async (project) => {
+    const cached = repos.get(project)
+    if (cached) return cached
+    const { transient, ...found } = await repoOf(project)
+    if (!transient) repos.set(project, Promise.resolve(found))
     return found
   }
 
   /** The review folders under the state folder. */
   async function folders() {
     const dirs = []
-    for (const hash of await readdir(root).catch(() => [])) {
+    for (const hash of await namesIn(root)) {
       if (!PROJECT_DIR.test(hash)) continue
       const reviews = path.join(root, hash, 'reviews')
-      for (const id of await readdir(reviews).catch(() => []))
+      for (const id of await namesIn(reviews))
         if (!id.startsWith('.')) dirs.push(path.join(reviews, id))
     }
     return dirs
@@ -281,8 +294,18 @@ export function createCatalog({ root = STATE_ROOT } = {}) {
         const stamp = await stampOf(dir)
         let facts = known.get(dir)?.stamp === stamp ? known.get(dir)?.facts : undefined
         if (known.get(dir)?.stamp !== stamp) {
-          facts = await factsOf(dir).catch(() => undefined)
-          known.set(dir, { stamp, facts })
+          try {
+            facts = await factsOf(dir)
+            known.set(dir, { stamp, facts })
+            unreadable.delete(dir)
+          } catch (error) {
+            // Not kept: the next read tries again, its files the same or not.
+            const said = error instanceof Error ? error.message : String(error)
+            if (unreadable.get(dir) !== said)
+              console.error(`tranchant dashboard: ${dir} left out: ${said}`)
+            unreadable.set(dir, said)
+            facts = undefined
+          }
         }
         if (!facts) continue
         const server = served.get(path.resolve(dir))

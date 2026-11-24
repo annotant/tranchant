@@ -11,13 +11,13 @@
 // killed outright and the writes a watch misses. It runs nothing and writes no
 // review's file: the theme alone, in the user's settings.
 import { existsSync, watch } from 'node:fs'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { createCatalog } from './lib/catalog.mjs'
 import { errorCode } from './lib/errors.mjs'
-import { withFileLock } from './lib/filelock.mjs'
+import { LockBusy, withFileLock } from './lib/filelock.mjs'
 import {
   CLIENT_ERRORS,
   CSP,
@@ -122,8 +122,9 @@ async function handle(req, res) {
       'x-content-type-options': 'nosniff',
       'cache-control': 'no-store',
     })
-    // Sent at once: the page's EventSource opens on the headers.
-    res.write(': listening\n\n')
+    // The list first, on every connection: a page that reconnects reads what it missed
+    // from the same stream, so no older answer of another request lands after a newer push.
+    res.write(seen ? `event: reviews\ndata: ${seen}\n\n` : ': listening\n\n')
     listeners.add(res)
     req.on('close', () => listeners.delete(res))
     return undefined
@@ -134,8 +135,18 @@ async function handle(req, res) {
     if (typeof theme !== 'string' || !THEMES.has(theme))
       return send(res, 400, { error: 'theme: light, dark or system' })
     // Read again under the lock: a review's server may be writing the settings too.
-    const written = await updateSettings((settings) => ({ ...settings, theme }))
-    if (!written) return send(res, 409, { error: 'the settings file cannot be read' })
+    /** @type {string | undefined} */
+    let unreadable
+    const written = await updateSettings((settings, problem) => {
+      unreadable = problem
+      return { ...settings, theme }
+    })
+    if (!written) {
+      console.error(
+        `tranchant dashboard: theme not saved: ${unreadable ?? 'no settings written'}`,
+      )
+      return send(res, 409, { error: unreadable ?? 'the settings file cannot be read' })
+    }
     return send(res, 200, { theme })
   }
   return send(res, 404, { error: 'not found' })
@@ -145,17 +156,23 @@ async function handle(req, res) {
 async function refresh() {
   const now = await listing()
   const json = JSON.stringify(now)
+  failing = false
   if (json === seen) return
   seen = json
   for (const res of listeners) res.write(`event: reviews\ndata: ${json}\n\n`)
 }
+/** Whether the last read failed: the pages were told once, until one works again. */
+let failing = false
 /** @type {Promise<void>} */
 let refreshing = Promise.resolve()
 const refreshNext = () =>
   (refreshing = refreshing.then(refresh).catch((error) => {
-    console.error(
-      `tranchant dashboard: ${error instanceof Error ? error.message : error}`,
-    )
+    const said = error instanceof Error ? error.message : String(error)
+    console.error(`tranchant dashboard: the list could not be read: ${said}`)
+    // The pages keep the last list, no longer said live; the next read that works pushes again.
+    if (!failing) for (const res of listeners) res.write('event: stale\ndata: {}\n\n')
+    failing = true
+    seen = ''
   }))
 /** @type {NodeJS.Timeout | undefined} */
 let batch
@@ -170,7 +187,12 @@ function changeSeen() {
 function watchState() {
   try {
     const watcher = watch(STATE_ROOT, { recursive: true }, changeSeen)
-    watcher.on('error', () => watcher.close())
+    watcher.on('error', (error) => {
+      watcher.close()
+      console.error(
+        `tranchant dashboard: the watch on ${STATE_ROOT} ended: ${String(error)}`,
+      )
+    })
   } catch (error) {
     // The poll below still reads the list every few seconds.
     console.error(`tranchant dashboard: no watch on ${STATE_ROOT}: ${String(error)}`)
@@ -182,6 +204,11 @@ const server = http.createServer((req, res) => {
     if (error instanceof ClientError) {
       const close = error.status === 413 ? { connection: 'close' } : {}
       send(res, error.status, { error: CLIENT_ERRORS[error.status] }, close)
+      return
+    }
+    // Another server holds the settings' lock: a try again, said as such.
+    if (error instanceof LockBusy) {
+      send(res, 503, { error: error.message })
       return
     }
     console.error(
@@ -206,6 +233,9 @@ await mkdir(STATE_ROOT, { recursive: true })
 const started = await withFileLock(path.join(SERVERS_DIR, 'dashboard'), async () => {
   const running = (await listServers()).find((one) => one.kind === 'dashboard')
   if (running) return { running: running.url }
+  // Left by a dashboard killed outright, its pid another process's since: it answers no more.
+  for (const stale of await listServers(SERVERS_DIR, { probe: false }))
+    if (stale.kind === 'dashboard') await rm(stale.file, { force: true })
   let listening
   try {
     listening = Number(await listen())

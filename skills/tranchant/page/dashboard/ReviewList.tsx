@@ -65,7 +65,7 @@ function Row({ review, home, now }: { review: ListedReview; home: string; now: n
           <span
             className="db-bar"
             role="progressbar"
-            aria-label="Agents done"
+            aria-label="Progress"
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={progress.percent}

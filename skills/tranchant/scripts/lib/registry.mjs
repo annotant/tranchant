@@ -3,11 +3,13 @@
 // file renamed over its name) and removed as the server exits. No index to
 // rewrite: two servers starting at once write two files, and a reader never
 // sees half of one. A server killed outright leaves its file: a reader drops
-// an entry whose process is gone, and removes its file.
+// an entry whose process is gone, and removes its file; one whose pid another
+// process took since is dropped too, as it does not answer as that server.
 import { randomBytes } from 'node:crypto'
 import { unlinkSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { errorCode } from './errors.mjs'
 import { alive } from './filelock.mjs'
 import { STATE_ROOT } from './project.mjs'
 
@@ -18,10 +20,12 @@ const VERSION = 1
 /** An entry's file: its kind, its pid and a tag, so a pid used again never names an old file. */
 const ENTRY = /^(review|dashboard)-\d+-[0-9a-f]{8}\.json$/
 const MAX_ENTRY = 64 * 1024
+/** How long a server has to answer its health check: on this machine, at once. */
+const PROBE_MS = 1_000
 
 /**
- * Who runs a server: a Claude Code session until the dashboard runs reviews
- * itself (story 4); `cwd`, the session's folder.
+ * Who runs a server: a Claude Code session, the one kind so far; `cwd`, the
+ * session's folder.
  * @typedef {{ kind: 'session', cwd?: string }} Runner
  */
 /**
@@ -53,7 +57,9 @@ const isText = (value) => typeof value === 'string' && value.length > 0
 function readEntry(raw) {
   if (!isObject(raw) || raw.version !== VERSION) return undefined
   if (raw.kind !== 'review' && raw.kind !== 'dashboard') return undefined
-  if (!Number.isInteger(raw.pid) || !Number.isInteger(raw.port)) return undefined
+  // 0 and below name a process group: kill(pid, 0) would always succeed.
+  if (!Number.isInteger(raw.pid) || Number(raw.pid) <= 0 || !Number.isInteger(raw.port))
+    return undefined
   if (!isText(raw.url) || !isText(raw.startedAt)) return undefined
   // Only a page on this machine: the dashboard links it.
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(String(raw.url))) return undefined
@@ -117,18 +123,45 @@ export async function registerServer(entry, dir = SERVERS_DIR) {
     remove: () => {
       try {
         unlinkSync(file)
-      } catch {}
+      } catch (error) {
+        // Left behind, a reader drops it once its process is gone: said, as that may be a while.
+        if (errorCode(error) !== 'ENOENT')
+          console.error(`tranchant: ${file} not removed: ${String(error)}`)
+      }
     },
+  }
+}
+
+/**
+ * Whether `entry`'s server answers as that server: its pid may be another
+ * process's now, after a crash and a reboot.
+ * @param {ServerEntry} entry
+ */
+async function answers(entry) {
+  try {
+    const response = await fetch(`${entry.url}/api/health`, {
+      signal: AbortSignal.timeout(PROBE_MS),
+    })
+    const health = await response.json()
+    if (!isObject(health)) return false
+    return entry.kind === 'dashboard'
+      ? health.dashboard === true
+      : health.review === entry.review
+  } catch {
+    return false
   }
 }
 
 /**
  * The servers running, oldest first. An entry whose process is gone is left
  * out and its file removed; one that cannot be read is left out, and kept.
+ * With `probe`, an entry whose server does not answer as that server is left
+ * out too (and kept: it may be slow to answer).
  * @param {string} [dir]
+ * @param {{ probe?: boolean }} [options]
  * @returns {Promise<(ServerEntry & { file: string })[]>}
  */
-export async function listServers(dir = SERVERS_DIR) {
+export async function listServers(dir = SERVERS_DIR, { probe = true } = {}) {
   const names = await readdir(dir).catch(() => [])
   const entries = []
   for (const name of names) {
@@ -136,8 +169,10 @@ export async function listServers(dir = SERVERS_DIR) {
     const file = path.join(dir, name)
     let entry
     try {
-      const text = await readFile(file, 'utf8')
-      entry = text.length <= MAX_ENTRY ? readEntry(JSON.parse(text)) : undefined
+      // A regular file alone: a FIFO would hang the read.
+      const found = await lstat(file)
+      if (!found.isFile() || found.size > MAX_ENTRY) continue
+      entry = readEntry(JSON.parse(await readFile(file, 'utf8')))
     } catch {
       continue
     }
@@ -148,7 +183,12 @@ export async function listServers(dir = SERVERS_DIR) {
     }
     entries.push({ ...entry, file })
   }
-  return entries.toSorted((a, b) => a.startedAt.localeCompare(b.startedAt))
+  const live = probe
+    ? (
+        await Promise.all(entries.map(async (one) => ((await answers(one)) ? [one] : [])))
+      ).flat()
+    : entries
+  return live.toSorted((a, b) => a.startedAt.localeCompare(b.startedAt))
 }
 
 /**

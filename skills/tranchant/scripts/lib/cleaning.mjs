@@ -130,6 +130,8 @@ export async function cleaningOf(
  * @param {() => Promise<T>} task
  */
 async function withCleaning(dir, task) {
+  // The lock would make its folder again: one discarded is refused first.
+  if (!existsSync(dir)) throw new CleaningRefusal(`no cleaning ${path.basename(dir)}`)
   try {
     return await withFileLock(path.join(dir, 'cleaning.json'), task)
   } catch (error) {
@@ -540,9 +542,14 @@ async function checkLocked(dir, { stopped, usage }) {
       const { domain, report } = output
       const lens = record.again ? await promoted(record, report) : fresh(record, report)
       await builds(record, lens, domain)
+      // Read again under the lock: the lens may have changed (or moved) while it was built.
       if (record.again)
-        await withLensFiles(() =>
-          writeUserLens(lensDir(record.scope, record.project, record.name), lens, domain),
+        await withLensFiles(async () =>
+          writeUserLens(
+            lensDir(record.scope, record.project, record.name),
+            await promoted(record, report),
+            domain,
+          ),
         )
       next = { ...record, state: record.again ? 'added' : 'ready' }
     }
@@ -764,7 +771,7 @@ export const addReviewers = (
     addPicked(project, dir, record, picks, scope),
   )
 
-/** addReviewers's picks, the process's lock held. @param {string} project @param {string} dir @param {Cleaning} record @param {unknown} picks @param {string | undefined} scope */
+/** addReviewers's picks, the cleaning's lock held. @param {string} project @param {string} dir @param {Cleaning} record @param {unknown} picks @param {string | undefined} scope */
 async function addPicked(project, dir, record, picks, scope) {
   if (record.state !== 'process')
     throw new CleaningRefusal(

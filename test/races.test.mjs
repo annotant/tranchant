@@ -3,7 +3,7 @@
 // scripts that write the files every instance shares. Each test runs two
 // processes at once on one of those files and checks no write was lost.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { test } from 'node:test'
 import { SCRIPTS, run, tempDir } from './helpers.mjs'
@@ -168,4 +168,24 @@ test('two sessions with the page open start a queued cleaning’s agent once', a
   )
   const started = said.flatMap((line) => (line ? line.split(' ') : []))
   assert.deepEqual(started.toSorted(), ids)
+})
+
+test('a cleaning discarded meanwhile is refused, its folder never made again', async (t) => {
+  const { state, env } = await folders(t)
+  const project = await tempDir(t, 'tranchant-project-')
+  const dir = await queuedCleaning(state, project, 'cln0gone-aaaa')
+  const said = await twice(
+    { ...env, PROJECT: project, DIR: dir },
+    `const { checkCleaning } = await lib('cleaning')
+    const { rm } = await import('node:fs/promises')
+    if (WHO === 'a') await rm(process.env.DIR, { recursive: true, force: true })
+    else await new Promise((resolve) => setTimeout(resolve, 100))
+    if (WHO === 'b')
+      await checkCleaning(process.env.DIR).then(
+        () => console.log('checked'),
+        (error) => console.log(error.constructor.name + ': ' + error.message),
+      )`,
+  )
+  assert.equal(said[1], 'CleaningRefusal: no cleaning cln0gone-aaaa')
+  assert.deepEqual(await readdir(path.dirname(dir)), [])
 })

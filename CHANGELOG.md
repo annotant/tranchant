@@ -13,7 +13,7 @@ released to the `stable` branch.
   opens one page that lists every review of every project, grouped by
   where it stands (Needs you, Running, Ready to start, Done, folded), with
   a filter by project. It follows the state folder live, with no reload;
-  **Open** opens a running review's own page in a new tab. One dashboard
+  **Open** opens the page of a review a session serves, in a new tab. One dashboard
   per machine: a second session opens the same page.
 
 ### Fixed

@@ -49,6 +49,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './lib/errors.mjs'
+import { LockBusy } from './lib/filelock.mjs'
 import {
   CLIENT_ERRORS,
   CSP,
@@ -2370,6 +2371,11 @@ const server = http.createServer((req, res) => {
       send(res, 409, { error: error.message })
       return
     }
+    // Another server holds a shared file's lock (the settings, a lens): a try again, said as such.
+    if (error instanceof LockBusy) {
+      send(res, 503, { error: error.message })
+      return
+    }
     if (error instanceof ClientError) {
       // The rest of a body too large is never read: a client reusing the
       // connection would wait on it forever.
@@ -2454,7 +2460,7 @@ server.listen(port, '127.0.0.1', async () => {
   await refreshNext(true)
   const url = `http://127.0.0.1:${listening}`
   // Before READY: the dashboard links the review as soon as the page is up.
-  // Without it the review still runs; the dashboard only shows no Open.
+  // Without it the review still runs, but the dashboard reads it as stopped.
   await registerServer({
     kind: 'review',
     port: listening,
@@ -2476,7 +2482,9 @@ server.listen(port, '127.0.0.1', async () => {
   }).then(
     ({ remove }) => removeOnExit(remove),
     (error) =>
-      console.error(`tranchant server: not registered: ${oneLine(String(error))}`),
+      console.error(
+        `tranchant server: not in the dashboard's registry, which lists this review as stopped: ${oneLine(String(error))}`,
+      ),
   )
   console.log(`READY ${url} review=${review.id} project=${project}`)
   ready = true

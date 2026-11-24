@@ -12,7 +12,7 @@ dashboard, its actions, a new review, the other tabs, the cap on agents).
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | What serves it               | `scripts/dashboard.mjs`, a server of its own, apart from every review's.                                                                                                                                                                     |
 | How long it lives            | The session's life, like a review's server: the hooks start it, and it ends with the session or `/tranchant stop`. Nothing outlives a session until the dashboard runs reviews itself (story 4), which will need a process of its own. |
-| How many                     | One per machine. Started while another runs, it prints `RUNNING <url>` and exits: the session opens that page. Two sessions asking at once start one, under a lock.                                                                         |
+| How many                     | One per machine (per state folder, to be exact: `TRANCHANT_STATE_DIR` makes another). Started while another runs, it prints `RUNNING <url>` and exits: the session opens that page. Two sessions asking at once start one, under a lock.                                                                         |
 | Its port                     | A free one, as a review's server; `TRANCHANT_DASHBOARD_PORT` fixes it. The registry gives the URL, and `/tranchant dashboard` opens it from any session: no port to remember, no setting to add.                                            |
 | Where the registry lives     | `<state>/servers/`, one JSON file per running server, beside the reviews it points at.                                                                                                                                                       |
 
@@ -54,39 +54,46 @@ node SKILL/scripts/dashboard.mjs
 | `GET /dashboard.js`| The bundle.                                                                                                                   |
 | `GET /api/health`  | `{ ok, dashboard: true, version }`.                                                                                           |
 | `GET /api/reviews` | `{ state, home, reviews }`: the state folder as the page names it, the home folder (for `~`), and every review (below).      |
-| `GET /api/events`  | Server-sent events: `reviews`, with the same body as `/api/reviews`, each time the list changes.                             |
+| `GET /api/events`  | Server-sent events: `reviews`, with the same body as `/api/reviews`, first on every connection then each time the list changes; `stale` when the list could not be read. |
 | `PUT /api/theme`   | `{ theme }`: `light`, `dark` or `system`, written in the settings every page reads.                                          |
 
 A request from another origin, or with another `Host` (a rebound DNS name),
-is refused (403), as on a review's server. The dashboard writes no review's
-file: the theme alone, through the settings' lock.
+is refused (403), as on a review's server; a lock another server still holds
+after 30 s answers 503 with what to try again. The dashboard writes no
+review's file: the theme alone, through the settings' lock.
 
 ## A review, as listed
 
 `lib/catalog.mjs` reads `<state>/<project hash>/reviews/<id>/` for every
 project: `review.json` and its findings, `decisions.json`, `lenses.json`
 while it prepares, its reviewers' run files, and what its agents spent
-(`lib/usage.mjs`, as `/api/review` sums it). A folder it cannot read as a
-review (one being imported, another version) is left out. Each review is
-read again only once one of its files changed (their sizes and times), and
-each project's repository once: the worktrees of one repository are one
-project, named after its main checkout.
+(`lib/usage.mjs`, with no session to tell a past agent from a live one, so
+never `at least` for that). A folder it cannot read as a review (one being
+imported, another version, a broken file) is left out; another failure is
+said once on stderr, and the folder read again at the next refresh. Each
+review is read again only once one of its own files changed (their sizes and
+times; a lens's cleaning is outside, so its tokens show at the review's next
+change), and each project's repository once (a git that timed out is asked
+again): the worktrees of one repository are one project, named after its
+main checkout.
 
 | `state`     | When                                                                                                    | Group           |
 | ----------- | ------------------------------------------------------------------------------------------------------- | --------------- |
 | `preparing` | `preparing`, building its lenses, a server serving it                                                  | Running         |
 | `ready`     | `preparing`, its lenses built, waiting for Start the review                                            | Ready to start  |
 | `running`   | `reviewing`, a server serving it (`paused` when the page paused it)                                     | Running         |
-| `stopped`   | `preparing` or `reviewing` with no server any more: its session ended mid-way                         | Needs you       |
+| `stopped`   | `preparing` (its lenses not built yet) or `reviewing` with no server any more: its session ended mid-way | Needs you       |
 | `needs`     | `complete` with a finding not settled (open, asking, queued, working, failed, stopped), or `refused`   | Needs you       |
 | `settled`   | `complete`, every finding fixed, posted, moved, dropped or skipped                                    | Done            |
 
 Each review carries its project and repository, title, `branch` and `base`,
 its ownership and MR (`PR #12` on GitHub, `!12` on GitLab, its author),
 its lenses done of all (`lenses`), the findings a verifier checked
-(`verified`), its findings by state, its tokens, and `live` when a server
-serves it: that server's URL and its session's folder. The page words the
-rest.
+(`verified`), its findings by state, its tokens (`activeAt`: when its
+`review.json`, `decisions.json`, `lenses.json` or `usage.json` last changed),
+and `live` when a server serves it: that server's URL and its session's
+folder. The page words the rest, and leaves out a row it cannot read (a
+state it does not know).
 
 ## The registry
 
@@ -115,18 +122,27 @@ reader never sees half of one.
 The hooks stop a server with a signal: `removeOnExit` turns `SIGINT`,
 `SIGTERM` and `SIGHUP` into an exit, so its `exit` handler removes the
 file. A server killed outright leaves it: a reader drops an entry whose
-process is gone, and removes its file. A review with an entry is live, and
-its row's **Open** goes to its URL.
+process is gone, and removes its file. A pid another process took since (a
+reboot) still looks alive: the dashboard asks each entry's `/api/health`, at
+once, and leaves out one that does not answer as that server; a dashboard
+starting removes such a dashboard entry. A review with an entry is live, and
+its row's **Open** goes to its URL while it is not done. A review server
+that could not write its entry still runs, but reads as `stopped`: it says
+so on stderr, which `/tranchant status` shows.
 
 ## Live updates
 
 The dashboard watches the whole state folder (a project's first review
 makes its folder), reads the list again 150 ms after a change, and pushes
 `reviews` to its pages when the list's JSON differs from the last one sent.
-It also reads it every 5 seconds (`TRANCHANT_POLL_MS`): a server killed
-outright changes no file, and some mounts lose watch events. The page holds
-no state of its own but the filter and what is folded; when its stream
-drops it says **Reconnecting**, and reads the list again once it is back.
+It also reads it every 5 seconds (`TRANCHANT_POLL_MS`, which the review
+servers read too): a server killed outright changes no file, and some mounts
+lose watch events. The page holds no state of its own but the filter and
+what is folded. The list comes only through the stream, first on each
+connection, so an older answer never lands after a newer one; when the
+stream drops, or the server says `stale`, the page keeps the last list and
+says **Reconnecting**. A dashboard whose session ended does not come back at
+that URL: the next `/tranchant dashboard` opens a new one.
 
 ## Several instances at once
 

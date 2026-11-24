@@ -21,23 +21,18 @@ class FakeEvents {
   }
 }
 
-let served: Listing
 beforeEach(() => {
   vi.stubGlobal('EventSource', FakeEvents)
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => new Response(JSON.stringify(served), { status: 200 })),
-  )
 })
 afterEach(() => {
   FakeEvents.last = undefined
 })
 
+/** The page, once the server pushed its first list: it does on every connection. */
 async function opened(answer: Listing) {
-  served = answer
   render(<App />)
   await act(async () => {
-    FakeEvents.last?.emit('open')
+    FakeEvents.last?.emit('reviews', JSON.stringify(answer))
   })
 }
 
@@ -146,4 +141,41 @@ test('a lost connection says so, and the list stands', async () => {
   })
   expect(document.querySelector('.db-livestat')?.textContent).toMatch(/^Reconnecting/)
   expect(screen.getByText('1 finding to settle')).toBeTruthy()
+})
+
+test('a list the server could not read: the last one stands, no longer live; back once it pushes', async () => {
+  const shown = listing([listed({ state: 'needs', findings: { open: 1 } })])
+  await opened(shown)
+  await act(async () => {
+    FakeEvents.last?.emit('stale')
+  })
+  expect(document.querySelector('.db-livestat')?.textContent).toMatch(/^Reconnecting/)
+  await act(async () => {
+    FakeEvents.last?.emit('reviews', JSON.stringify(shown))
+  })
+  expect(document.querySelector('.db-livestat')?.textContent).toMatch(/^Live/)
+})
+
+test('a server that never answers says so; a row the page cannot read is left out', async () => {
+  render(<App />)
+  await act(async () => {
+    FakeEvents.last?.emit('error')
+  })
+  expect(screen.getByText(/does not answer/)).toBeTruthy()
+  await act(async () => {
+    FakeEvents.last?.emit(
+      'reviews',
+      JSON.stringify({
+        ...listing([
+          listed({ title: 'Readable', state: 'needs', findings: { open: 1 } }),
+        ]),
+        reviews: [
+          listed({ title: 'Readable', state: 'needs', findings: { open: 1 } }),
+          { ...listed({ dir: '/d/x', title: 'From a newer server' }), state: 'queued' },
+        ],
+      }),
+    )
+  })
+  expect(screen.getByText('Readable')).toBeTruthy()
+  expect(screen.queryByText('From a newer server')).toBeNull()
 })

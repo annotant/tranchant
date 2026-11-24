@@ -60,6 +60,10 @@ const GROUP_OF: Record<ReviewState, GroupId> = {
 
 const groupOf = (review: Pick<ListedReview, 'state'>): GroupId => GROUP_OF[review.state]
 
+/** Whether `value` is a state this page groups: a newer server's may not be. */
+export const isGroupState = (value: unknown): value is ReviewState =>
+  typeof value === 'string' && Object.hasOwn(GROUP_OF, value)
+
 const plural = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`
 
@@ -213,10 +217,7 @@ const shortPath = (file: string, home: string) =>
     ? `~${file.slice(home.length)}`
     : file
 
-/**
- * Where it runs: until the dashboard runs reviews itself, a session's folder;
- * one no server serves, its project's.
- */
+/** Where it runs: the folder of the session serving it; one no server serves, its project's. */
 export const whereOf = (review: Pick<ListedReview, 'live' | 'project'>, home: string) =>
   shortPath(review.live?.cwd ?? review.project, home)
 
