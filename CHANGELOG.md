@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.9.0 - 2026-11-25
+
 ### Added
 
 - **Battle review: two groups of lenses on one change, compared.** Ready
