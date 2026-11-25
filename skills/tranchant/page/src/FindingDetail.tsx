@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, type ReactNode, useState } from 'react'
 import { Diagram } from './Diagram'
 import { Discussion, type Taken } from './Discussion'
 import {
@@ -61,6 +61,8 @@ interface Props {
   onStop: (id: string) => void
   /** Resolves to whether the server took the message; `change`: a change to the code it asks for. */
   onDiscuss: (id: string, text: string, change?: boolean) => Promise<boolean>
+  /** In a battle: whether the other group found it too, under its head. */
+  battleNote?: ReactNode
 }
 
 type Mode = 'idle' | 'editing' | 'dropping' | 'issuing'
@@ -263,6 +265,7 @@ export function FindingDetail({
   onAnswer,
   onStop,
   onDiscuss,
+  battleNote,
 }: Props) {
   const state = stateOf(
     { [finding.id]: record ?? { state: 'open', runs: [], events: [] } },
@@ -445,6 +448,7 @@ export function FindingDetail({
           </span>
         </div>
       </header>
+      {battleNote}
 
       <Excerpt
         excerpt={finding.excerpt}

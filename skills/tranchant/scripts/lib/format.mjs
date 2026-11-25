@@ -268,10 +268,18 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.
  * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
  * @property {string} [group] The group of lenses `/tranchant review` ran, when it ran one.
+ * @property {BattleRecord} [battle] A battle review: the two groups it ran, and the group each lens ran for.
  * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
  * @property {Paused} [paused] While `reviewing`: the page's Pause; no agent of the review's queue starts.
  * @property {{ at: string }} [stopped] The page's Stop the review: its agents ended, no Resume; only Reset runs it again.
  * @property {Finding[]} findings At least one, unless the review is not `complete`.
+ */
+
+/**
+ * A battle review's groups, `a` and `b`, whether its shared lenses ran once
+ * per group (`twice`), and each lens it ran by name: `a`, `b`, or `both` for
+ * a shared lens run once, whose findings count for both.
+ * @typedef {{ a: string, b: string, twice?: true, lenses: Record<string, 'a' | 'b' | 'both'> }} BattleRecord
  */
 
 /**
@@ -508,6 +516,23 @@ const ID = /^[\w-]{1,64}$/
 const isId = (value) => typeof value === 'string' && ID.test(value)
 /** A lens's name: a recipe's, a user's, and the one a finding records. */
 export const LENS_NAME = /^[\w-]{1,40}$/
+
+const SIDES = new Set(['a', 'b', 'both'])
+
+/** A battle record as review.json holds it. @param {any} value */
+function isBattle(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const { a, b, twice, lenses } = value
+  if (typeof a !== 'string' || typeof b !== 'string' || a === b) return false
+  if (!LENS_NAME.test(a) || !LENS_NAME.test(b)) return false
+  if (twice !== undefined && twice !== true) return false
+  if (!lenses || typeof lenses !== 'object' || Array.isArray(lenses)) return false
+  const entries = Object.entries(lenses)
+  return (
+    entries.length <= 400 &&
+    entries.every(([name, side]) => LENS_NAME.test(name) && SIDES.has(side))
+  )
+}
 const SHA = /^[0-9a-f]{7,64}$/
 // A tab is the only control character a line of code may hold.
 const CONTROL = /[^\P{Cc}\t]/u
@@ -910,6 +935,10 @@ export function validateEnvelope(review) {
     (typeof review.group !== 'string' || !LENS_NAME.test(review.group))
   )
     problems.push('group: a group name, letters, digits, - and _')
+  if (review.battle !== undefined && !isBattle(review.battle))
+    problems.push(
+      'battle: { a, b, twice?, lenses: { <lens>: a, b or both } }, a and b two group names',
+    )
   if (
     review.refusal !== undefined &&
     (!isObject(review.refusal) ||
@@ -1047,7 +1076,7 @@ export function envelopeOf(review) {
  * status, `verify`, what its Lenses step recorded and its pause or stop left
  * out. A review that grew, or completed, is still the same one, opened again
  * without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, refusal?: unknown, paused?: unknown, stopped?: unknown }} review
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, battle?: unknown, refusal?: unknown, paused?: unknown, stopped?: unknown }} review
  */
 export function identityOf(review) {
   const {
@@ -1055,6 +1084,7 @@ export function identityOf(review) {
     verify: _verify,
     lenses: _lenses,
     group: _group,
+    battle: _battle,
     refusal: _refusal,
     paused: _paused,
     stopped: _stopped,

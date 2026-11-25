@@ -12,8 +12,9 @@ import { lensSet } from './userlens.mjs'
  * A lens of the plan: its spec, the changed files it reads (`files`, their
  * count) and, among a waiting review's `others`, why it does not run: `off`
  * in the settings (in a group's review, not one of the group), or no changed
- * file in its paths (`files: 0`).
- * @typedef {LensSpec & { files?: number, off?: true }} PlannedLens
+ * file in its paths (`files: 0`). In a battle (lib/battle.mjs), its `side`
+ * and, run under another name, `of`, its own.
+ * @typedef {LensSpec & { files?: number, off?: true, side?: 'a' | 'b' | 'both', of?: string }} PlannedLens
  */
 
 /** git cannot say which files the change touches: the review cannot be planned. */
