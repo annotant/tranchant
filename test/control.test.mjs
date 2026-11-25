@@ -116,6 +116,11 @@ test('reset.mjs: every finding goes, and the plan waits to start', async (t) => 
     path.join(dir, 'discussions', 'f-01.json'),
     JSON.stringify({ messages: [{ by: 'agent', text: 'Answered.', at: 'x' }] }),
   )
+  // A battle's pairs split name findings that are about to go.
+  await writeFile(
+    path.join(dir, 'battle.json'),
+    JSON.stringify({ version: 1, splits: [['f-01', 'f-02']] }),
+  )
   await store.halt()
   await store.complete()
 
@@ -132,6 +137,7 @@ test('reset.mjs: every finding goes, and the plan waits to start', async (t) => 
   assert.deepEqual(now.findings, [])
   assert.ok(!existsSync(findingPath(dir, 'f-01')))
   assert.ok(!existsSync(path.join(dir, 'discussions')))
+  assert.ok(!existsSync(path.join(dir, 'battle.json')))
   assert.deepEqual((await store.readDecisions()).findings, {})
   assert.deepEqual(await readReviewAgents(dir), [])
   assert.equal(JSON.parse(await readFile(plan, 'utf8')).wait, 'reset')

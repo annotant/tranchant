@@ -55,6 +55,25 @@ export interface LensRow {
   modelFrom?: 'forced' | 'auto' | 'lens' | 'reviewers'
   /** On Auto-detect, why the session's: no model in its source, `inherit`, not a Claude model, a frontmatter that cannot be read, or a source the change under review changes. */
   autoWhy?: 'none' | 'inherit' | 'foreign' | 'unreadable' | 'held'
+  /** In a battle: the group it runs for, `both` for a shared lens run once. */
+  side?: LensSide
+  /** In a battle: the lens's own name, when it runs under another (`<name>-a`). */
+  of?: string
+}
+
+/** Which group of a battle a lens runs for: `both` for a shared lens run once, its findings counting for both. */
+export type LensSide = 'a' | 'b' | 'both'
+
+/** The two groups of a battle review, and whether its shared lenses run once per group. */
+export interface BattlePick {
+  a: string
+  b: string
+  twice?: true
+}
+
+/** A battle review as review.json records it: its groups, and the group each lens ran for. */
+export interface BattleRecord extends BattlePick {
+  lenses: Record<string, LensSide>
 }
 
 /** The page's choices on a review waiting to start: by lens name, on or off for this review. */
@@ -64,6 +83,8 @@ export interface StartChoices {
   remember: boolean
   /** The group picked before Start, `null` for every lens that is on; absent, the plan's. */
   group?: string | null
+  /** The battle picked before Start, `null` back to one group; absent, the plan's. */
+  battle?: BattlePick | null
 }
 
 /** The Lenses step's progress: lenses.json. */
@@ -71,8 +92,8 @@ export interface LensesProgress {
   /** `waiting`: built, the review waits for Start the review. */
   state: 'resolving' | 'ready' | 'refused' | 'waiting'
   lenses: LensRow[]
-  /** While it waits: why (the settings' Start the review by itself, --no-start, or Reset the review). */
-  wait?: 'setting' | 'flag' | 'reset'
+  /** While it waits: why (the settings' Start the review by itself, --no-start, Reset the review, or --battle). */
+  wait?: 'setting' | 'flag' | 'reset' | 'battle'
   /** Its own recipe (--recipe): no lens added, none turned off, nothing to save. */
   own?: true
   /** The change's files. */
@@ -85,6 +106,8 @@ export interface LensesProgress {
   group?: string
   /** What the group's review says of its lenses that do not run: removed, or gone. */
   notes?: string[]
+  /** The battle the plan runs, when it runs one: its rows each name their `side`. */
+  battle?: BattlePick
 }
 
 /** The seven topics, in the order the page lists them within a bucket. */
@@ -213,6 +236,8 @@ export interface Review {
   lenses?: LensRecord[]
   /** The group of lenses it ran, when it ran one. */
   group?: string
+  /** A battle review: its two groups, and the group each lens ran for. */
+  battle?: BattleRecord
   /** With `refused`. */
   refusal?: Refusal
   title: string
@@ -519,6 +544,8 @@ export interface ReviewPayload {
   usage?: ReviewUsage
   /** While the review waits to start; absent from older servers, and when it could not be read. */
   estimate?: Estimate
+  /** A battle's pairs the reviewer split (Not the same), each two finding ids. */
+  splits?: [string, string][]
   head: { reviewed: string; current: string | null }
 }
 

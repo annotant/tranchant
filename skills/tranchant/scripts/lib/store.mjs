@@ -772,23 +772,25 @@ export function createStore(dir) {
 
     /**
      * The Lenses step built every lens: the review runs, `reviewing`, and
-     * records the lenses it runs, and the group they are, when one is.
-     * Refused unless it is `preparing`.
+     * records the lenses it runs, and the group they are, when one is, or
+     * the battle. Refused unless it is `preparing`.
      * @param {import('./format.mjs').LensRecord[]} lenses
      * @param {string} [group]
+     * @param {import('./format.mjs').BattleRecord} [battle]
      * @returns {Promise<void>}
      */
-    prepared(lenses, group) {
+    prepared(lenses, group, battle) {
       return withFileLock(reviewFile, async () => {
         const envelope = await readEnvelope()
         if (statusOf(envelope) !== 'preparing')
           throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
-        const { group: _was, ...rest } = envelope
+        const { group: _was, battle: _battle, ...rest } = envelope
         await writeChecked({
           ...rest,
           status: 'reviewing',
           lenses,
           ...(group && { group }),
+          ...(battle && { battle }),
         })
       })
     },
@@ -893,6 +895,8 @@ export function createStore(dir) {
             await rm(historyPath(dir, id), { force: true })
           }
           await rm(path.join(dir, 'discussions'), { recursive: true, force: true })
+          // A battle's pairs split name findings that are gone.
+          await rm(path.join(dir, 'battle.json'), { force: true })
           await writeDecisions({ ...decisions, findings: {} })
           const agents = path.join(dir, 'reviewers')
           for (const name of await readdir(agents).catch(() => []))

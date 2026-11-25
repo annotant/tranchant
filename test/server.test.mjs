@@ -3032,6 +3032,105 @@ test("/api/lens/group/* makes, renames and deletes a project's groups; a lens re
   assert.equal((await send('lens/group/remove', { name: 'B' })).status, 409)
 })
 
+/** A POST to one of `server`'s routes. */
+const sendTo = (/** @type {Server} */ server, /** @type {string} */ route, body = {}) =>
+  fetch(`${server.base}/api/${route}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+test('Start the battle starts the battle built, never another; a battle splits its pairs', async (t) => {
+  const waiting = await startServer(t, {
+    overrides: { status: 'preparing', verify: true },
+  })
+  await writeFile(
+    path.join(waiting.dir, 'lenses.json'),
+    JSON.stringify({
+      state: 'waiting',
+      wait: 'battle',
+      battle: { a: 'A', b: 'B' },
+      changed: 2,
+      lenses: [
+        {
+          name: 'bugs',
+          source: 'tranchant:bugs',
+          state: 'ready',
+          files: 2,
+          side: 'both',
+        },
+        { name: 'docs', source: 'tranchant:docs', state: 'ready', files: 1, side: 'a' },
+      ],
+    }),
+  )
+  const start = (/** @type {object} */ more) =>
+    sendTo(waiting, 'review/start', { lenses: {}, remember: false, ...more })
+  // The same group twice, or a group name that is not one: unsound.
+  assert.equal((await start({ battle: { a: 'A', b: 'A' } })).status, 400)
+  assert.equal((await start({ battle: { a: 'A', b: '../x' } })).status, 400)
+  // Another battle picked, or the shared lenses twice: built first.
+  for (const battle of [
+    { a: 'A', b: 'C' },
+    { a: 'A', b: 'B', twice: true },
+  ]) {
+    const other = await start({ battle })
+    assert.equal(other.status, 409)
+    assert.match((await json(other)).error, /not built yet/)
+  }
+  const saving = await start({ battle: { a: 'A', b: 'B' }, remember: true })
+  assert.equal(saving.status, 409)
+  assert.match((await json(saving)).error, /no switches to save/)
+  const from = waiting.output().length
+  const started = await start({ battle: { a: 'A', b: 'B' } })
+  assert.equal(started.status, 200, await started.clone().text())
+  assert.match(await waiting.nextLine('START ', from), /^START /)
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(waiting.dir, 'choices.json'), 'utf8')).battle,
+    { a: 'A', b: 'B' },
+  )
+
+  // A review that is no battle has no pairs to split.
+  const plain = await sendTo(main, 'battle/split', {
+    pair: ['f-01', 'f-02'],
+    split: true,
+  })
+  assert.equal(plain.status, 409)
+  const battle = await startServer(t, {
+    name: 'ours',
+    overrides: {
+      battle: { a: 'A', b: 'B', lenses: { bugs: 'a', money: 'b' } },
+    },
+  })
+  const ids = (await json(await fetch(`${battle.base}/api/review`))).review.findings.map(
+    (/** @type {{ id: string }} */ one) => one.id,
+  )
+  const [x = '', y = ''] = ids
+  assert.deepEqual((await json(await fetch(`${battle.base}/api/review`))).splits, [])
+  const split = await sendTo(battle, 'battle/split', { pair: [y, x], split: true })
+  assert.equal(split.status, 200, await split.clone().text())
+  assert.deepEqual((await json(split)).splits, [x < y ? [x, y] : [y, x]])
+  assert.deepEqual((await json(await fetch(`${battle.base}/api/review`))).splits, [
+    x < y ? [x, y] : [y, x],
+  ])
+  for (const body of [
+    { pair: [x, x], split: true },
+    { pair: [x], split: true },
+    { pair: [x, '../y'], split: true },
+    { pair: [x, y] },
+  ])
+    assert.equal((await sendTo(battle, 'battle/split', body)).status, 400)
+  assert.equal(
+    (await sendTo(battle, 'battle/split', { pair: [x, 'nope-1'], split: true })).status,
+    404,
+  )
+  // Paired again.
+  assert.deepEqual(
+    (await json(await sendTo(battle, 'battle/split', { pair: [x, y], split: false })))
+      .splits,
+    [],
+  )
+})
+
 test("the review's controls write its pause or stop, then print the hooks' lines", async (t) => {
   const imported = await importReview(t, 'ours', stateDir, { verify: true })
   const file = path.join(imported.dir, 'review.json')

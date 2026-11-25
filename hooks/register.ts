@@ -1409,14 +1409,21 @@ async function openCommand($: $, args: string) {
     const parsed = reviewArgs(rest)
     return 'error' in parsed
       ? parsed.error
-      : startReview($, parsed.target, parsed.recipe, parsed.start, parsed.group)
+      : startReview(
+          $,
+          parsed.target,
+          parsed.recipe,
+          parsed.start,
+          parsed.group,
+          parsed.battle,
+        )
   }
   if (first === 'import') {
     const parsed = importArgs(rest)
     return 'error' in parsed ? parsed.error : startImport($, parsed)
   }
   if (!word)
-    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file> | --group <name>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] | comments [<pull request or merge request url>] | status | stop'
+    return 'Usage: /tranchant <review.json> | review [<branch> | <merge request url> | <folder>] [--recipe <file> | --group <name> | --battle <A,B>] [--start | --no-start] | import [<skill, agent or path>] [--to global | local] [--name <lens>] | comments [<pull request or merge request url>] | status | stop'
   return openReview($, word)
 }
 
@@ -1544,7 +1551,7 @@ let reviewDispatching: Promise<void> = Promise.resolve()
 let completing: Promise<void> = Promise.resolve()
 
 const REVIEW_USAGE =
-  'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json> | --group <name>] [--start | --no-start]'
+  'Usage: /tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json> | --group <name> | --battle <A,B>] [--start | --no-start]'
 const COMMENTS_USAGE = 'Usage: /tranchant comments [<pull request or merge request url>]'
 
 const AGENT_PREFIX = {
@@ -2572,9 +2579,9 @@ async function registerReviewAgentsAgain($: $) {
 }
 
 /**
- * The words of `/tranchant review`: its target, `--recipe <file>` or
- * `--group <name>`, and `--start` or `--no-start` (absent, the settings
- * say), or what is wrong.
+ * The words of `/tranchant review`: its target, `--recipe <file>`,
+ * `--group <name>` or `--battle <A,B>`, and `--start` or `--no-start`
+ * (absent, the settings say), or what is wrong.
  */
 function reviewArgs(words: string[]) {
   /** The value after `flag`, its two places, or an error when it has none. */
@@ -2588,17 +2595,26 @@ function reviewArgs(words: string[]) {
   }
   const recipe = valueOf('--recipe')
   const group = valueOf('--group')
-  if ('error' in recipe || 'error' in group) return { error: REVIEW_USAGE }
-  if (recipe.value && group.value) return { error: REVIEW_USAGE }
+  const battle = valueOf('--battle')
+  if ('error' in recipe || 'error' in group || 'error' in battle)
+    return { error: REVIEW_USAGE }
+  if ([recipe.value, group.value, battle.value].filter(Boolean).length > 1)
+    return { error: REVIEW_USAGE }
   const flags = words.filter((one) => one === '--start' || one === '--no-start')
   if (flags.length > 1) return { error: REVIEW_USAGE }
-  const taken = new Set([...recipe.at, ...group.at])
+  const taken = new Set([...recipe.at, ...group.at, ...battle.at])
   const rest = words.filter(
     (one, i) => !taken.has(i) && one !== '--start' && one !== '--no-start',
   )
   if (rest.length > 1) return { error: REVIEW_USAGE }
   const start = flags[0] === undefined ? undefined : flags[0] === '--start'
-  return { target: rest[0], recipe: recipe.value, group: group.value, start }
+  return {
+    target: rest[0],
+    recipe: recipe.value,
+    group: group.value,
+    battle: battle.value,
+    start,
+  }
 }
 
 const linesOf = (stdout: string) =>
@@ -2621,6 +2637,7 @@ async function startReview(
   recipe: string | undefined,
   start?: boolean,
   group?: string,
+  battle?: string,
 ) {
   const cwd = normalize(await $.session.cwd())
   // A path names another repository, its current branch: no branch starts with `.` or `/`.
@@ -2635,6 +2652,7 @@ async function startReview(
         ...(target && !folder ? [target] : []),
         ...(recipe ? ['--recipe', resolve(cwd, recipe)] : []),
         ...(group ? ['--group', group] : []),
+        ...(battle ? ['--battle', battle] : []),
         ...(start === undefined ? [] : [start ? '--start' : '--no-start']),
       ],
       { cwd: folder ?? cwd },
@@ -3408,6 +3426,11 @@ export const register: Register = (on) => {
             description:
               "With run: the project's group of lenses to run (Settings › Lenses › Groups), whatever their switches; absent, the project's default group. Not with recipe.",
           },
+          battle: {
+            type: 'string',
+            description:
+              "With run: a battle review, two of the project's groups of lenses as A,B on the same change at once, compared on the page; it waits for Start the battle unless start is true. Not with recipe or group.",
+          },
           start: {
             type: 'boolean',
             description:
@@ -3443,7 +3466,7 @@ export const register: Register = (on) => {
       description:
         'Tranchant: settle a code review from a page, one background agent per fix (a review file, review a branch, the comments of a PR/MR, status, or stop)',
       argumentHint:
-        '<review.json> | review [<branch> | <mr url>] [--group <name>] [--no-start] | import [<source>] [--to global|local] | comments [<pr/mr url>] | status | stop',
+        '<review.json> | review [<branch> | <mr url>] [--group <name> | --battle <A,B>] [--no-start] | import [<source>] [--to global|local] | comments [<pr/mr url>] | status | stop',
       immediate: true,
     })
     await registerRunning($)
@@ -3489,8 +3512,11 @@ export const register: Register = (on) => {
       const start = typeof e.start === 'boolean' ? e.start : undefined
       const group =
         typeof e.group === 'string' && e.group.trim() ? e.group.trim() : undefined
-      if (recipe && group) return { result: REVIEW_USAGE }
-      return { result: await startReview($, target, recipe, start, group) }
+      const battle =
+        typeof e.battle === 'string' && e.battle.trim() ? e.battle.trim() : undefined
+      if ([recipe, group, battle].filter(Boolean).length > 1)
+        return { result: REVIEW_USAGE }
+      return { result: await startReview($, target, recipe, start, group, battle) }
     }
     const { review } = e
     if (typeof review !== 'string' || !review.trim())

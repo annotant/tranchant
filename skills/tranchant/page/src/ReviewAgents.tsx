@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { plural, type Finding, type ReviewAgent } from './domain'
 import { Markdown } from './markdown'
 import {
@@ -97,7 +97,7 @@ const ResetIcon = () => (
 const NOT_COVERED = 'The agent stopped before it finished: its lens is not covered'
 const NOT_VERIFIED = 'A verifier stopped before it finished: its finding stays unverified'
 
-function Chip({
+export function Chip({
   lens,
   state,
   count,
@@ -280,7 +280,15 @@ function noteOf(phase: ReviewPhase, state: LensProgress['state']) {
 }
 
 /** How far the review got. */
-function Bar({ label, done, total }: { label: string; done: number; total: number }) {
+export function Bar({
+  label,
+  done,
+  total,
+}: {
+  label: string
+  done: number
+  total: number
+}) {
   return (
     <span
       className="tr-progress-bar"
@@ -318,9 +326,12 @@ export function ReviewAgents({
   underWay = NO_GROUPS,
   stuck = NO_GROUPS,
   report,
+  board,
   onOpen,
   onControl,
 }: {
+  /** A battle's: its lenses and agents, shared, A's and B's, in place of the rows. */
+  board?: ReactNode
   agents: readonly ReviewAgent[]
   /** Where the review's agents stand: see ReviewPhase. */
   phase: ReviewPhase
@@ -482,7 +493,11 @@ export function ReviewAgents({
           <>
             <span className="tr-spinner" aria-hidden="true" />
             <span className="tr-progress-title">
-              {phase === 'pausing' ? 'Pausing' : 'Reviewing the change'}
+              {phase === 'pausing'
+                ? 'Pausing'
+                : board
+                  ? 'Battle in progress'
+                  : 'Reviewing the change'}
               {inGroup}
             </span>
             <Bar label="Agents done" done={progress.done} total={progress.total} />
@@ -535,7 +550,10 @@ export function ReviewAgents({
             >
               <path d="M5 12.5l4 4 10-10" />
             </svg>
-            <span className="tr-progress-title">Review done{inGroup}</span>
+            <span className="tr-progress-title">
+              {board ? 'Battle done' : 'Review done'}
+              {inGroup}
+            </span>
             <span className="tr-muted">
               {plural(progress.lenses.length, 'lens', 'lenses')} · {findingCount}
               {verify && `, ${verified} verified`}
@@ -617,7 +635,8 @@ export function ReviewAgents({
             : `Paused: the ${findingCount} below are yours to settle while no reviewer runs.`}
         </p>
       )}
-      {phase !== 'done' && (
+      {board}
+      {phase !== 'done' && !board && (
         <div className="tr-progress-rows">
           {progress.lenses.length > 0 && (
             <>
