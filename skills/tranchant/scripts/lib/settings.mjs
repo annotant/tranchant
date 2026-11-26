@@ -23,7 +23,7 @@ export const SETTINGS_DIR = path.join(
 )
 export const SETTINGS_FILE = path.join(SETTINGS_DIR, 'settings.json')
 
-/** The project folders' parent: one folder each, its lenses and its recipe. */
+/** The project folders' parent: one folder each, its lenses, its recipe and its groups. */
 export const PROJECTS_DIR = path.join(SETTINGS_DIR, 'projects')
 
 /** projectSettingsDir's answers, by root: the old folder is taken over once per process. */
@@ -51,8 +51,7 @@ export function projectSettingsDir(root) {
 
 /**
  * What `to` lacks of `from`, moved, `lenses` merged by lens; answers what
- * stays in `from`, and why. A groups file stays: lib/groups.mjs moves the
- * groups of every folder.
+ * stays in `from`, and why.
  * @param {string} from
  * @param {string} to
  * @returns {string[]}
@@ -86,7 +85,6 @@ function takeOver(from, to) {
     return [`${to} cannot be made (${String(errorCode(error) ?? error)})`]
   }
   for (const name of names) {
-    if (name.startsWith('groups.json')) continue
     const source = path.join(from, name)
     const target = path.join(to, name)
     if (name !== 'lenses' || !existsSync(target)) {

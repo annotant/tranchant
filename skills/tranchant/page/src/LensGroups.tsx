@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { LensDone, LensRoute } from './api'
 import type {
   GroupMember,
+  GroupScope,
   GroupsPayload,
   LensEntry,
   LensGroup,
@@ -40,16 +41,27 @@ const chipOf = (one: GroupMember) =>
     ? one.name
     : `${one.name} · ${one.scope === 'local' ? 'project' : 'global'}`
 
+/** Where a group lies, as its row and its editor say it. */
+const KIND_WORDS: Record<GroupScope, string> = {
+  local: 'this project',
+  global: 'global',
+}
+
 /**
- * A draft's lenses as a group keeps them: this project's, and a project's
- * or a recipe's lens not here, which another project may have, unless a lens
- * of its name is checked; a global lens not here is gone everywhere.
+ * A draft's lenses as a group keeps them: those here, and in a global group
+ * a built-in lens not here, which another project's recipe may have, unless
+ * a lens of its name is checked; any other lens not here is gone.
  */
-const keptOf = (members: readonly GroupMember[], known: (one: GroupMember) => boolean) =>
+const keptOf = (
+  members: readonly GroupMember[],
+  scope: GroupScope,
+  known: (one: GroupMember) => boolean,
+) =>
   members.filter(
     (one) =>
       known(one) ||
-      (one.scope !== 'global' &&
+      (scope === 'global' &&
+        one.scope === 'recipe' &&
         !members.some((other) => other.name === one.name && known(other))),
   )
 
@@ -59,6 +71,8 @@ const twinOf = (lens: LensEntry, among: readonly GroupMember[]) =>
 
 interface Draft {
   name: string
+  /** Undefined for a group being made until the person picks where it lies. */
+  scope: GroupScope | undefined
   members: GroupMember[]
 }
 
@@ -91,7 +105,7 @@ export function GroupsTab({
   // The group being edited, `new` for one being made; its draft.
   const [editing, setEditing] = useState<string | undefined>(opened?.name)
   const [draft, setDraft] = useState<Draft | undefined>(
-    opened && { name: opened.name, members: [...opened.lenses] },
+    opened && { name: opened.name, scope: opened.scope, members: [...opened.lenses] },
   )
   const [filter, setFilter] = useState('')
   const [note, setNote] = useState('')
@@ -119,7 +133,14 @@ export function GroupsTab({
   }
   const onCount = lenses.filter((lens) => lens.runs).length
   const rows: { group: LensGroup; existing: boolean }[] = [
-    ...(editing === 'new' ? [{ group: { name: '', lenses: [] }, existing: false }] : []),
+    ...(editing === 'new'
+      ? [
+          {
+            group: { name: '', scope: draft?.scope ?? 'local', lenses: [] },
+            existing: false,
+          },
+        ]
+      : []),
     ...groups.list.map((group) => ({ group, existing: true })),
   ]
   return (
@@ -128,27 +149,29 @@ export function GroupsTab({
         <p>
           A group is a set of lenses one review runs:{' '}
           <code>/tranchant review --group backend</code>, or the Group select before
-          Start. A lens can be in several groups. Groups stay on this machine, and every
-          project offers them; the default group is this project&rsquo;s.
+          Start. A lens can be in several groups. A group is this project&rsquo;s, or
+          global: every project offers a global group, which holds only global and
+          built-in lenses. Groups stay on this machine; the default group is this
+          project&rsquo;s.
         </p>
         <button
           type="button"
           className="tr-btn tr-btn--primary"
           disabled={locked || editing !== undefined}
-          onClick={() => open('new', { name: '', members: [] })}
+          onClick={() => open('new', { name: '', scope: undefined, members: [] })}
         >
           New group
         </button>
       </div>
       {groups.problem && (
         <p className="tr-notice" role="alert">
-          The groups file cannot be read, so nothing is written until it is mended or
+          A groups file cannot be read, so nothing is written until it is mended or
           removed: {groups.problem}
         </p>
       )}
-      {groups.moving?.map((line) => (
-        <p key={line} className="tr-notice" role="alert">
-          Groups of an older Tranchant are not shown: {line}
+      {groups.notes?.map((line) => (
+        <p key={line} className="tr-notice" role="status">
+          {line}
         </p>
       ))}
       <div className="tr-field">
@@ -168,7 +191,7 @@ export function GroupsTab({
             <option value="">Every lens that is on · {onCount}</option>
             {groups.list.map((group) => (
               <option key={group.name} value={group.name}>
-                {group.name} · {group.lenses.length}
+                {group.name} · {KIND_WORDS[group.scope]} · {group.lenses.length}
               </option>
             ))}
           </select>
@@ -190,7 +213,7 @@ export function GroupsTab({
             type="button"
             className="tr-btn tr-btn--secondary tr-btn--small"
             disabled={locked}
-            onClick={() => open('new', { name: '', members: [] })}
+            onClick={() => open('new', { name: '', scope: undefined, members: [] })}
           >
             New group
           </button>
@@ -233,6 +256,18 @@ export function GroupsTab({
                         </span>
                       )}
                     </span>
+                    {existing && (
+                      <span
+                        className="tr-chip"
+                        title={
+                          group.scope === 'global'
+                            ? 'Every project offers it'
+                            : 'Only this project offers it'
+                        }
+                      >
+                        {KIND_WORDS[group.scope]}
+                      </span>
+                    )}
                     {existing && groups.default === group.name && (
                       <span className="tr-chip tr-chip--ready">default</span>
                     )}
@@ -262,7 +297,11 @@ export function GroupsTab({
                     onClick={() =>
                       isOpen
                         ? close()
-                        : open(key, { name: group.name, members: [...group.lenses] })
+                        : open(key, {
+                            name: group.name,
+                            scope: group.scope,
+                            members: [...group.lenses],
+                          })
                     }
                   >
                     {isOpen ? 'Close' : 'Edit'}
@@ -294,13 +333,15 @@ export function GroupsTab({
                       setNote(said)
                     }}
                     onSave={() =>
+                      draft.scope &&
                       act(
                         'group/save',
                         {
                           ...(existing && { name: group.name }),
                           group: {
                             name: draft.name.trim(),
-                            lenses: keptOf(draft.members, known),
+                            scope: draft.scope,
+                            lenses: keptOf(draft.members, draft.scope, known),
                           },
                         },
                         close,
@@ -310,7 +351,8 @@ export function GroupsTab({
                     onDuplicate={() =>
                       open('new', {
                         name: `${group.name.slice(0, 35)}-copy`,
-                        members: keptOf(draft.members, known),
+                        scope: group.scope,
+                        members: keptOf(draft.members, group.scope, known),
                       })
                     }
                     onRemove={() =>
@@ -389,9 +431,30 @@ function GroupEditor({
   const members = draft.members.filter((one) =>
     lenses.some((lens) => isMember([lens], one)),
   )
-  const saveProblem = nameProblem || (members.length ? '' : 'Check at least one lens.')
+  const saveProblem = !draft.scope
+    ? 'Choose where the group lies.'
+    : nameProblem || (members.length ? '' : 'Check at least one lens.')
+  // A global group offers no lens of this project: another project has not got it.
+  const pickable =
+    draft.scope === 'global' ? lenses.filter((lens) => lens.scope !== 'local') : lenses
   const query = filter.trim().toLowerCase()
-  const shown = lenses.filter((lens) => !query || lens.name.toLowerCase().includes(query))
+  const shown = pickable.filter(
+    (lens) => !query || lens.name.toLowerCase().includes(query),
+  )
+  const pickScope = (scope: GroupScope) => {
+    const own =
+      scope === 'global' ? draft.members.filter((one) => one.scope === 'local') : []
+    onDraft(
+      {
+        ...draft,
+        scope,
+        members: draft.members.filter((one) => !own.includes(one)),
+      },
+      own.length
+        ? `Unchecked, a global group holds no lens of this project: ${own.map((one) => one.name).join(', ')}.`
+        : '',
+    )
+  }
   // A lens left unchecked because its name is taken counts as done.
   const done = (lens: LensEntry) =>
     isMember(draft.members, lens) || twinOf(lens, draft.members) !== undefined
@@ -442,7 +505,7 @@ function GroupEditor({
       members: draft.members.filter((one) => !some.some((lens) => isMember([lens], one))),
     })
   const scopes = (['local', 'global', 'recipe'] as const).flatMap((scope) => {
-    const all = lenses.filter((lens) => lens.scope === scope)
+    const all = pickable.filter((lens) => lens.scope === scope)
     const items = shown.filter((lens) => lens.scope === scope)
     return items.length ? [{ scope, all, items }] : []
   })
@@ -455,168 +518,212 @@ function GroupEditor({
           if (!saveProblem && !locked) onSave()
         }}
       >
-        <div className="tr-field">
-          <label className="tr-field-label" htmlFor={`${id}-name`}>
-            Name
-          </label>
-          <div className="tr-field-body">
-            <input
-              id={`${id}-name`}
-              className="tr-input tr-text"
-              value={draft.name}
-              placeholder="backend"
-              disabled={locked}
-              aria-describedby={`${id}-name-help`}
-              onChange={(event) => onDraft({ ...draft, name: event.currentTarget.value })}
-            />
-            {draft.name !== '' && nameProblem && (
-              <span className="tr-lns-reason" role="alert">
-                {nameProblem}
-              </span>
-            )}
-            <span id={`${id}-name-help`} className="tr-field-help">
-              Letters, digits, <code>-</code> and <code>_</code>, 40 at most:{' '}
-              <code>--group {name || 'backend'}</code>.
-            </span>
-          </div>
-        </div>
-        <div className="tr-field">
-          <span className="tr-field-label" id={`${id}-lenses`}>
-            Lenses
-          </span>
-          <div className="tr-field-body">
-            <div className="tr-grp-pickhead">
-              <label className="tr-sr" htmlFor={`${id}-filter`}>
-                Filter the lenses by name
-              </label>
-              <input
-                id={`${id}-filter`}
-                className="tr-input tr-text"
-                type="search"
-                value={filter}
-                placeholder="Filter by name"
-                onChange={(event) => onFilter(event.currentTarget.value)}
-              />
-              {query && shown.length > 0 && (
-                <button
-                  type="button"
-                  className="tr-btn tr-btn--small tr-btn--secondary"
-                  disabled={locked}
-                  onClick={() => (allShown ? uncheckMany(shown) : checkMany(shown))}
-                >
-                  {allShown
-                    ? `Uncheck the ${shown.length} shown`
-                    : `Check the ${shown.length} shown`}
-                </button>
-              )}
-              <span role="status">
-                {members.length} checked ·{' '}
-                {plural(members.length, 'reviewer', 'reviewers')} at most
+        {from === undefined ? (
+          <fieldset className="tr-field tr-grp-kind">
+            <legend className="tr-field-label">Where</legend>
+            <div className="tr-field-body">
+              {(['local', 'global'] as const).map((scope) => (
+                <label key={scope} className="tr-inline-check">
+                  <input
+                    type="radio"
+                    className="tr-check"
+                    name={`${id}-kind`}
+                    checked={draft.scope === scope}
+                    disabled={locked}
+                    onChange={() => pickScope(scope)}
+                  />
+                  {scope === 'local' ? (
+                    <span>
+                      <strong>This project</strong>: any of its lenses, offered here only.
+                    </span>
+                  ) : (
+                    <span>
+                      <strong>Global</strong>: global and built-in lenses only, offered in
+                      every project.
+                    </span>
+                  )}
+                </label>
+              ))}
+              <span className="tr-field-help">
+                Chosen once: a group keeps where it was made.
               </span>
             </div>
-            {note && (
-              <p className="tr-grp-note" role="status">
-                {note}
-              </p>
-            )}
-            {members.length > MANY && (
-              <p className="tr-grp-note tr-grp-note--warn" role="note">
-                <strong>{plural(members.length, 'reviewer', 'reviewers')}.</strong> Each
-                one reads the change on its own: a review of this group spends many
-                tokens.
-              </p>
-            )}
-            {scopes.map(({ scope, all, items }) => {
-              const sectionAll = items.every(done)
-              const what = query
-                ? `the ${items.length} shown of ${titles[scope]}`
-                : `every lens of ${titles[scope]}`
-              const label = sectionAll ? `Uncheck ${what}` : `Check ${what}`
-              return (
-                <div
-                  key={scope}
-                  className="tr-grp-pickgroup"
-                  role="group"
-                  aria-labelledby={`${id}-${scope}`}
-                >
-                  <div className="tr-lns-group-head tr-grp-pickgroup-head">
-                    <label className="tr-inline-check">
-                      <input
-                        type="checkbox"
-                        className="tr-check"
-                        checked={sectionAll}
-                        disabled={locked}
-                        aria-label={label}
-                        title={label}
-                        onChange={() =>
-                          sectionAll ? uncheckMany(items) : checkMany(items)
-                        }
-                      />
-                      <strong id={`${id}-${scope}`}>{titles[scope]}</strong>
-                    </label>
-                    <span className="tr-muted">
-                      {all.filter((lens) => isMember(draft.members, lens)).length} of{' '}
-                      {all.length} checked
-                    </span>
-                  </div>
-                  <ul className="tr-lns-list">
-                    {items.map((lens) => {
-                      const checked = isMember(draft.members, lens)
-                      const twin = !checked && twinOf(lens, draft.members)
-                      const noteId = `${id}-n-${lens.scope}-${lens.name}`
-                      const said = twin
-                        ? `the ${twin.name} ${SCOPE_WORDS[twin.scope]} is checked`
-                        : lens.problem
-                          ? `cannot be built: ${lens.problem}`
-                          : !lens.on
-                            ? 'off in your settings: runs in this group'
-                            : !lens.runs
-                              ? 'replaced outside groups, by a lens of the same name'
-                              : ''
-                      return (
-                        <li
-                          key={keyOf(lens)}
-                          className={`tr-lns-item${checked ? ' tr-grp-item--on' : ''}`}
-                        >
-                          <label className="tr-grp-pick">
-                            <input
-                              type="checkbox"
-                              className="tr-check"
-                              checked={checked}
-                              disabled={locked}
-                              aria-describedby={said ? noteId : undefined}
-                              onChange={() => toggle(lens)}
-                            />
-                            <span className="tr-lns-name">{lens.name}</span>
-                            <code className="tr-lns-source">
-                              {lens.source}
-                              {lens.version && ` ${lens.version}`}
-                            </code>
-                            <span className="tr-lns-origin">{originText(lens)}</span>
-                            {said && (
-                              <span className="tr-grp-pick-note" id={noteId}>
-                                {said}
-                              </span>
-                            )}
-                          </label>
-                        </li>
-                      )
-                    })}
-                  </ul>
+          </fieldset>
+        ) : (
+          <p className="tr-field-help">
+            {draft.scope === 'global'
+              ? 'A global group: every project offers it, and it holds only global and built-in lenses.'
+              : 'A group of this project: only this project offers it.'}
+          </p>
+        )}
+        {draft.scope && (
+          <>
+            <div className="tr-field">
+              <label className="tr-field-label" htmlFor={`${id}-name`}>
+                Name
+              </label>
+              <div className="tr-field-body">
+                <input
+                  id={`${id}-name`}
+                  className="tr-input tr-text"
+                  value={draft.name}
+                  placeholder="backend"
+                  disabled={locked}
+                  aria-describedby={`${id}-name-help`}
+                  onChange={(event) =>
+                    onDraft({ ...draft, name: event.currentTarget.value })
+                  }
+                />
+                {draft.name !== '' && nameProblem && (
+                  <span className="tr-lns-reason" role="alert">
+                    {nameProblem}
+                  </span>
+                )}
+                <span id={`${id}-name-help`} className="tr-field-help">
+                  Letters, digits, <code>-</code> and <code>_</code>, 40 at most:{' '}
+                  <code>--group {name || 'backend'}</code>.
+                </span>
+              </div>
+            </div>
+            <div className="tr-field">
+              <span className="tr-field-label" id={`${id}-lenses`}>
+                Lenses
+              </span>
+              <div className="tr-field-body">
+                <div className="tr-grp-pickhead">
+                  <label className="tr-sr" htmlFor={`${id}-filter`}>
+                    Filter the lenses by name
+                  </label>
+                  <input
+                    id={`${id}-filter`}
+                    className="tr-input tr-text"
+                    type="search"
+                    value={filter}
+                    placeholder="Filter by name"
+                    onChange={(event) => onFilter(event.currentTarget.value)}
+                  />
+                  {query && shown.length > 0 && (
+                    <button
+                      type="button"
+                      className="tr-btn tr-btn--small tr-btn--secondary"
+                      disabled={locked}
+                      onClick={() => (allShown ? uncheckMany(shown) : checkMany(shown))}
+                    >
+                      {allShown
+                        ? `Uncheck the ${shown.length} shown`
+                        : `Check the ${shown.length} shown`}
+                    </button>
+                  )}
+                  <span role="status">
+                    {members.length} checked ·{' '}
+                    {plural(members.length, 'reviewer', 'reviewers')} at most
+                  </span>
                 </div>
-              )
-            })}
-            {!scopes.length && (
-              <p className="tr-lns-empty">No lens matches “{filter}”.</p>
-            )}
-            <span className="tr-field-help">
-              A lens in a group runs in its review whether its switch is on or off: the
-              switches are <em>Every lens that is on</em>. It still reads only the files
-              its paths match. One lens per name: a lens of this project and a built-in
-              one of the same name cannot be in one group.
-            </span>
-          </div>
-        </div>
+                {note && (
+                  <p className="tr-grp-note" role="status">
+                    {note}
+                  </p>
+                )}
+                {members.length > MANY && (
+                  <p className="tr-grp-note tr-grp-note--warn" role="note">
+                    <strong>{plural(members.length, 'reviewer', 'reviewers')}.</strong>{' '}
+                    Each one reads the change on its own: a review of this group spends
+                    many tokens.
+                  </p>
+                )}
+                {scopes.map(({ scope, all, items }) => {
+                  const sectionAll = items.every(done)
+                  const what = query
+                    ? `the ${items.length} shown of ${titles[scope]}`
+                    : `every lens of ${titles[scope]}`
+                  const label = sectionAll ? `Uncheck ${what}` : `Check ${what}`
+                  return (
+                    <div
+                      key={scope}
+                      className="tr-grp-pickgroup"
+                      role="group"
+                      aria-labelledby={`${id}-${scope}`}
+                    >
+                      <div className="tr-lns-group-head tr-grp-pickgroup-head">
+                        <label className="tr-inline-check">
+                          <input
+                            type="checkbox"
+                            className="tr-check"
+                            checked={sectionAll}
+                            disabled={locked}
+                            aria-label={label}
+                            title={label}
+                            onChange={() =>
+                              sectionAll ? uncheckMany(items) : checkMany(items)
+                            }
+                          />
+                          <strong id={`${id}-${scope}`}>{titles[scope]}</strong>
+                        </label>
+                        <span className="tr-muted">
+                          {all.filter((lens) => isMember(draft.members, lens)).length} of{' '}
+                          {all.length} checked
+                        </span>
+                      </div>
+                      <ul className="tr-lns-list">
+                        {items.map((lens) => {
+                          const checked = isMember(draft.members, lens)
+                          const twin = !checked && twinOf(lens, draft.members)
+                          const noteId = `${id}-n-${lens.scope}-${lens.name}`
+                          const said = twin
+                            ? `the ${twin.name} ${SCOPE_WORDS[twin.scope]} is checked`
+                            : lens.problem
+                              ? `cannot be built: ${lens.problem}`
+                              : !lens.on
+                                ? 'off in your settings: runs in this group'
+                                : !lens.runs
+                                  ? 'replaced outside groups, by a lens of the same name'
+                                  : ''
+                          return (
+                            <li
+                              key={keyOf(lens)}
+                              className={`tr-lns-item${checked ? ' tr-grp-item--on' : ''}`}
+                            >
+                              <label className="tr-grp-pick">
+                                <input
+                                  type="checkbox"
+                                  className="tr-check"
+                                  checked={checked}
+                                  disabled={locked}
+                                  aria-describedby={said ? noteId : undefined}
+                                  onChange={() => toggle(lens)}
+                                />
+                                <span className="tr-lns-name">{lens.name}</span>
+                                <code className="tr-lns-source">
+                                  {lens.source}
+                                  {lens.version && ` ${lens.version}`}
+                                </code>
+                                <span className="tr-lns-origin">{originText(lens)}</span>
+                                {said && (
+                                  <span className="tr-grp-pick-note" id={noteId}>
+                                    {said}
+                                  </span>
+                                )}
+                              </label>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </div>
+                  )
+                })}
+                {!scopes.length && (
+                  <p className="tr-lns-empty">No lens matches “{filter}”.</p>
+                )}
+                <span className="tr-field-help">
+                  A lens in a group runs in its review whether its switch is on or off:
+                  the switches are <em>Every lens that is on</em>. It still reads only the
+                  files its paths match. One lens per name: a lens of this project and a
+                  built-in one of the same name cannot be in one group.
+                </span>
+              </div>
+            </div>
+          </>
+        )}
         <div className="tr-lns-foot">
           <button
             type="submit"

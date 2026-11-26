@@ -95,6 +95,7 @@ import {
   GroupRefusal,
   forgetLens,
   GROUPS_FILE,
+  groupsFile,
   moveLens,
   readGroups,
   removeGroup,
@@ -455,9 +456,14 @@ async function settingsPayload() {
     groups: {
       file: groups.file,
       ...(groups.groups.default && { default: groups.groups.default }),
-      list: groups.groups.groups.map(({ name, lenses }) => ({ name, lenses })),
+      local: groups.local,
+      list: groups.groups.groups.map(({ name, scope, lenses }) => ({
+        name,
+        scope,
+        lenses,
+      })),
       ...(groups.problem && { problem: groups.problem }),
-      ...(groups.moving && { moving: groups.moving }),
+      ...(groups.notes && { notes: groups.notes }),
     },
     ...(described.base.problem && { recipeProblem: described.base.problem }),
     ...(problem && { problem }),
@@ -1552,7 +1558,7 @@ async function handle(req, res) {
     return lensChange(res, async () => {
       const to = await updateUserLens(lensRoot, scope, name, input.lens)
       // Renamed or moved, it stays in its groups.
-      const problem = await groupsAfter(() => moveLens({ scope, name }, to))
+      const problem = await groupsAfter(() => moveLens(lensRoot, { scope, name }, to))
       return { ...to, ...(problem && { groupsProblem: problem }) }
     })
   }
@@ -1568,7 +1574,7 @@ async function handle(req, res) {
       let removedFrom = []
       // Out of every group, which its reviews say.
       const problem = await groupsAfter(async () => {
-        removedFrom = await forgetLens({ scope, name })
+        removedFrom = await forgetLens(lensRoot, { scope, name })
       })
       return { removedFrom, ...(problem && { groupsProblem: problem }) }
     })
@@ -1580,7 +1586,7 @@ async function handle(req, res) {
     if (from !== undefined && (typeof from !== 'string' || !LENS_NAME.test(from)))
       return send(res, 400, { error: 'name: the group changed, or none for a new one' })
     return lensChange(res, async () => {
-      await saveGroup(from, input?.group)
+      await saveGroup(lensRoot, from, input?.group)
       return {}
     })
   }
@@ -1590,7 +1596,7 @@ async function handle(req, res) {
     if (typeof input?.name !== 'string' || !LENS_NAME.test(input.name))
       return send(res, 400, { error: 'name is required' })
     return lensChange(res, async () => {
-      await removeGroup(input.name)
+      await removeGroup(lensRoot, input.name)
       return {}
     })
   }
@@ -1937,6 +1943,7 @@ async function rememberInGroup(group, lenses, rows) {
   const scopes = new Map(rows.map((row) => [row.name, row.scope ?? 'recipe']))
   try {
     await switchLenses(
+      lensRoot,
       group,
       Object.entries(lenses).flatMap(([name, on]) => {
         const scope = scopes.get(name)
@@ -2396,13 +2403,13 @@ async function lensesChanged() {
       }
     }
   }
-  const groups = GROUPS_FILE
-  marks.push(
-    `${groups} ${await stat(groups).then(
-      (one) => `${one.size} ${one.mtimeMs}`,
-      () => '',
-    )}`,
-  )
+  for (const groups of [GROUPS_FILE, groupsFile(lensRoot)])
+    marks.push(
+      `${groups} ${await stat(groups).then(
+        (one) => `${one.size} ${one.mtimeMs}`,
+        () => '',
+      )}`,
+    )
   const now = marks.join('\n')
   if (now === lensesSeen) return
   lensesSeen = now

@@ -665,7 +665,7 @@ await store
   )
 // The group's review runs: the lenses removed from it it said are said.
 if (plan.group && plan.removed?.length)
-  await forgetRemoved(plan.group, plan.removed).catch((error) =>
+  await forgetRemoved(review.project, plan.group, plan.removed).catch((error) =>
     console.error(`group ${plan.group}: removed lenses kept: ${oneLine(message(error))}`),
   )
 await writeProgress(

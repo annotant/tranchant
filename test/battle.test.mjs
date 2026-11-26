@@ -93,7 +93,7 @@ const member = (/** @type {string} */ name) => ({
   name,
 })
 
-/** Groups A (js, api), B (js, all) and C (css, which reads none of the change): every project's. */
+/** Global groups A (js, api), B (js, all) and C (css, which reads none of the change). */
 async function writeGroups() {
   const file = GROUPS_FILE
   await mkdir(path.dirname(file), { recursive: true })
