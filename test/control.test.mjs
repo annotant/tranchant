@@ -53,6 +53,13 @@ async function reviewRun(t) {
 /** One step's line in a run file. */
 const step = (/** @type {object} */ one) => `${JSON.stringify(one)}\n`
 
+/** A figure of `n` tokens of each count. */
+const figure = (/** @type {number} */ n) => ({
+  models: [
+    { model: 'claude-opus-5-5', input: n, output: n, cacheRead: n, cacheWrite: n },
+  ],
+})
+
 const refused = (/** @type {RegExp} */ pattern) => (/** @type {unknown} */ error) =>
   error instanceof StoreRefusal && pattern.test(error.message)
 
@@ -109,6 +116,11 @@ test('reset.mjs: every finding goes, and the plan waits to start', async (t) => 
     path.join(dir, 'discussions', 'f-01.json'),
     JSON.stringify({ messages: [{ by: 'agent', text: 'Answered.', at: 'x' }] }),
   )
+  // A battle's pairs split name findings that are about to go.
+  await writeFile(
+    path.join(dir, 'battle.json'),
+    JSON.stringify({ version: 1, splits: [['f-01', 'f-02']] }),
+  )
   await store.halt()
   await store.complete()
 
@@ -125,6 +137,7 @@ test('reset.mjs: every finding goes, and the plan waits to start', async (t) => 
   assert.deepEqual(now.findings, [])
   assert.ok(!existsSync(findingPath(dir, 'f-01')))
   assert.ok(!existsSync(path.join(dir, 'discussions')))
+  assert.ok(!existsSync(path.join(dir, 'battle.json')))
   assert.deepEqual((await store.readDecisions()).findings, {})
   assert.deepEqual(await readReviewAgents(dir), [])
   assert.equal(JSON.parse(await readFile(plan, 'utf8')).wait, 'reset')
@@ -139,6 +152,34 @@ test('reset.mjs: every finding goes, and the plan waits to start', async (t) => 
   })
   assert.equal(again.code, 2)
   assert.match(again.stdout, /^RESET_REFUSED the review is not stopped/)
+})
+
+test("reset.mjs keeps what the removed agents spent in usage.json's reset", async (t) => {
+  const { dir, store } = await reviewRun(t)
+  await mkdir(path.join(dir, 'reviewers'), { recursive: true })
+  await writeFile(
+    path.join(dir, 'reviewers', 'rv-bugs.jsonl'),
+    step({ at: 1, kind: 'start', model: 'm', agent: 'r1' }) +
+      step({ at: 2, kind: 'end', agent: 'r1', usage: figure(10) }),
+  )
+  await store.decide('f-01', { action: 'fix' })
+  await store.claim('f-01', { agent: 'x1' })
+  await store.done('f-01', 'Done.')
+  await store.recordUsage('f-01', 'x1', figure(1))
+  await store.halt()
+  await store.complete()
+  const ran = await run(process.execPath, [RESET, '--review', dir], {
+    env: { TRANCHANT_STATE_DIR: stateDir },
+  })
+  assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+  const usage = JSON.parse(await readFile(path.join(dir, 'usage.json'), 'utf8'))
+  assert.deepEqual(usage.reset, {
+    kinds: [
+      { kind: 'reviewers', agents: 1, usage: figure(10) },
+      { kind: 'fixes', agents: 1, usage: figure(1) },
+    ],
+    lenses: [{ lens: 'bugs', reviewer: figure(10) }],
+  })
 })
 
 test('reset.mjs refuses a review with no plan, and removes nothing', async (t) => {
@@ -209,6 +250,8 @@ test('reset is refused while a fix, a post, an issue or an answer is under way, 
   assert.equal((await store.readReview()).findings.length, 5)
   assert.equal(await readFile(plan, 'utf8'), planBefore)
   assert.ok(!existsSync(path.join(dir, 'choices.json')))
+  // Refused before anything went: nothing counted as removed.
+  assert.ok(!existsSync(path.join(dir, 'usage.json')))
 })
 
 test('a discussion that is not JSON waits for nothing: the reset removes it', async (t) => {

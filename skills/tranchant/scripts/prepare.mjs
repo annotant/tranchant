@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prepare.mjs [<branch> | <merge request url>] [--recipe <recipe.json> | --group <name>] [--start | --no-start]
+// prepare.mjs [<branch> | <merge request url>] [--recipe <recipe.json> | --group <name> | --battle <A,B>] [--start | --no-start]
 // What `/tranchant review` runs first, from the session's folder: finds the
 // change (the current branch, or <branch>, against the repository's default
 // branch, `ours`, with the branch's open merge request when glab finds one;
@@ -14,7 +14,9 @@
 // place, its lenses whatever their switches; with no --group, the project's
 // default group when it has one. The plan names the group, and what its
 // review says of its lenses that do not run (`notes`, also on stderr as
-// `group: <note>`).
+// `group: <note>`). --battle A,B plans a battle review (lib/battle.mjs):
+// both groups' lenses on the change, the shared ones once; it waits for
+// Start the battle on the page unless --start.
 // It writes the review's envelope, `preparing`
 // with no finding yet, to <state>/inbox/<id>.json and prints `INBOX <file>`,
 // then the lenses whose paths the change touches to <id>.plan.json next to
@@ -32,6 +34,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs, promisify } from 'node:util'
 import { LENS_NAME, REVIEW_VERSION, oneLine } from './lib/format.mjs'
+import { BattleRefusal, parseBattle, planBattle } from './lib/battle.mjs'
 import { groupNotes, readGroups } from './lib/groups.mjs'
 import { STATE_ROOT } from './lib/project.mjs'
 import { RecipeRefusal, findRecipe, readRecipe } from './lib/lens.mjs'
@@ -260,6 +263,7 @@ try {
     options: {
       recipe: { type: 'string' },
       group: { type: 'string' },
+      battle: { type: 'string' },
       start: { type: 'boolean' },
       'no-start': { type: 'boolean' },
     },
@@ -274,6 +278,19 @@ if (target?.startsWith('-')) refuse(`${target} is not a branch or a merge reques
 if (values.start && values['no-start']) refuse('give --start or --no-start, not both')
 if (values.recipe !== undefined && values.group !== undefined)
   refuse("give --recipe or --group, not both: a run's own recipe runs whole")
+if (
+  values.battle !== undefined &&
+  (values.recipe !== undefined || values.group !== undefined)
+)
+  refuse('give --battle alone: it runs its two groups, no --recipe nor --group')
+/** @type {import('./lib/battle.mjs').Battle | undefined} */
+let battle
+try {
+  if (values.battle !== undefined) battle = parseBattle(values.battle)
+} catch (error) {
+  if (!(error instanceof BattleRefusal)) throw error
+  refuse(error.message)
+}
 if (values.group !== undefined && !LENS_NAME.test(values.group))
   refuse(`${values.group} is not a group name: letters, digits, - and _ only`)
 
@@ -311,9 +328,10 @@ const range = theirs
   : `${change.base}...${change.headSha}`
 // The flag, then the project's default group; a run's own recipe runs whole.
 const groups = values.recipe === undefined ? await readGroups(project) : undefined
-const groupName = values.group ?? groups?.groups.default
+const groupName = battle ? undefined : (values.group ?? groups?.groups.default)
 if (groups?.problem) {
   if (values.group !== undefined) refuse(`group ${values.group}: ${groups.problem}`)
+  if (battle) refuse(`groups: ${groups.problem}`)
   // Read as none: the review runs every lens that is on, said.
   console.error(`groups: ${oneLine(groups.problem)}`)
 }
@@ -327,30 +345,53 @@ if (values.group !== undefined && !group) {
   )
 }
 // The flag, then the settings: a review waiting to start plans every lens the page can turn on.
+// A battle waits for Start the battle, but with --start.
 const wait = values['no-start']
   ? 'flag'
-  : !values.start && !settings.startReview
-    ? 'setting'
-    : undefined
-const planned = await planLenses({
-  project,
-  range,
-  recipe: lenses,
-  own: values.recipe !== undefined,
-  values: settings,
-  all: wait !== undefined,
-  ...(group && { group: group.lenses }),
-}).catch((error) => {
-  if (error instanceof PlanRefusal) return refuse(error.message)
-  throw error
-})
+  : values.start
+    ? undefined
+    : battle
+      ? 'battle'
+      : !settings.startReview
+        ? 'setting'
+        : undefined
+const battlePlan = battle
+  ? await planBattle({
+      project,
+      range,
+      recipe: lenses,
+      values: settings,
+      groups: groups?.groups.groups ?? [],
+      battle,
+    }).catch((error) => {
+      if (error instanceof BattleRefusal || error instanceof PlanRefusal)
+        return refuse(error.message)
+      throw error
+    })
+  : undefined
+const planned = battlePlan
+  ? { ...battlePlan, applied: battlePlan.lenses, others: [], inForce: 1, missing: [] }
+  : await planLenses({
+      project,
+      range,
+      recipe: lenses,
+      own: values.recipe !== undefined,
+      values: settings,
+      all: wait !== undefined,
+      ...(group && { group: group.lenses }),
+    }).catch((error) => {
+      if (error instanceof PlanRefusal) return refuse(error.message)
+      throw error
+    })
 for (const one of planned.problems)
   console.error(`lens ${one.name} (${one.scope}) not run: ${oneLine(one.problem)}`)
 if (!planned.changed.length)
   refuse(`${change.branch} has no change against ${change.base}`)
 const { applied, others } = planned
 // Said by every review of the group until one runs: lenses.mjs then forgets them.
-const notes = group ? groupNotes(group.name, group.removed ?? [], planned.missing) : []
+const notes =
+  battlePlan?.notes ??
+  (group ? groupNotes(group.name, group.removed ?? [], planned.missing) : [])
 if (!applied.length && !(wait && others.some((lens) => lens.files)))
   refuse(
     group
@@ -393,10 +434,11 @@ await writeFile(
   `${JSON.stringify(
     {
       recipe,
-      // How many files each reads: the ready screen's, while the review waits.
-      lenses: wait ? applied : applied.map(({ files: _files, ...lens }) => lens),
+      // How many files each reads: the ready screen's while the review waits, review.json's once it runs.
+      lenses: applied,
       ...(values.recipe && { own: true }),
       ...(group && { group: group.name }),
+      ...(battle && { battle }),
       ...(notes.length && { notes }),
       ...(group?.removed && { removed: group.removed }),
       ...(wait && { wait, changed: planned.changed.length, others }),

@@ -268,10 +268,18 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {boolean} [verify] Findings land unverified and a verifier confirms each: only `/tranchant review` sets it, open.mjs drops it from any other file.
  * @property {LensRecord[]} [lenses] The lenses `/tranchant review` ran, as the Lenses step built them.
  * @property {string} [group] The group of lenses `/tranchant review` ran, when it ran one.
+ * @property {BattleRecord} [battle] A battle review: the two groups it ran, and the group each lens ran for.
  * @property {Refusal} [refusal] With `refused`: the lens that could not be built, and why.
  * @property {Paused} [paused] While `reviewing`: the page's Pause; no agent of the review's queue starts.
  * @property {{ at: string }} [stopped] The page's Stop the review: its agents ended, no Resume; only Reset runs it again.
  * @property {Finding[]} findings At least one, unless the review is not `complete`.
+ */
+
+/**
+ * A battle review's groups, `a` and `b`, whether its shared lenses ran once
+ * per group (`twice`), and each lens it ran by name: `a`, `b`, or `both` for
+ * a shared lens run once, whose findings count for both.
+ * @typedef {{ a: string, b: string, twice?: true, lenses: Record<string, 'a' | 'b' | 'both'> }} BattleRecord
  */
 
 /**
@@ -282,8 +290,9 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
 
 /**
  * A lens a review ran: its name, its source, the source's version when a
- * plugin gives one, and the hash of the prompt built from it.
- * @typedef {{ name: string, source: string, version?: string, hash: string }} LensRecord
+ * plugin gives one, the hash of the prompt built from it, and how many
+ * changed files it reviews, as the plan counted them.
+ * @typedef {{ name: string, source: string, version?: string, hash: string, files?: number }} LensRecord
  */
 
 /**
@@ -379,6 +388,7 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {'fixed' | 'asking' | 'failed' | 'stopped'} [outcome] Absent while running.
  * @property {string} [summary] `fixed`: what changed, in the agent's words.
  * @property {string[]} [changed] `fixed`: the files the run wrote, relative to the project.
+ * @property {Usage} [usage] What its agent spent, written by `hook.mjs ended` once the agent ended; absent, not reported.
  */
 
 /**
@@ -441,6 +451,8 @@ const OWNERSHIPS = new Set(['ours', 'theirs'])
  * @property {string} [run]
  * @property {string} [agent]
  * @property {string} [model] `start` only.
+ * @property {string} [lens] A verifier's `start` written by the hooks: its finding's lens.
+ * @property {Usage} [usage] A review agent's `end`: what its agent spent.
  */
 
 /**
@@ -504,6 +516,23 @@ const ID = /^[\w-]{1,64}$/
 const isId = (value) => typeof value === 'string' && ID.test(value)
 /** A lens's name: a recipe's, a user's, and the one a finding records. */
 export const LENS_NAME = /^[\w-]{1,40}$/
+
+const SIDES = new Set(['a', 'b', 'both'])
+
+/** A battle record as review.json holds it. @param {any} value */
+function isBattle(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const { a, b, twice, lenses } = value
+  if (typeof a !== 'string' || typeof b !== 'string' || a === b) return false
+  if (!LENS_NAME.test(a) || !LENS_NAME.test(b)) return false
+  if (twice !== undefined && twice !== true) return false
+  if (!lenses || typeof lenses !== 'object' || Array.isArray(lenses)) return false
+  const entries = Object.entries(lenses)
+  return (
+    entries.length <= 400 &&
+    entries.every(([name, side]) => LENS_NAME.test(name) && SIDES.has(side))
+  )
+}
 const SHA = /^[0-9a-f]{7,64}$/
 // A tab is the only control character a line of code may hold.
 const CONTROL = /[^\P{Cc}\t]/u
@@ -895,16 +924,21 @@ export function validateEnvelope(review) {
           isText(lens.name, 40) &&
           isText(lens.source, 1000) &&
           /^[0-9a-f]{64}$/.test(String(lens.hash)) &&
-          (lens.version === undefined || isText(lens.version, 100)),
+          (lens.version === undefined || isText(lens.version, 100)) &&
+          (lens.files === undefined || isInt(lens.files, 0)),
       ))
   ) {
-    problems.push('lenses: an array of { name, source, version?, hash }')
+    problems.push('lenses: an array of { name, source, version?, hash, files? }')
   }
   if (
     review.group !== undefined &&
     (typeof review.group !== 'string' || !LENS_NAME.test(review.group))
   )
     problems.push('group: a group name, letters, digits, - and _')
+  if (review.battle !== undefined && !isBattle(review.battle))
+    problems.push(
+      'battle: { a, b, twice?, lenses: { <lens>: a, b or both } }, a and b two group names',
+    )
   if (
     review.refusal !== undefined &&
     (!isObject(review.refusal) ||
@@ -1042,7 +1076,7 @@ export function envelopeOf(review) {
  * status, `verify`, what its Lenses step recorded and its pause or stop left
  * out. A review that grew, or completed, is still the same one, opened again
  * without `--verify` too.
- * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, refusal?: unknown, paused?: unknown, stopped?: unknown }} review
+ * @param {{ findings?: unknown, status?: unknown, verify?: unknown, lenses?: unknown, group?: unknown, battle?: unknown, refusal?: unknown, paused?: unknown, stopped?: unknown }} review
  */
 export function identityOf(review) {
   const {
@@ -1050,6 +1084,7 @@ export function identityOf(review) {
     verify: _verify,
     lenses: _lenses,
     group: _group,
+    battle: _battle,
     refusal: _refusal,
     paused: _paused,
     stopped: _stopped,
@@ -1097,3 +1132,137 @@ export function nextRunId(entry) {
  */
 export const currentRun = (entry) =>
   entry.state === 'working' ? entry.runs.findLast((run) => !run.endedAt) : undefined
+
+/**
+ * One model's part of an agent's tokens: the four counts the API reports.
+ * @typedef {{ model: string, input: number, output: number, cacheRead: number, cacheWrite: number }} ModelTokens
+ */
+
+/**
+ * What one agent, or a sum of agents, spent. `usd` and `hasUnknownPrice`:
+ * `/cost`'s estimate, recorded, never a bill. `partial`: a last reading, not
+ * the whole figure (the agent was no longer listed at its end, its count
+ * went down, or a part of the sum was not reported).
+ * @typedef {object} Usage
+ * @property {ModelTokens[]} models
+ * @property {number} [usd]
+ * @property {true} [hasUnknownPrice]
+ * @property {true} [partial]
+ */
+
+/** The models one figure names at most: an agent runs on one, a fallback adds another. */
+const MAX_USAGE_MODELS = 8
+const MODEL = /^[\w.:-]{1,80}$/
+const COUNTS = /** @type {const} */ (['input', 'output', 'cacheRead', 'cacheWrite'])
+
+/** One figure's most tokens of a kind, and most dollars: far past any agent, so a sum of them stays exact. */
+const MAX_COUNT = 1e12
+const MAX_USD = 1e9
+
+/** A count: a non-negative integer, within MAX_COUNT. */
+const isCount = (/** @type {unknown} */ value) =>
+  Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= MAX_COUNT
+
+/**
+ * `value` as a Usage, checked: whatever wrote it (a fix's agent can write the
+ * state folder), anything unsound reads as not reported, never throws.
+ * @param {unknown} value
+ * @returns {Usage | undefined}
+ */
+export function readUsage(value) {
+  if (!isObject(value) || !Array.isArray(value.models)) return undefined
+  const { models } = value
+  if (!models.length || models.length > MAX_USAGE_MODELS) return undefined
+  /** @type {ModelTokens[]} */
+  const read = []
+  for (const one of models) {
+    if (!isObject(one) || typeof one.model !== 'string' || !MODEL.test(one.model))
+      return undefined
+    if (!COUNTS.every((count) => isCount(one[count]))) return undefined
+    read.push({
+      model: one.model,
+      input: one.input,
+      output: one.output,
+      cacheRead: one.cacheRead,
+      cacheWrite: one.cacheWrite,
+    })
+  }
+  const usd =
+    typeof value.usd === 'number' && value.usd >= 0 && value.usd <= MAX_USD
+      ? value.usd
+      : undefined
+  return {
+    models: read,
+    ...(usd !== undefined && { usd }),
+    ...(value.hasUnknownPrice === true && {
+      hasUnknownPrice: /** @type {const} */ (true),
+    }),
+    ...(value.partial === true && { partial: /** @type {const} */ (true) }),
+  }
+}
+
+/** The four counts summed over every model. @param {Usage | undefined} usage */
+export const tokensOf = (usage) =>
+  (usage?.models ?? []).reduce(
+    (sum, one) => sum + one.input + one.output + one.cacheRead + one.cacheWrite,
+    0,
+  )
+
+/**
+ * Figures summed, by model: `partial` when any is, `usd` only when each has
+ * one. Undefined when none is given.
+ * @param {(Usage | undefined)[]} figures
+ * @returns {Usage | undefined}
+ */
+export function sumUsage(figures) {
+  const given = figures.filter((one) => one !== undefined)
+  if (!given.length) return undefined
+  /** @type {Map<string, ModelTokens>} */
+  const byModel = new Map()
+  for (const figure of given)
+    for (const one of figure.models) {
+      const was = byModel.get(one.model)
+      byModel.set(
+        one.model,
+        was
+          ? {
+              model: one.model,
+              input: was.input + one.input,
+              output: was.output + one.output,
+              cacheRead: was.cacheRead + one.cacheRead,
+              cacheWrite: was.cacheWrite + one.cacheWrite,
+            }
+          : { ...one },
+      )
+    }
+  const priced = given.every((one) => one.usd !== undefined)
+  const ranked = [...byModel.values()].toSorted(
+    (a, b) => tokensOf({ models: [b] }) - tokensOf({ models: [a] }),
+  )
+  // Past the most one figure names, the rest summed as `other`: a sum written to usage.json reads back.
+  const rest = ranked.slice(MAX_USAGE_MODELS - 1)
+  const models =
+    rest.length > 1
+      ? [
+          ...ranked.slice(0, MAX_USAGE_MODELS - 1),
+          rest.reduce(
+            (sum, one) => ({
+              model: 'other',
+              input: sum.input + one.input,
+              output: sum.output + one.output,
+              cacheRead: sum.cacheRead + one.cacheRead,
+              cacheWrite: sum.cacheWrite + one.cacheWrite,
+            }),
+            { model: 'other', input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          ),
+        ]
+      : ranked
+  return {
+    models,
+    ...(priced && { usd: given.reduce((sum, one) => sum + (one.usd ?? 0), 0) }),
+    ...(given.some((one) => one.hasUnknownPrice) && {
+      hasUnknownPrice: /** @type {const} */ (true),
+    }),
+    ...(given.some((one) => one.partial) && { partial: /** @type {const} */ (true) }),
+  }
+}

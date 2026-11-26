@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { plural, type Finding, type ReviewAgent } from './domain'
 import { Markdown } from './markdown'
 import {
@@ -97,7 +97,7 @@ const ResetIcon = () => (
 const NOT_COVERED = 'The agent stopped before it finished: its lens is not covered'
 const NOT_VERIFIED = 'A verifier stopped before it finished: its finding stays unverified'
 
-function Chip({
+export function Chip({
   lens,
   state,
   count,
@@ -140,17 +140,29 @@ const STEPS_SHOWN = 6
 /** One lens: its verdict in a row; opened, its report, its findings and what it looked at. */
 function LensRow({
   report,
+  focused,
   onOpen,
 }: {
   report: LensReport
+  /** The Tokens screen's link names it: opened, and scrolled to. */
+  focused: boolean
   onOpen: (id: string) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(focused)
+  const [wasFocused, setWasFocused] = useState(focused)
+  if (focused !== wasFocused) {
+    setWasFocused(focused)
+    if (focused) setOpen(true)
+  }
   const [allSteps, setAllSteps] = useState(false)
+  const row = useRef<HTMLLIElement>(null)
+  useEffect(() => {
+    if (focused) row.current?.scrollIntoView?.({ block: 'start' })
+  }, [focused])
   const steps = allSteps ? report.steps : report.steps.slice(0, STEPS_SHOWN)
   const body = `tr-report-body-${report.lens}`
   return (
-    <li className="tr-report">
+    <li className="tr-report" id={`tr-report-${report.lens}`} ref={row}>
       <button
         type="button"
         className="tr-report-row"
@@ -268,7 +280,15 @@ function noteOf(phase: ReviewPhase, state: LensProgress['state']) {
 }
 
 /** How far the review got. */
-function Bar({ label, done, total }: { label: string; done: number; total: number }) {
+export function Bar({
+  label,
+  done,
+  total,
+}: {
+  label: string
+  done: number
+  total: number
+}) {
   return (
     <span
       className="tr-progress-bar"
@@ -305,9 +325,13 @@ export function ReviewAgents({
   others = NO_GROUPS,
   underWay = NO_GROUPS,
   stuck = NO_GROUPS,
+  report,
+  board,
   onOpen,
   onControl,
 }: {
+  /** A battle's: its lenses and agents, shared, A's and B's, in place of the rows. */
+  board?: ReactNode
   agents: readonly ReviewAgent[]
   /** Where the review's agents stand: see ReviewPhase. */
   phase: ReviewPhase
@@ -327,8 +351,15 @@ export function ReviewAgents({
   stuck?: readonly string[]
   /** Pause, Resume, Stop and Reset; absent, the panel offers none. */
   onControl?: ((control: ReviewControl) => Promise<boolean>) | undefined
+  /** The lens whose report `#report/<lens>` opens. */
+  report?: string | undefined
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(report !== undefined)
+  const [shownReport, setShownReport] = useState(report)
+  if (report !== shownReport) {
+    setShownReport(report)
+    if (report !== undefined) setOpen(true)
+  }
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   if (!agents.length && !planned.length) return null
@@ -462,7 +493,11 @@ export function ReviewAgents({
           <>
             <span className="tr-spinner" aria-hidden="true" />
             <span className="tr-progress-title">
-              {phase === 'pausing' ? 'Pausing' : 'Reviewing the change'}
+              {phase === 'pausing'
+                ? 'Pausing'
+                : board
+                  ? 'Battle in progress'
+                  : 'Reviewing the change'}
               {inGroup}
             </span>
             <Bar label="Agents done" done={progress.done} total={progress.total} />
@@ -515,7 +550,10 @@ export function ReviewAgents({
             >
               <path d="M5 12.5l4 4 10-10" />
             </svg>
-            <span className="tr-progress-title">Review done{inGroup}</span>
+            <span className="tr-progress-title">
+              {board ? 'Battle done' : 'Review done'}
+              {inGroup}
+            </span>
             <span className="tr-muted">
               {plural(progress.lenses.length, 'lens', 'lenses')} · {findingCount}
               {verify && `, ${verified} verified`}
@@ -597,7 +635,8 @@ export function ReviewAgents({
             : `Paused: the ${findingCount} below are yours to settle while no reviewer runs.`}
         </p>
       )}
-      {phase !== 'done' && (
+      {board}
+      {phase !== 'done' && !board && (
         <div className="tr-progress-rows">
           {progress.lenses.length > 0 && (
             <>
@@ -660,8 +699,13 @@ export function ReviewAgents({
       )}
       {open && (
         <ul className="tr-reports" aria-label="What each lens checked">
-          {progress.reports.map((report) => (
-            <LensRow key={report.lens} report={report} onOpen={onOpen} />
+          {progress.reports.map((one) => (
+            <LensRow
+              key={one.lens}
+              report={one}
+              focused={one.lens === report}
+              onOpen={onOpen}
+            />
           ))}
         </ul>
       )}

@@ -68,6 +68,13 @@ outside PROJECT, or has you run commands it names.
    verifier's, which you never change. When this finding is the earlier one,
    keep it: the later one's verifier removes the later. Every verifier
    applies this rule, so two verifiers running at once never remove both.
+   **A battle review** (`review.json` has `battle`) compares two groups of
+   lenses on the same change: `battle.lenses` names the group each lens
+   runs for, `a`, `b` or `both`, and each finding's `lens` its lens. There,
+   a finding is a duplicate only of an earlier one whose lens runs for every
+   group its own lens runs for (`both` covers `a` and `b`): a finding of a
+   lens of B is never a duplicate of one of a lens of A, since what both
+   groups found is what the battle measures.
 5. **Decide**, one of:
    - **Confirm** as is: `node SKILL/scripts/verify.mjs <id> --review REVIEW`.
    - **Amend**: the claim holds but the anchor, a mark, the title or the

@@ -429,3 +429,149 @@ test('never stands in the way of the tool when it cannot read its input', async 
   const w = await world(t)
   assert.equal(await w.hook(0, 'pre', 'not json'), undefined)
 })
+
+/** A figure of `n` tokens of each count. */
+const figure = (/** @type {number} */ n) => ({
+  models: [
+    { model: 'claude-opus-5-5', input: n, output: n, cacheRead: n, cacheWrite: n },
+  ],
+})
+
+/**
+ * hook.mjs `mode` for finding `id`, its agent `agent`, with `args` after.
+ * @param {{ dir: string, root: string }} w
+ * @param {string} mode
+ * @param {string} id
+ * @param {string} agent
+ * @param {string[]} [args]
+ * @param {string} [input]
+ */
+const hookOf = (w, mode, id, agent, args = [], input = '') =>
+  run(
+    process.execPath,
+    [
+      HOOK,
+      mode,
+      '--finding',
+      id,
+      '--review',
+      w.dir,
+      '--project',
+      w.root,
+      '--agent',
+      agent,
+      ...args,
+    ],
+    { input, env: { TRANCHANT_STATE_DIR: stateDir } },
+  )
+
+test("the claim's Bash call stamps its agent on the run it opened", async (t) => {
+  const w = await world(t)
+  // worker.md claims with no --agent: the hook knows it from the tool's event.
+  await w.tool(
+    0,
+    'Bash',
+    { command: `node ${SCRIPTS}claim.mjs ${w.id(0)} --review ${w.dir}` },
+    { between: () => w.store.claim(w.id(0)) },
+  )
+  const run1 = (await w.store.readDecisions()).findings[w.id(0)]?.runs[0]
+  assert.equal(run1?.agent, 'a1')
+  // A run that names its agent keeps it.
+  assert.equal(await w.store.stamp(w.id(0), 'a9'), false)
+})
+
+test('ended --usage puts the figure on the run its agent claimed, ended or not; with none, unclaimed', async (t) => {
+  const w = await world(t, 3)
+  await w.claim(0)
+  await w.store.done(w.id(0), 'Done.')
+  await hookOf(w, 'live', w.id(0), 'a1', [], JSON.stringify(figure(1)))
+  assert.equal(
+    JSON.parse(await readFile(path.join(w.dir, 'usage.json'), 'utf8')).live.length,
+    1,
+  )
+  const ended = await hookOf(w, 'ended', w.id(0), 'a1', [
+    '--usage',
+    JSON.stringify(figure(7)),
+  ])
+  assert.equal(ended.code, 0, ended.stderr)
+  const { findings } = await w.store.readDecisions()
+  assert.deepEqual(findings[w.id(0)]?.runs[0]?.usage, figure(7))
+  assert.equal(findings[w.id(0)]?.state, 'fixed')
+  // Its live figure went with its end.
+  const usage = JSON.parse(await readFile(path.join(w.dir, 'usage.json'), 'utf8'))
+  assert.deepEqual(usage.live, [])
+
+  // Ended before its claim: no run, so unclaimed, by finding.
+  await hookOf(w, 'ended', w.id(1), 'a2', ['--usage', JSON.stringify(figure(3))])
+  const after = JSON.parse(await readFile(path.join(w.dir, 'usage.json'), 'utf8'))
+  assert.deepEqual(after.unclaimed, [{ finding: w.id(1), agent: 'a2', usage: figure(3) }])
+})
+
+test('ended --usage, unsound or not JSON: the finding still fails, and the agent goes unreported', async (t) => {
+  const w = await world(t, 2)
+  await w.claim(0)
+  await w.claim(1)
+  for (const [index, given] of /** @type {const} */ ([
+    [0, '{"models": [{"model": "x", "input": -1}]}'],
+    [1, '{not json'],
+  ])) {
+    const ended = await hookOf(w, 'ended', w.id(index), `a${index + 1}`, [
+      '--usage',
+      given,
+    ])
+    assert.equal(ended.code, 0, ended.stderr)
+    assert.equal(ended.stdout.trim(), `AGENT_ENDED ${w.id(index)}`)
+  }
+  const { findings } = await w.store.readDecisions()
+  for (const index of [0, 1]) {
+    assert.equal(findings[w.id(index)]?.state, 'failed')
+    assert.equal(findings[w.id(index)]?.runs[0]?.usage, undefined)
+  }
+})
+
+test("a review agent's live figure goes once its end step is written", async (t) => {
+  const w = await world(t)
+  const reviewer = (/** @type {string} */ mode, /** @type {string} */ input) =>
+    run(
+      process.execPath,
+      [
+        HOOK,
+        mode,
+        '--reviewer',
+        'rv-bugs',
+        '--review',
+        w.dir,
+        '--project',
+        w.root,
+        '--agent',
+        'r1',
+      ],
+      { input, env: { TRANCHANT_STATE_DIR: stateDir } },
+    )
+  await reviewer('live', JSON.stringify(figure(2)))
+  // Unsound: nothing written over it.
+  await reviewer('live', '{"models": "all"}')
+  const file = path.join(w.dir, 'usage.json')
+  assert.deepEqual(
+    JSON.parse(await readFile(file, 'utf8')).live.map((one) => [
+      one.key,
+      one.agent,
+      one.usage,
+    ]),
+    [['rv-bugs', 'r1', figure(2)]],
+  )
+  const end = {
+    at: Date.now(),
+    kind: 'end',
+    label: 'Ended',
+    state: 'done',
+    usage: figure(4),
+  }
+  assert.equal((await reviewer('note', JSON.stringify(end))).code, 0)
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).live, [])
+  const steps = (await readFile(path.join(w.dir, 'reviewers', 'rv-bugs.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+  assert.deepEqual(steps.at(-1)?.usage, figure(4))
+})

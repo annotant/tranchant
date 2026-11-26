@@ -13,7 +13,9 @@ folder: nothing is installed in a repository to review it.
 | `reviewers/<name>.jsonl`          | Next to it                            | The steps of one review agent of `/tranchant review`: `sm-summary`, `rv-<lens>` or `vf-<finding id>`; of a finding's discussing agent: `ds-<finding id>` | The hooks (`hooks/register.ts`, `hook.mjs --reviewer`)                                                                 |
 | `discussions/<finding id>.json`   | Next to it                            | The finding's discussion: the reviewer's questions and the agent's answers                  | `lib/discussion.mjs`, for the server (a question, a change, and a change's answer or result on each move the reviewer makes and at start), `reply.mjs` (an answer), and `done.mjs`, `ask.mjs`, `hook.mjs ended` (a change's result) |
 | `lenses.json`                     | Next to it                            | The Lenses step of `/tranchant review`: one row per lens, as it is resolved and built        | `lenses.mjs`                                                                                                           |
-| `choices.json`                    | Next to it                            | A review waiting to start: the page's switches, `{ lenses: { <name>: true \| false }, remember, group? }` | The server, on Start the review and Build the lenses again                                                             |
+| `usage.json`                      | Next to it                            | What the review's agents spent that no run holds: `live`, `unclaimed`, `reset` ([what the agents spend](#what-the-agents-spend)) | The hooks (`hook.mjs live`, `note`, `ended`), and `reset.mjs`                                                          |
+| `choices.json`                    | Next to it                            | A review waiting to start: the page's switches, `{ lenses: { <name>: true \| false }, remember, group?, battle? }` | The server, on Start the review and Build the lenses again                                                             |
+| `battle.json`                     | Next to it                            | A battle review's pairs the user split (**Not the same**): `{ version: 1, splits: [[<id>, <id>]] }` ([a battle review](#a-battle-review)) | The server (`/api/battle/split`); a reset removes it                                                                   |
 | `lenses/<sha256>.md`              | `<state>/`                            | A lens's prompt as the Lenses step built it, one file per hash, shared by every review       | `lenses.mjs`, once per hash                                                                                            |
 | `cleanings/<cleaning id>/`        | `<state>/<hash>/`                     | A lens's cleaning: `cleaning.json` (its source, the lens it makes or cleans again, where it stands), `lens.md` and `report.json` (what its agent wrote), `rules.md` (the rules the user edited, given back to the agent) | `clean.mjs`, the server's `/api/lens/*`; the cleaning agent (`lens.md` and `report.json` alone)                |
 
@@ -83,7 +85,8 @@ arrives. A producer that writes the whole review at once needs none of this:
 | `headSha`     | string                    | Full SHA. The page shows a warning when the checkout moved; a fix still runs, on the current files. |
 | `ownership`   | `ours` or `theirs`        | Decides the default action: `ours`, fix first; `theirs`, post first. Either may post with `mr.diffRefs`. |
 | `status`      | `preparing`, `reviewing`, `complete` or `refused` | Absent means `complete`. `reviewing`: findings still land through `add.mjs`, until `complete.mjs`. `preparing`: `/tranchant review` builds its lenses (`lenses.mjs`), then makes it `reviewing`, or waits for Start the review ([waiting to start](#waiting-to-start)). `refused`: a lens could not be built, no reviewer started, `refusal` says why; nothing lands, nothing completes it. |
-| `lenses`      | array, optional           | The lenses `/tranchant review` ran, as the Lenses step built them: `{ name, source, version?, hash }`, `source` as the recipe names it, `version` a plugin's, `hash` the SHA-256 of the prompt built (`<state>/lenses/<hash>.md`). |
+| `lenses`      | array, optional           | The lenses `/tranchant review` ran, as the Lenses step built them: `{ name, source, version?, hash, files? }`, `source` as the recipe names it, `version` a plugin's, `hash` the SHA-256 of the prompt built (`<state>/lenses/<hash>.md`), `files` how many changed files it reviews, as the plan counted them. |
+| `battle`      | object, optional          | A battle review ([a battle review](#a-battle-review)): `{ a, b, twice?, lenses: { <lens>: "a" \| "b" \| "both" } }`, its two groups, whether its shared lenses ran once per group, and the group each lens it ran runs for, `both` for a shared lens run once. Set once the Lenses step built them, with no `group`; not part of what tells a review from another. |
 | `group`       | string, optional          | The group of lenses `/tranchant review` ran ([groups of lenses](settings.md#groups-of-lenses)), set once the Lenses step built them; the page's header and progress bar name it. Not part of what tells a review from another. |
 | `refusal`     | object, optional          | With `refused`: `{ lens, source, reason, fix? }`, the lens that could not be built, its source, why, and what fixes it. |
 | `paused`      | object, optional          | The page's **Pause** on a `/tranchant review` still `reviewing`: `{ at, now? }`; no review agent starts until **Resume** removes it, and the review does not complete. `now`: **Pause now** ended the agents at work, which run again from the start on Resume. See [pause, stop and reset](#pause-stop-and-reset). |
@@ -269,10 +272,16 @@ and runs the queued posts and issues again, and the replies still on their way; 
   "outcome": "fixed",
   "summary": "Returned early while tenantId is undefined.",
   "changed": ["src/people/usePeople.ts"],
+  "usage": { "models": [{ "model": "claude-opus-5-5", "input": 18204, "output": 9310, "cacheRead": 1203551, "cacheWrite": 61877 }] }, // optional
 }
 ```
 
 `outcome` is `fixed`, `asking`, `failed` or `stopped`; absent while running.
+`agent` is the agent that claimed it: `claim.mjs --agent`, else the hooks
+stamp it from the claim's Bash call. `usage` is what that agent spent
+([what the agents spend](#what-the-agents-spend)), written once the agent
+ended, whatever the run's outcome (`done.mjs` and `ask.mjs` end the run
+before the agent's turn ends); absent, not reported.
 
 ### An event
 
@@ -396,7 +405,7 @@ left goes, the run that fixed it having finished it.
 settings' `startReview` off (**Start the review by itself**, on by default)
 without `--start`, builds the lenses and starts no reviewer. The flag is
 never saved. `prepare.mjs` writes in the plan why it waits (`wait`:
-`flag` or `setting`; `reset` once [Reset the review](#pause-stop-and-reset) wrote it), how many files the change has (`changed`), how many of them
+`flag` or `setting`; `battle` for `--battle`; `reset` once [Reset the review](#pause-stop-and-reset) wrote it), how many files the change has (`changed`), how many of them
 each lens reads (`files`) and `others`, the lenses that could run but do
 not: off in the settings (`off: true`), or reading none of its files. The
 Lenses step builds the lenses that run, leaves the review `preparing` and
@@ -420,7 +429,7 @@ turned on joins it, in place of one of the same name; the settings are not
 written.
 
 The page's center shows why it waits, the target, the lenses that run and
-the files each reads, the agents, the token note past 12 reviewers, a
+the files each reads, the agents, the tokens it should spend (below), a
 switch on each lens, **Remember these choices** and **Start the review**,
 refused while a lens that is on cannot be built. A switch acts on this
 review only; checked, Remember saves them on Start as Settings › Lenses
@@ -440,6 +449,122 @@ The server takes no second Start or Build until `lenses.json` moves (409),
 nor `remember` on a run's own recipe; Remember checks the settings file
 before it writes anything. `/tranchant stop` refuses a review that waits,
 or whose Start is at work.
+
+**The estimate.** While a review waits, `/api/review` answers `estimate`
+(`lib/estimate.mjs`), from the project's past reviews created before it,
+the 20 whose `review.json` was last written: their `review.json` and their
+run files' `end` steps (their `findings/` for the averages below), each review's sums kept in the
+server's memory while those files stay the same (a `complete` review is
+read once). A file that is not a regular file, or past 16 MiB, leaves its
+review out; so does a `review.json` that does not parse or has no date:
+said once on stderr, never a failure. Per lens that reads a changed file,
+on or off: the median of its reviewer's tokens per file read (`files` on
+`review.json`'s `lenses`) over its last 5 runs, times the files it reads
+now, plus the median of its verifications (one per finding, its verifiers
+summed, left out when one has no whole figure) times the median of the
+findings it sent to verification over the same runs. A run is skipped when
+it read no file or its reviewer has no whole figure (none, or `partial`);
+its history stops at the first run whose prompt `hash` is not the row's
+(`hash` on a ready row of `lenses.json`; a lens not built takes its last
+run's), back to it later or not. A lens with no past run is left out.
+`estimate` is `{ recorded, summary, lenses: [ { name, tokens, perFile, runs, reviews } ] }`:
+`recorded` whether a past review recorded any figure, `summary`
+`{ tokens, reviews }`, the summary agent's median over the last 5 that have
+one (`null`: none), `reviews` the past reviews' folder names a figure comes
+from. The page sums the lenses its switches turn on (one that cannot be
+built left out) and the summary: the **Tokens** fact (`about 3.5M tokens`,
+from how many past reviews, and the lenses on with no past run, not
+counted), `~` on each row, the figure beside Start. With a figure, the
+token note past 12 reviewers goes; with none (`recorded` false, or no lens
+on with a past run), the fact says why and the note stays.
+
+**A lens's average.** The same scan gives Settings › Lenses each lens's
+average a review (`history` on `/api/settings`'s lenses, see
+[the settings file](settings.md)): over its last 10 `complete` and
+`verify` reviews of the project that no stop cut, the one the page serves
+included, since its prompt `hash` last changed (the lens as built now; one
+that cannot be built takes its last run's), its reviewer's and its
+verifications' tokens, and its findings a verifier confirmed (`verified`; a
+finding counts for the lens its `lens` names, never one read from its id).
+A review run without verification confirmed nothing and is skipped, as is
+a run whose reviewer or one of whose verifications has no whole figure, or
+a finding it landed had no verifier. A finding's file past 256 KiB, or that
+cannot be read, leaves its review out of the averages, said once on stderr;
+its tokens still count for the estimate. On the page, a lens's line divides
+its tokens by its confirmed findings (none confirmed, no ratio); a group's
+sums its lenses' averages still there, the ratio over the sums, those with
+none named and left out.
+
+## A battle review
+
+A battle runs two of the project's groups of lenses
+([groups of lenses](settings.md#groups-of-lenses)) on the same change at
+the same time, then compares what each found. It is one review: one
+envelope, one queue (`maxReviewAgents` review agents at a time, taking
+turns between A and B), one set of findings, each counting for the group of
+the lens that found it.
+
+**Planning.** `/tranchant review --battle A,B` (`battle` on the tool, not
+with `--recipe` nor `--group`), or the ready screen's **Battle review**
+tab, plans each group's lenses as a group's review plans them
+(`lib/battle.mjs`), then merges them: a lens in both groups, the same
+scope, name and paths, runs once and counts for both (`side: "both"`); the
+others run for their group (`a`, `b`), the shared ones first, then A's and
+B's in turn. **Run the shared lenses twice** (`twice`) runs a shared lens
+once per group, measuring how much its findings vary from run to run: the
+noise any comparison of two groups has to beat. A lens of A and one of B under the same name that are not
+the same lens, or a shared lens run twice, run under `<name>-a` and
+`<name>-b` (`of`, its own name, on its row), its prompt told to number its
+findings after that name, and is cleaned again under its own; a name that
+two lenses would still take refuses the battle. The two groups must differ, both be the
+project's, and each have a lens that reads the change; a battle waits for
+**Start the battle** unless `--start`, its plan's `wait` being `battle`
+(`flag` with `--no-start`).
+The plan, `lenses.json` (`battle`, each row's `side`) and, once it runs,
+`review.json` (`battle`) name it. The switches do not apply to a battle, and
+there is nothing to save: Start with `remember` answers 409.
+
+**The page.** While it waits, the **Battle review** tab shows group A and
+group B, their lenses (the shared ones dashed), what is only in A, in both,
+only in B, the reviewers it runs, and **Start the battle**, disabled while
+A and B are the same group, the battle picked is not built yet, or one of
+its lenses cannot be built; with fewer than two groups, a link to Settings
+› Lenses › Groups, and the groups' file's problem when it cannot be read. Picking A, B or
+the twice box sends Build the lenses again with `battle` in the choices;
+the **Review** tab sends it with `battle: null` and the default group. While
+it runs, the progress panel shows the shared lenses above A and B side by
+side, each with its own lenses, its verifiers, what its agents do now, its
+findings, its tokens (its lenses', the shared ones counted in both) and its
+time. The header's **A · B · Compare** switch shows one group's findings,
+the usual list, diff and detail; each finding says `A + B` (a shared
+lens's), `also B` (paired with one of B) or `only A`, and its detail says
+whether the other group found it, with **Open it in B**; a finding of no
+lens of the battle shows in both, `no group`. Switching groups clears the
+selection: a batch acts on the findings shown. **Compare** opens once the
+review is done or stopped.
+
+**Pairs.** A finding of a lens of A and one of a lens of B pair when they
+are on the same file and topic and their lines (the anchor and the marks')
+lie within three lines of each other, the closest first, each finding in
+one pair at most. **Not the same** splits a pair (`POST /api/battle/split`,
+kept in `battle.json`): each then counts for its group alone. A pair is
+settled once: while one of its findings is open and the other is not, the
+open one reads as the other, and a decision on it goes to the other (a
+refusal names the one asked). Split, it is its own again, open, said.
+
+**Compare.** A scorecard with A and B as columns: findings, found by both,
+only this group, needs review · safe to auto-fix, dropped by the verifier
+(a verifier whose finding is gone), kept by you (fixed, posted, moved to an
+issue), dropped by you, reviewers, tokens and time (from the earliest step
+of a group's agents the page has to the latest: about, an agent's oldest
+steps past its last 50 not counted), the better side marked ▲ where more or fewer is
+better. Then the findings found by both (a shared lens's, and the pairs),
+those only A and only B found, and **Copy as Markdown**, the findings'
+titles escaped to plain text.
+
+The verifier knows a battle: a finding is a duplicate only of an earlier
+one whose lens runs for every group its own lens runs for, so what both
+groups found is never merged away.
 
 ## Pause, stop and reset
 
@@ -524,11 +649,100 @@ is stopped (`failed`). It is never moved: `/api/review` lists every review
 agent, running until the `end` after its last `start` (an agent Pause now
 ended starts again in the same file); one whose session closed before it
 ended keeps showing running. A reset removes them all; a review agent's step
-that lands on a review back to `preparing` is not written.
+that lands on a review back to `preparing` is not written. A verifier's
+`start` carries its finding's `lens`, and an `end` its agent's `usage` when
+it was reported.
+
+## What the agents spend
+
+Every agent the hooks start has its tokens recorded: the summary agent,
+the reviewers, the verifiers, the discussing agents, the fixes' agents and
+the cleanings. `/api/review` sums it; the page shows the total in the
+header's chip and opens it, by agent kind and by lens, on its Tokens screen
+(`#tokens`); a finding's Run section shows each of its runs', its
+verification's and its discussion's, and their sum.
+
+**The figure.** One shape everywhere, read by
+[`format.mjs`'s `readUsage`](../skills/tranchant/scripts/lib/format.mjs):
+
+```jsonc
+"usage": {
+  "models": [
+    { "model": "claude-sonnet-5-5", "input": 18204, "output": 9310, "cacheRead": 1203551, "cacheWrite": 61877 }
+  ],
+  "usd": 0.84, // optional: /cost's estimate, never a bill
+  "hasUnknownPrice": true, // optional, as Claude Code sets it
+  "partial": true // optional: a last reading, not the agent's whole figure
+}
+```
+
+One entry per model that answered the agent, 8 at most (past 7, the rest
+summed as `other`, in a sum too), each with the four counts the API
+reports, integers from 0 to 10¹²; `model` follows the settings' rule
+(`[\w.:-]`, 80 characters at most); `usd` from 0 to 10⁹. Anything else, wherever
+it comes from (a fix's agent can write the state folder), reads as **not
+reported**: never as zero, and a sum never fails on it.
+
+**Where it comes from.** The hooks read the agent's entry in Claude Code's
+agent list (`usage`, `cost.usd`, `cost.hasUnknownPrice`) where each kind's
+end is recorded: a fix's end, normal or stopped; a review agent's `end`
+step, whichever path writes it (its turn's end, its report first, a stop, a
+reload); a cleaning's check. A stop reads the list right after TaskStop,
+before Claude Code drops the agent. Meanwhile the hooks keep each agent's
+last figure, from a live read or from its turn's end (`turn.complete`'s
+`usage`). An agent the list no longer holds at its end is written with that
+figure, `partial`; with none, it is not reported. A figure that goes down
+(`/clear` or `/resume` in the session start its count over) never replaces
+a higher one: the higher stays, `partial`. The agent list holds usage from
+Claude Code 2.1.326; on an older one, the turn's figure is the one written,
+`partial`, and an agent whose final report reaches the hooks before its
+turn's end is not reported.
+
+**Where it is kept.**
+
+| Agent | Where | Written by |
+| --- | --- | --- |
+| A summary agent, reviewer, verifier or discussing agent that ended | `usage` on its `end` step in `reviewers/<name>.jsonl` (Pause now: each agent's `end` its own) | The hooks |
+| A fix's agent that ended | `usage` on the run it claimed in `decisions.json` | `hook.mjs ended --usage <json>`, after the finding is failed and its locks released: an unsound figure only goes unreported |
+| A fix's agent that ended before its claim | `usage.json`'s `unclaimed`: `{ finding, agent, usage }` | `hook.mjs ended --usage` |
+| A cleaning that ended | `usage` in its `cleaning.json`, beside `review` when a review cleaned it again | `clean.mjs --check [--stopped] --usage <json>` |
+| An agent at work | `usage.json`'s `live`: `{ key, agent, at, usage }`, `key` its run file's name (`rv-bugs`, `vf-f-03`, `cl-…`) or `fix:<id>`, replaced at each write; a review agent's or a fix's removed at its end, a cleaning's ignored once it is checked | `hook.mjs live`, from the hooks, every ten seconds at most on the agent's steps, one write at a time; a cleaning only while a review waits for it |
+| What a reset removed | `usage.json`'s `reset`: `{ kinds: [ { kind, agents, usage } ], lenses: [ { lens, reviewer?, verifiers? } ] }`, added to at each reset | `reset.mjs`: read before it removes anything, written once it did, so a reset refused or retried counts nothing twice; best effort, it never refuses a reset |
+
+`usage.json` is `{ version: 1, live, unclaimed, reset? }`; a reset empties
+`live` and `unclaimed`, and keeps the file: the review cost what it cost.
+One that cannot be read, or of another version, is never written over: the
+totals then read as `partial`.
+
+**Attribution.** A fix's figure goes to the run its agent claimed; a
+reviewer's to its lens (`rv-<lens>`); a verifier's to its finding and to
+the lens on its `start` step (the hooks' `start`, the one with `model` and
+no tool `id`), so a finding its verifier removed keeps its verification on
+its lens; a discussing agent's to its finding. A lens the review cleans
+again (its source changed) names the review in its `cleaning.json`
+(`review`, from `clean.mjs --again --review`): the review counts it, stopped
+or failed too. A cleaning from Settings › Lenses names none, and belongs to
+no review.
+
+**What `/api/review` answers**, as `usage`:
+
+| Field | Holds |
+| --- | --- |
+| `total` | Every agent's figure summed, what resets removed included; `null` when no agent reported one |
+| `kinds` | `[ { kind, agents, usage } ]`, `kind` `summary`, `reviewers`, `verifiers`, `fixes`, `discussions` or `cleanings`; a kind with no agent left out |
+| `lenses` | `[ { lens, reviewer, verifiers, tokens } ]`, the most tokens first |
+| `findings` | `[ { id, fixes, verifier, discussion, runs, unclaimed, usage, running? } ]`: `fixes` every fix's agent summed; `runs` `[ { id, usage, running? } ]`, one per run of `decisions.json` that has an `id`; `unclaimed` the fix's agents on no run (ended or at work before their claim); `verifier`, `discussion` and `unclaimed` `{ usage, running? }`, or `null` when the finding had no such agent (`usage` `null` when its agents reported nothing); `running` while one of its agents works |
+| `reset` | `{ usage, kinds, lenses }`, or `null` with no reset |
+| `notReported`, `partial` | The agents with no figure, and with a partial one, by run name (`rv-bugs`; `rv-bugs#1` and `rv-bugs#2` once Pause now started it again; `fix:f-03:r1`; `cl-…`) |
+| `running` | Whether an agent counted still works: a live figure older than `TRANCHANT_SESSION_SINCE` is no longer live, and counts as `partial` |
+
+Each figure there is the shape above with `tokens`, its four counts summed
+over every model. A sum is `partial` when a part is, or is not reported;
+`usd` only when every part reported has one.
 
 ## `/tranchant review`
 
-`/tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json> | --group <name>] [--start | --no-start]`
+`/tranchant review [<branch> | <merge request url> | <folder>] [--recipe <recipe.json> | --group <name> | --battle <A,B>] [--start | --no-start]`
 reviews a change with no producer of your own:
 
 1. `prepare.mjs` runs in the session's folder, or in `<folder>` (a path
@@ -550,7 +764,8 @@ reviews a change with no producer of your own:
    ([the lenses you add](settings.md#the-lenses-you-add)), under each name
    the first that is on; with `--group <name>`, or the project's default
    group with none, that group's lenses whatever their switches
-   ([groups of lenses](settings.md#groups-of-lenses)). An unknown group, or
+   ([groups of lenses](settings.md#groups-of-lenses)); with `--battle A,B`,
+   both groups' ([a battle review](#a-battle-review)). An unknown group, or
    `--group` with `--recipe`, refuses the review.
 2. The hooks open it as any review file: the server starts and the page
    opens before any agent does.
@@ -711,10 +926,11 @@ locks and show no progress.
 | `GET /`               | The page.                                                                                                                                                                                                                                                                                                                                                          |
 | `GET /page.js`        | Its bundle.                                                                                                                                                                                                                                                                                                                                                        |
 | `GET /api/health`     | `{ ok: true, review: "<id>", version: "<plugin version>" }`.                                                                                                                                                                                                                                                                                                       |
-| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head, lenses? }`: `lenses` the Lenses step's `lenses.json` once it started (`{ state: "resolving" \| "ready" \| "refused" \| "waiting", group?, notes?, wait?, own?, changed?, choices?, problem?, lenses: [ { name, source, state: "resolving" \| "ready" \| "failed" \| "idle", files?, off?, offInSettings?, change?, version?, reason?, fix?, scope?, cleaning?: "running" \| "again" \| "failed" } ] }`); the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
+| `GET /api/review`     | `{ review, findings, runs, reviewers, discussions, head, lenses?, usage?, estimate?, splits? }` (`splits`, a battle review's pairs split, `[[<id>, <id>]]`; `usage`: [what the agents spend](#what-the-agents-spend); `estimate` while the review waits: [the estimate](#waiting-to-start)): `lenses` the Lenses step's `lenses.json` once it started (`{ state: "resolving" \| "ready" \| "refused" \| "waiting", group?, battle?, notes?, wait?, own?, changed?, choices?, problem?, lenses: [ { name, source, state: "resolving" \| "ready" \| "failed" \| "idle", files?, off?, offInSettings?, side?, of?, change?, version?, hash?, reason?, fix?, scope?, cleaning?: "running" \| "again" \| "failed" } ] }`); the review as it stands (its `status`, its findings in the order they landed), the decisions' `findings` map, the last 50 steps of each run in progress, the review agents (`{ name, running, outcome?, steps }`, their last 50 steps, in the order they started; the discussing agents left out), the discussions by finding id (`{ version, messages, step? }`, `step` its agent's last step while a question waits, unless that step is an `end`), and `head: { reviewed, current }` (`current` from `git rev-parse HEAD` in `project`, `null` when git cannot say; the page warns only when both are known and differ). |
 | `GET /api/account`    | `{ username, tool }`: the account `tool` posts as, `glab api user`'s `username` or `gh api user`'s `login`, run from `project` and kept once known; `null` when the tool cannot say (not installed, not logged in, an error), asked again next time. `tool` is `?tool=glab` or `?tool=gh` when the query names one (the batch bar asks for glab's: MR comments go through glab), else the settings' `postWith`, or with `auto` `gh` on a GitHub tracker and `glab` otherwise. The page names it in a post's confirmation, or says "your glab account", and in the Settings. |
 | `GET /api/settings`, `PUT /api/settings` | The user's settings file, read and written, with the recipe in force for the review's project, every lens that could run on it and the lenses being cleaned: see [the settings file](settings.md). |
-| `POST /api/review/start`, `POST /api/review/build` | `{ lenses: { <name>: true \| false }, remember, group? }`: on a review `preparing` whose `lenses.json` is `waiting` (else 409), the page's choices to `choices.json`, then `START` or `BUILD`. `group`, a group's name or `null` for every lens that is on, plans the lenses again with it; Start with a group other than the one `lenses.json` names answers 409. With `remember`, Start saves them first as Settings › Lenses does, or in the group the review runs; a settings or groups file it cannot read, a lens it cannot change, or a group left with no lens answers 409. 400 for unsound choices. |
+| `POST /api/review/start`, `POST /api/review/build` | `{ lenses: { <name>: true \| false }, remember, group?, battle? }`: on a review `preparing` whose `lenses.json` is `waiting` (else 409), the page's choices to `choices.json`, then `START` or `BUILD`. `group`, a group's name or `null` for every lens that is on, plans the lenses again with it; Start with a group other than the one `lenses.json` names answers 409. `battle`, `{ a, b, twice? }` (two different group names) or `null` back to one group, plans a battle ([a battle review](#a-battle-review)); Start with a battle other than the one `lenses.json` names, or with `remember` on a battle, answers 409, and so does a battle on a run's own recipe. With `remember`, Start saves them first as Settings › Lenses does, or in the group the review runs; a settings or groups file it cannot read, a lens it cannot change, or a group left with no lens answers 409. 400 for unsound choices. |
+| `POST /api/battle/split` | `{ pair: [<id>, <id>], split }`: on a battle review, splits the pair (`split: true`, **Not the same**) or pairs it again, in `battle.json`; answers `{ splits }`. 409 on a review that is no battle, past 500 pairs split, when `battle.json` cannot be read (never written over) or a reset removed the findings meanwhile, 404 when a finding is not in the review, 400 for an unsound body. |
 | `POST /api/review/pause`, `/resume`, `/halt`, `/reset` | The review's controls ([pause, stop and reset](#pause-stop-and-reset)), on a `/tranchant review` only. `pause` with `{ now? }` (Pause now) writes `paused` and prints `PAUSE` or `PAUSE_NOW`; `resume` removes it and prints `RESUME`; `halt` with `{ reset? }` writes `stopped` and prints `HALT`, then with `reset` `RESET`; each answers `{ review }`, its envelope, and 409 unless the review is `reviewing` and not stopped (`resume`: paused). `reset`, on a stopped review only, prints `RESET` and answers `{ ok: true }`; 409 for the same stop for 30 seconds, the hooks' reset still at work, then taken again. `reset`, and `halt` with `reset` (refused whole, nothing stopped), answer 409 while a finding is under way (`store.underWay()`), or a review agent other than a discussing one is `stuck`, naming them, and 500, with the error's code when it has one, when the review's files cannot be read (its path stays in the server's log). |
 | `GET /api/lens/prompt`, `POST /api/lens/*` | The lenses the user adds, one by one: see [the settings file's routes](settings.md#the-routes). |
 | `GET /api/tracker`    | `{ kind, web, prefix }`: where the project's issues go, from its `origin` remote, as `issue.mjs` reads it (both name the same project): `kind` `github` for `github.com`, `*.ghe.com` and `github.<domain>` hosts, `gitlab` for a host that names gitlab or any host when the review has an `mr`, and the settings' `postWith` (`glab` or `gh`) for a host neither names (one the other forge owns is refused, with the reason); an SSH endpoint (`ssh.github.com`, `altssh.gitlab.com`) or an account alias (`github.com-work`) names the forge itself. `web` the project's page; `prefix` the project's folder in its repository (the page links an issue's anchor to `<web>/blob/<ref>/<prefix><path>#L<line>`, `/-/blob/` on GitLab, `<ref>` the commit reviewed when it is the MR's head, else the branch). `{ kind: null, reason }` when there is none (no `origin`, not a url, another forge, git failing); a failure is read again on the next request. |
@@ -753,7 +969,7 @@ server's.
 | `add.mjs --review <dir> [--lens <name>] [--file <finding.json>]`                                                            | Adds one finding, from the file or stdin, to a review still `reviewing`: checked as a review's are (id, anchor, `comment` when `theirs`), written to `findings/<id>.json` with `addedAt`, and with `--lens` the lens that found it (`lens`); prints `ADDED <id>`. The same finding again is accepted silently; another one under the same id, an unsound one, or any once the review is complete prints `ADD_REFUSED <reason>` and exits 2.                                                                                                                                                                                                                                   |
 | `reset.mjs --review <dir>` | The page's Reset the review, run by the hooks once the review's agents ended: on a review `stopped`, its plan (`<state>/inbox/<id>.plan.json`) read first, then the review back to `preparing`, its summary and strengths blank, and all its findings, their decisions, runs and discussions and the review agents' run files removed; the plan written back with `wait: "reset"`, and `choices.json`, unless the page wrote one, turning on the lenses the review ran. Prints `RESET <plan file>`. `RESET_REFUSED <reason>`, exit 2, removing nothing: not stopped, a finding a fix, a post or an issue holds (`queued`, `working`, `asking`) or whose discussion waits for its answer (named), or no sound plan. The plan and the choices are written before anything is removed, and put back if the store refuses. |
 | `complete.mjs --review <dir>`                                                                                               | Sets `status` to `complete`; prints `COMPLETE`. On a review complete already, `COMPLETE_REFUSED <reason>`, exit 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `prepare.mjs [<branch> \| <mr url>] [--recipe <file> \| --group <name>] [--start \| --no-start]` | Run from the session's folder: writes the envelope of `/tranchant review`, `preparing`, to `<state>/inbox/<id>.json` and prints `INBOX <file>`, then the plan, `{ recipe, lenses }`, the lenses the change touches: the recipe in force's ([where it comes from](#where-the-recipe-comes-from)) and, unless `--recipe`, those the user added, under each name the first that is on (the settings' `disabledLenses` turn a recipe's lens off, `lensModels` set its model; one `otherwise` lens at most, the first); a settings file it cannot read is said on stderr and read as none), to `<id>.plan.json` and prints `PLAN <file>`. `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying (or every one turned off), a merge request glab cannot read (glab's reason), both `--start` and `--no-start`. A review that waits ([waiting to start](#waiting-to-start)) plans `others` too, and is refused only when no lens could read the change. With `--group`, or the project's default group, the plan runs that group's lenses, whatever their switches, and names it (`group`), with its `notes`, each also on stderr as `group: <note>`; an unknown group, a groups file it cannot read with `--group`, or `--group` with `--recipe` is refused; a groups file it cannot read without `--group` is said on stderr (`groups: …`) and read as none. |
+| `prepare.mjs [<branch> \| <mr url>] [--recipe <file> \| --group <name> \| --battle <A,B>] [--start \| --no-start]` | Run from the session's folder: writes the envelope of `/tranchant review`, `preparing`, to `<state>/inbox/<id>.json` and prints `INBOX <file>`, then the plan, `{ recipe, lenses }`, the lenses the change touches: the recipe in force's ([where it comes from](#where-the-recipe-comes-from)) and, unless `--recipe`, those the user added, under each name the first that is on (the settings' `disabledLenses` turn a recipe's lens off, `lensModels` set its model; one `otherwise` lens at most, the first); a settings file it cannot read is said on stderr and read as none), to `<id>.plan.json` and prints `PLAN <file>`. `REVIEW_REFUSED <reason>`, exit 2: not a repository, an unknown branch, no change, a recipe unsound or none of its lenses applying (or every one turned off), a merge request glab cannot read (glab's reason), both `--start` and `--no-start`. A review that waits ([waiting to start](#waiting-to-start)) plans `others` too, and is refused only when no lens could read the change. With `--group`, or the project's default group, the plan runs that group's lenses, whatever their switches, and names it (`group`), with its `notes`, each also on stderr as `group: <note>`; an unknown group, a groups file it cannot read with `--group`, or `--group` with `--recipe` is refused; a groups file it cannot read without `--group` is said on stderr (`groups: …`) and read as none. With `--battle A,B`, both groups' lenses, merged ([a battle review](#a-battle-review)), the plan's `battle` and `wait: "battle"` unless `--start` (`flag` with `--no-start`); refused with `--recipe` or `--group`, for the same group twice, an unknown one, a groups file it cannot read, or a group with no lens that reads the change. |
 | `lenses.mjs --review <dir> --plan <file> [--check \| --replan \| --start]` | The Lenses step, once the page is open. With `--check`, first: each added lens's source hashed again; one changed since its last cleaning, and not by the change under review, prints `STALE {name, scope}`, its row `cleaning: "running"`. Without: builds each lens of the plan, writing `lenses.json` as it goes (an added lens's row with its `scope` and, when its source changed, `cleaning`: `again`, `failed` or `held`, with the reason); every lens built, the review becomes `reviewing` with its `lenses` and it prints one `LENS <json>` per lens (`{ name, prompt, paths, model?, topics? }`, `prompt` the built file, `model` on Auto-detect its source's frontmatter's or `inherit`, the session's), each ready row naming the model its reviewer runs on (`model`, absent the session's; `modelFrom`: `forced`, `auto`, `lens` or `reviewers`; `autoWhy` on Auto-detect's fallback: `none`, `inherit`, `foreign`, `unreadable`, or `held` when the change under review edits an added lens's source). A source that cannot be resolved makes the review `refused` and prints `REVIEW_REFUSED lens <name> (<source>): <reason>; <fix>`, exit 2, no `LENS` line. A plan that waits prints `WAITING` instead ([waiting to start](#waiting-to-start)); `--replan` and `--start` make the plan again, the page's `choices.json` applied. |
 | `clean.mjs [--project <root>] --find \| --prepare <source> --to <global \| local> [--name <lens>] \| --again <name> --scope <global \| local> \| --start <id> \| --check <folder> [--stopped]` | A lens's cleaning ([`/tranchant import`](#tranchant-import)), for the git repository of `--project`, else of the session's folder. `--find`: `CANDIDATE <path>` per `.claude/skills/*review*` and `.claude/agents/*review*` of the project, else `NO_CANDIDATE`. `--prepare`, `--again` and `--start` print `CLEANING <json>`, what the agent is given (`{ id, dir, project, name, scope, again, source, file, folder, version?, rules?, lens, report }`). `--check`: what the agent wrote checked and the lens built; prints `CLEANED <ready \| added> <scope> <name>` or `CLEAN_FAILED <reason>`; `--stopped` when the agent was stopped or never started, which records no failure on a lens's source. `CLEAN_REFUSED <reason>`, exit 2. |
 | `summarize.mjs` | The summary agent's: `{ "summary": "<Markdown>", "strengths": ["…"] }` on stdin replaces the review's `summary` (non-blank, 12,000 characters at most) and `strengths` (10 at most, 500 characters each) while it is `reviewing`; prints `SUMMARIZED`. An unsound one, or any once the review is complete, prints `SUMMARY_REFUSED <reason>`, exit 2. |

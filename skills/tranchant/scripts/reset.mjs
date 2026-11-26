@@ -8,13 +8,17 @@
 // `RESET <plan file>`: the hooks run `lenses.mjs --check --replan` on it, and
 // the page shows Ready to start the review. `RESET_REFUSED <reason>`, exit 2,
 // nothing removed: not stopped, a fix, a post, an issue or an answer still
-// under way, or no sound plan (a review opened from a file).
+// under way, or no sound plan (a review opened from a file). What the removed
+// agents spent, read first, goes to usage.json's `reset` once they are gone,
+// summed by kind and lens: the review cost what it cost. That count is best
+// effort: it never refuses nor changes a reset.
 import { existsSync } from 'node:fs'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { oneLine } from './lib/format.mjs'
 import { STATE_ROOT, findReview } from './lib/project.mjs'
 import { StoreRefusal, busyText, createStore } from './lib/store.mjs'
+import { addReset, removedUsage } from './lib/usage.mjs'
 
 /**
  * @param {string} reason
@@ -76,6 +80,11 @@ try {
       lenses: Object.fromEntries((review.lenses ?? []).map((lens) => [lens.name, true])),
       remember: false,
     })
+  // Read before anything goes: once the runs are removed, nothing says what they spent.
+  const removed = await removedUsage(dir).catch((error) => {
+    console.error(`reset.mjs: what the agents spent is not counted: ${String(error)}`)
+    return undefined
+  })
   try {
     await store.reset()
   } catch (error) {
@@ -86,6 +95,9 @@ try {
     }
     throw error
   }
+  await addReset(dir, removed).catch((error) =>
+    console.error(`reset.mjs: what the agents spent is not kept: ${String(error)}`),
+  )
   console.log(`RESET ${planFile}`)
 } catch (error) {
   if (!(error instanceof StoreRefusal)) throw error

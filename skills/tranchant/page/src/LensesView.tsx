@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   fetchLensPrompt,
   type LensDone,
+  type LensMatch,
   type LensRoute,
   type SettingsChange,
 } from './api'
@@ -18,6 +19,7 @@ import {
   isGlob,
   nameProblem,
   noteRows,
+  PickedMatches,
   shortName,
   useGlob,
   useInside,
@@ -36,6 +38,7 @@ import {
   type SettingsPayload,
   withSetting,
 } from './settings'
+import { lensHistoryOf } from './tokens'
 
 interface Props {
   /** undefined while the settings load, or when the server cannot answer them. */
@@ -72,10 +75,8 @@ const SCOPE_HELP: Record<Added, string> = {
 }
 
 const SCOPE_HELP_MANY: Record<Added, string> = {
-  local:
-    'This project: on this machine only, never in the repository. The same for every match.',
-  global:
-    'Global: they run on every project on this machine, never in a repository. The same for every match.',
+  local: 'This project: on this machine only, never in the repository.',
+  global: 'Global: they run on every project on this machine, never in a repository.',
 }
 
 /** Whether two lists hold the same texts, in the same order. */
@@ -1089,9 +1090,13 @@ function AddLens({
   const [source, setSource] = useState('')
   const [browsing, setBrowsing] = useState(false)
   const [picked, setPicked] = useState<Picked>()
+  // Several sources checked in Browse: one row each, in place of Source.
+  const [batch, setBatch] = useState<Picked[]>()
+  // Checked in Browse and not added yet: Browse closed and opened again finds them.
+  const [draft, setDraft] = useState<Picked[]>([])
   // Undefined until typed in, and again once the source changes: the field shows the source's name.
   const [name, setName] = useState<string>()
-  const [scope, setScope] = useState<Added>('local')
+  const [scope, setScope] = useState<Added>('global')
   const [busy, setBusy] = useState(false)
   const typed = source.trim()
   const glob = isGlob(typed)
@@ -1108,14 +1113,41 @@ function AddLens({
       : undefined
   // Its read found none: one source, whose cleaning agent looks.
   const empty = inside !== undefined && !inside.starts.length
-  const many = glob || (inside !== undefined && !empty)
-  const entries = glob
-    ? globLook.state === 'done'
-      ? globLook.answer.matches
-      : []
-    : (inside?.starts ?? [])
-  const pick = usePick(entries, glob ? `glob:${typed}` : `inside:${typed}`)
-  const rows = noteRows(pick.rows, scope, lenses)
+  const many = Boolean(batch) || glob || (inside !== undefined && !empty)
+  const entries = batch
+    ? batch.map((one): LensMatch => ({
+        source: one.source,
+        name: one.name,
+        ...(one.kind && { kind: one.kind }),
+        ...(one.already && { already: one.already }),
+      }))
+    : glob
+      ? globLook.state === 'done'
+        ? globLook.answer.matches
+        : []
+      : (inside?.starts ?? [])
+  const pick = usePick(
+    entries,
+    batch
+      ? `browse:${batch.map((one) => one.source).join('\n')}`
+      : glob
+        ? `glob:${typed}`
+        : `inside:${typed}`,
+  )
+  const off = new Set(batch?.filter((one) => one.off).map((one) => one.source))
+  // A source of a plugin turned off says so, as a single pick's help does, unless its row says more.
+  const rows = noteRows(pick.rows, scope, lenses).map((row) =>
+    !row.note && off.has(row.source)
+      ? {
+          ...row,
+          note: {
+            tag: 'plugin off',
+            tone: 'warn' as const,
+            text: 'Its plugin is turned off for this project: the lens would not build until it is turned on (/plugin).',
+          },
+        }
+      : row,
+  )
   const checked = rows.filter((row) => row.checked)
   const blocked = checked.some((row) => row.note?.name)
   const derived =
@@ -1152,7 +1184,7 @@ function AddLens({
                   source: row.source,
                   name: row.name.trim(),
                 })),
-                from: typed,
+                ...(!batch && { from: typed }),
               }
             : {
                 source: source.trim(),
@@ -1170,24 +1202,32 @@ function AddLens({
         id="tr-lns-add-source"
         label="Source"
         help={
-          picked
-            ? pickedHelp(picked)
-            : "A reviewer: a plugin's skill, agent or command, or a path to one or to a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. Browse lists what is installed and the files Tranchant may list. A source that starts the agents it names lists them, and each one can become a lens. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out; a whole review process, it lists the reviewers it starts, for you to pick."
+          batch
+            ? undefined
+            : picked
+              ? pickedHelp(picked)
+              : "A reviewer: a plugin's skill, agent or command, or a path to one or to a checklist; a glob (*, ?) adds every file it matches, from the project's root or ~/. Browse lists what is installed and the files Tranchant may list: check several there to add them at once. A source that starts the agents it names lists them, and each one can become a lens. An agent cleans each one first: it keeps its review and leaves its orchestration and its output out; a whole review process, it lists the reviewers it starts, for you to pick."
         }
       >
         <div className="tr-source-row">
-          <input
-            id="tr-lns-add-source"
-            className="tr-input tr-text"
-            value={source}
-            placeholder="plugin:name, a path, or a glob"
-            required
-            onChange={(event) => {
-              setSource(event.currentTarget.value)
-              setPicked(undefined)
-              setName(undefined)
-            }}
-          />
+          {batch ? (
+            <span className="tr-source-many" id="tr-lns-add-source" role="status">
+              <strong>{batch.length} sources</strong> picked in Browse
+            </span>
+          ) : (
+            <input
+              id="tr-lns-add-source"
+              className="tr-input tr-text"
+              value={source}
+              placeholder="plugin:name, a path, or a glob"
+              required
+              onChange={(event) => {
+                setSource(event.currentTarget.value)
+                setPicked(undefined)
+                setName(undefined)
+              }}
+            />
+          )}
           <button
             type="button"
             className="tr-btn"
@@ -1211,13 +1251,47 @@ function AddLens({
             </svg>
             {browsing ? 'Close' : 'Browse…'}
           </button>
+          {batch && (
+            <button
+              type="button"
+              className="tr-btn tr-btn--link"
+              onClick={() => {
+                setBatch(undefined)
+                setBrowsing(false)
+              }}
+            >
+              Type a source instead
+            </button>
+          )}
         </div>
         {browsing && (
           <SourcePicker
             id="tr-lns-add-picker"
+            checked={
+              batch
+                ? batch.filter((one) => checked.some((row) => row.source === one.source))
+                : draft
+            }
+            onChecked={batch ? undefined : setDraft}
             onPick={(one) => {
+              setBatch(undefined)
+              setDraft([])
               setSource(one.source)
               setPicked(one)
+              setName(undefined)
+              setBrowsing(false)
+            }}
+            onAdd={(several) => {
+              setDraft([])
+              // A row renamed under Picked keeps its name when Browse adds more.
+              setBatch(
+                several.map((one) => ({
+                  ...one,
+                  name: rows.find((row) => row.source === one.source)?.name ?? one.name,
+                })),
+              )
+              setSource('')
+              setPicked(undefined)
               setName(undefined)
               setBrowsing(false)
             }}
@@ -1260,13 +1334,27 @@ function AddLens({
             onChange={setScope}
           />
           <span className="tr-field-help">
-            {(many ? SCOPE_HELP_MANY : SCOPE_HELP)[scope]}
+            {many
+              ? `${SCOPE_HELP_MANY[scope]} The same for every ${batch ? 'one picked' : 'match'}.`
+              : SCOPE_HELP[scope]}
           </span>
         </div>
       </div>
       {reading && <ReadingSource source={typed} />}
       {!glob && insideLook.state === 'error' && (
         <InsideUnread source={typed} error={insideLook.error} />
+      )}
+      {batch && (
+        <PickedMatches
+          rows={rows}
+          slots={pick.slots}
+          frozen={frozen}
+          onToggle={pick.toggle}
+          onSetChecked={pick.setChecked}
+          onRename={pick.rename}
+          onCheckAll={pick.checkAll}
+          onCheckNone={pick.checkNone}
+        />
       )}
       {glob && (
         <GlobMatches
@@ -1298,7 +1386,7 @@ function AddLens({
         <button
           type="submit"
           className="tr-btn tr-btn--primary"
-          disabled={frozen || busy || !typed || !ready}
+          disabled={frozen || busy || !(typed || batch) || !ready}
         >
           {empty
             ? 'Ask an agent to look'
@@ -1780,6 +1868,7 @@ function LensRow({
   const name = (open && draft?.trim()) || lens.name
   const id = `tr-lns-${lens.scope}-${lens.name}`
   const model = modelFact(lens, models)
+  const history = lensHistoryOf(lens.history)
   return (
     <li className={`tr-lns-item${open ? ' tr-lns-item--open' : ''}`}>
       <div className="tr-lns-row">
@@ -1848,6 +1937,11 @@ function LensRow({
         )}
         {!lens.problem && lens.stale === 'failed' && lens.failedCleaning && (
           <p className="tr-lns-reason">{lens.failedCleaning.reason}</p>
+        )}
+        {history && (
+          <p className="tr-lns-history" title={history.title}>
+            {history.text}
+          </p>
         )}
       </div>
       {open && (

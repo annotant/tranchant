@@ -55,7 +55,9 @@ pattern, read how annotant does it.
   recipe in force and builds its lenses from their sources;
   `lib/userlens.mjs` owns the lenses the user adds (global and local, in
   `~/.config/tranchant/`) and the set they make with the recipe's;
-  `lib/groups.mjs` the project's groups of lenses (`--group`);
+  `lib/groups.mjs` the project's groups of lenses (`--group`),
+  `lib/battle.mjs` a battle review of two of them (`--battle`) and its
+  pairs split;
   `lib/cleaning.mjs` owns their cleanings, `lib/reviewers.mjs` the
   reviewers a cleaning agent found a whole process starts, checked;
   `lib/glob.mjs` the files a
@@ -64,7 +66,10 @@ pattern, read how annotant does it.
   picker lists (the plugins', the `.claude` folders', a folder of the
   allowed roots: names only); `lib/plan.mjs` plans the
   lenses a review runs on the change (`prepare.mjs`, and `lenses.mjs` again
-  for a review waiting to start).
+  for a review waiting to start); `lib/usage.mjs` owns `usage.json` and sums
+  what the review's agents spent (`/api/review`'s `usage`), each figure read
+  through `lib/format.mjs`'s `readUsage`; `lib/estimate.mjs` what a review
+  waiting to start should spend, from the project's past reviews.
 - `skills/tranchant/page/src/`: the page (React, TypeScript), bundled by
   esbuild into `page/dist/`, which is git-ignored: the Release workflow
   publishes it on the `stable` branch users install from.

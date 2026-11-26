@@ -5,6 +5,7 @@ import type { LensesProgress, StartChoices } from '../src/domain'
 import { ReadyCenter } from '../src/LensesStep'
 import { LensesView } from '../src/LensesView'
 import type { GroupsPayload, LensEntry } from '../src/settings'
+import { groupHistoryOf, lensHistoryOf } from '../src/tokens'
 import { settingsPayload } from './fixture'
 
 const cleaned = {
@@ -54,7 +55,11 @@ const GROUPS: GroupsPayload = {
   ],
 }
 
-function renderLenses(focus?: string, groups: GroupsPayload = GROUPS) {
+function renderLenses(
+  focus?: string,
+  groups: GroupsPayload = GROUPS,
+  lenses: LensEntry[] = LENSES,
+) {
   const settings = settingsPayload(
     {},
     {
@@ -64,7 +69,7 @@ function renderLenses(focus?: string, groups: GroupsPayload = GROUPS) {
           global: '/me/.config/tranchant/lenses',
           local: '/me/.config/tranchant/projects/3c1e/lenses',
         },
-        lenses: LENSES,
+        lenses,
       },
       cleanings: [],
       groups,
@@ -290,4 +295,102 @@ test('the ready screen names the group, its lenses off in the settings, and a gr
     true,
   )
   expect(screen.getByText('Building the lenses of this group…')).toBeTruthy()
+})
+
+/** The lenses with a history: money and bugs; the others none. */
+const WITH_HISTORY = LENSES.map((one) =>
+  one.name === 'money'
+    ? { ...one, history: { tokens: 140_000, confirmed: 0.8, runs: 10 } }
+    : one.name === 'bugs' && one.scope === 'recipe'
+      ? { ...one, history: { tokens: 300_000, confirmed: 1.3, runs: 4 } }
+      : one,
+)
+
+test("a lens's average shows under its row, a lens with no history shows none", () => {
+  renderLenses(undefined, GROUPS, WITH_HISTORY)
+  const money = itemOf(screen.getByText('money'))
+  const line = within(money).getByText(
+    '~140k tokens · 0.8 confirmed findings a review · ~175k tokens per confirmed finding',
+  )
+  expect(line.className).toBe('tr-lns-history')
+  expect(line.getAttribute('title')).toMatch(/last 10 complete reviews in this project/)
+  expect(within(itemOf(screen.getByText('sql'))).queryByText(/ a review/)).toBeNull()
+  expect(document.querySelectorAll('.tr-lns-history')).toHaveLength(2)
+})
+
+test("a group's average sums its lenses', those with none said; a group with none shows none", () => {
+  renderLenses('groups', GROUPS, WITH_HISTORY)
+  const list = within(screen.getByRole('list', { name: 'Groups' }))
+  const backend = itemOf(list.getByText('backend'))
+  expect(
+    within(backend).getByText(
+      '~440k tokens · 2.1 confirmed findings a review · ~210k tokens per confirmed finding · sql has no history yet, not counted',
+    ),
+  ).toBeTruthy()
+  const frontend = itemOf(list.getByText('frontend'))
+  expect(within(frontend).queryByText(/ a review/)).toBeNull()
+})
+
+test('a line says findings, one when exactly one, its tokens per confirmed finding when one is, and names the lenses with no history', () => {
+  const one = { tokens: 100_000, confirmed: 1, runs: 2 }
+  expect(lensHistoryOf(one)?.text).toBe(
+    '~100k tokens · 1 confirmed finding a review · ~100k tokens per confirmed finding',
+  )
+  expect(lensHistoryOf({ ...one, confirmed: 0 })?.text).toBe(
+    '~100k tokens · 0 confirmed findings a review',
+  )
+  expect(
+    groupHistoryOf([{ name: 'bugs', history: one }, { name: 'docs' }, { name: 'tests' }])
+      ?.text,
+  ).toBe(
+    '~100k tokens · 1 confirmed finding a review · ~100k tokens per confirmed finding · docs and tests have no history yet, not counted',
+  )
+  expect(
+    groupHistoryOf([
+      { name: 'bugs', history: one },
+      ...['a', 'b', 'c', 'd'].map((name) => ({ name })),
+    ])?.text,
+  ).toBe(
+    '~100k tokens · 1 confirmed finding a review · ~100k tokens per confirmed finding · 4 lenses have no history yet, not counted',
+  )
+  expect(groupHistoryOf([{ name: 'docs' }])).toBeUndefined()
+})
+
+test('with no history at all, no lens and no group shows an average', () => {
+  renderLenses()
+  expect(document.querySelectorAll('.tr-lns-history')).toHaveLength(0)
+  fireEvent.click(tab(/^Groups/))
+  expect(document.querySelectorAll('.tr-lns-history')).toHaveLength(0)
+})
+
+test("a group's line follows its draft while edited, and reads each member's own scope", () => {
+  const lenses = WITH_HISTORY.map((one) =>
+    one.name === 'conventions' && one.scope === 'local'
+      ? { ...one, history: { tokens: 50_000, confirmed: 0.5, runs: 3 } }
+      : one,
+  )
+  const groups: GroupsPayload = {
+    ...GROUPS,
+    list: [
+      ...GROUPS.list,
+      // The built-in conventions: the project's has the history, not this one.
+      { name: 'style', lenses: [{ scope: 'recipe', name: 'conventions' }] },
+    ],
+  }
+  renderLenses('group:backend', groups, lenses)
+  const list = within(screen.getByRole('list', { name: 'Groups' }))
+  expect(within(itemOf(list.getByText('style'))).queryByText(/ a review/)).toBeNull()
+  const editor = within(screen.getByRole('region', { name: 'backend' }))
+  const bugs = within(editor.getByRole('group', { name: 'Built-in' }))
+    .getByText('bugs')
+    .closest('label')
+    ?.querySelector('input')
+  if (!bugs) throw new Error('no checkbox for bugs')
+  fireEvent.click(bugs)
+  const backend = itemOf(editor.getByLabelText('Name'))
+  expect(
+    within(backend).getByText(
+      '~140k tokens · 0.8 confirmed findings a review · ~175k tokens per confirmed finding · sql has no history yet, not counted',
+    ),
+  ).toBeTruthy()
 })

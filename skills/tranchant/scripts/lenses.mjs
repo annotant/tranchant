@@ -31,8 +31,13 @@
 // The plan's group (prepare.mjs) is in lenses.json from the first write, and
 // in review.json once it runs; a choice of another group (`group` in the
 // choices, `null` for every lens that is on) makes the plan again with it.
+// A battle's plan (prepare.mjs --battle, or `battle` in the choices: the
+// page's Battle review tab; `null` back to one group) runs its two groups'
+// lenses, each row with its `side`; the switches do not apply to it. Its
+// groups and each lens's side are in lenses.json, and in review.json once it
+// runs (`battle`).
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -49,6 +54,7 @@ import {
   readRecipe,
   storeLens,
 } from './lib/lens.mjs'
+import { BattleRefusal, battleOf, planBattle } from './lib/battle.mjs'
 import { forgetRemoved, groupNotes, readGroups } from './lib/groups.mjs'
 import { PlanRefusal, planLenses } from './lib/plan.mjs'
 import { findReview } from './lib/project.mjs'
@@ -75,8 +81,11 @@ import {
  * @property {number} [files] In a waiting review: the changed files it reads.
  * @property {true} [off] In a waiting review: off in the settings; in a group's, not one of the group.
  * @property {true} [offInSettings] In a group's review: off in the settings, run by the group.
+ * @property {import('./lib/battle.mjs').Side} [side] In a battle: the group it runs for, `both` for a shared lens run once.
+ * @property {string} [of] In a battle: the lens's own name, when it runs under another (`<name>-a`).
  * @property {'unchanged' | 'updated' | 'new'} [change] With `ready`: against the project's previous review.
  * @property {string} [version]
+ * @property {string} [hash] With `ready`: its built prompt's, as review.json records it: the estimate's history starts over where it changes.
  * @property {string} [reason] With `failed`; with `cleaning: 'failed'`, why its last version runs.
  * @property {string} [fix] With `failed`: what makes it build.
  * @property {'global' | 'local'} [scope] A lens the user added.
@@ -151,8 +160,9 @@ if (abandoned !== undefined) await stepFailed(abandoned || 'the step did not run
 const review = await store.readReview().catch((error) => stepFailed(message(error)))
 /**
  * @type {{ recipe: RecipeRef, lenses: PlannedLens[], own?: true, group?: string,
+ *   battle?: import('./lib/battle.mjs').Battle,
  *   notes?: string[], removed?: import('./lib/groups.mjs').Member[],
- *   wait?: 'setting' | 'flag' | 'reset', changed?: number, others?: PlannedLens[] }}
+ *   wait?: 'setting' | 'flag' | 'reset' | 'battle', changed?: number, others?: PlannedLens[] }}
  */
 let plan = await readFile(String(planFile), 'utf8')
   .then((text) => JSON.parse(text))
@@ -191,6 +201,7 @@ async function writeProgress(state, rows) {
     }
   const named = {
     ...(plan.group && { group: plan.group }),
+    ...(plan.battle && { battle: plan.battle }),
     ...(plan.notes?.length && { notes: plan.notes }),
   }
   try {
@@ -245,8 +256,9 @@ const range =
 /**
  * The page's choices for a waiting review, by lens name: on or off for this
  * review, whatever the settings say; whether Start saved them; and the group
- * picked, when one was (`null`: every lens that is on).
- * @type {{ lenses: Record<string, boolean>, remember: boolean, group?: string | null } | undefined}
+ * picked, when one was (`null`: every lens that is on); the battle picked,
+ * when one was (`null`: back to one group).
+ * @type {{ lenses: Record<string, boolean>, remember: boolean, group?: string | null, battle?: import('./lib/battle.mjs').Battle | null } | undefined}
  */
 let choices
 /** Why a waiting review's plan could not be made again: the page says it, and nothing starts. */
@@ -271,6 +283,9 @@ if (plan.wait) {
         (typeof read.group === 'string' && LENS_NAME.test(read.group))) && {
         group: read.group,
       }),
+      ...(read.battle === null
+        ? { battle: null }
+        : battleOf(read.battle) && { battle: battleOf(read.battle) }),
     }
 }
 
@@ -301,6 +316,13 @@ async function replan() {
     if (error instanceof RecipeRefusal) return `recipe: ${error.message}`
     throw error
   }
+  // The battle picked on the page, else the plan's; a run's own recipe has none.
+  const battle = plan.own
+    ? undefined
+    : choices && choices.battle !== undefined
+      ? (choices.battle ?? undefined)
+      : plan.battle
+  if (battle) return replanBattle(values, recipeLenses, battle)
   // The group picked on the page, else the plan's; a run's own recipe has none.
   const name = plan.own
     ? undefined
@@ -333,7 +355,13 @@ async function replan() {
     console.error(`lens ${one.name} (${one.scope}) not run: ${oneLine(one.problem)}`)
   // Read again, never consumed: the removed lenses are forgotten once a review of the group runs.
   const notes = group ? groupNotes(group.name, group.removed ?? [], planned.missing) : []
-  const { group: _group, notes: _notes, removed: _removed, ...rest } = plan
+  const {
+    group: _group,
+    notes: _notes,
+    removed: _removed,
+    battle: _battle,
+    ...rest
+  } = plan
   const next = {
     ...rest,
     ...(group && { group: group.name }),
@@ -348,11 +376,54 @@ async function replan() {
   return ''
 }
 
-/** A waiting review's lens is on unless the settings or the page's choices turn it off. */
+/**
+ * A battle's plan made again, both its groups as they stand. Answers why it
+ * could not be, else ''.
+ * @param {import('./lib/settings.mjs').Values} values
+ * @param {LensSpec[]} recipeLenses
+ * @param {import('./lib/battle.mjs').Battle} battle
+ */
+async function replanBattle(values, recipeLenses, battle) {
+  const read = await readGroups(review.project)
+  if (read.problem) return `groups: ${read.problem}`
+  let planned
+  try {
+    planned = await planBattle({
+      project: review.project,
+      range,
+      recipe: recipeLenses,
+      values,
+      groups: read.groups.groups,
+      battle,
+    })
+  } catch (error) {
+    if (error instanceof BattleRefusal || error instanceof PlanRefusal)
+      return error.message
+    throw error
+  }
+  for (const one of planned.problems)
+    console.error(`lens ${one.name} (${one.scope}) not run: ${oneLine(one.problem)}`)
+  const { group: _group, notes: _notes, removed: _removed, battle: _was, ...rest } = plan
+  const next = {
+    ...rest,
+    battle,
+    ...(planned.notes.length && { notes: planned.notes }),
+    lenses: planned.lenses,
+    others: [],
+    changed: planned.changed.length,
+  }
+  await writeFile(String(planFile), `${JSON.stringify(next, null, 2)}\n`)
+  plan = next
+  return ''
+}
+
+/** A waiting review's lens is on unless the settings or the page's choices turn it off; a battle's always is. */
 const isOn = (/** @type {PlannedLens} */ lens) =>
-  choices && Object.hasOwn(choices.lenses, lens.name)
-    ? choices.lenses[lens.name]
-    : !lens.off
+  plan.battle
+    ? true
+    : choices && Object.hasOwn(choices.lenses, lens.name)
+      ? choices.lenses[lens.name]
+      : !lens.off
 /** The lenses this run builds, and those its rows show: every one the page can turn on, while it waits. */
 const shown = plan.wait ? [...plan.lenses, ...(plan.others ?? [])] : plan.lenses
 const runs = (/** @type {PlannedLens} */ lens) =>
@@ -367,6 +438,8 @@ const rows = shown.map((lens) => ({
   ...(plan.wait && { files: lens.files ?? 0 }),
   ...(plan.wait && lens.off && { off: true }),
   ...(lens.offInSettings && { offInSettings: true }),
+  ...(lens.side && { side: lens.side }),
+  ...(lens.of && { of: lens.of }),
 }))
 
 /**
@@ -428,7 +501,11 @@ if (process.argv.includes('--check')) {
     const now = await standing(lens).catch((error) => stepFailed(message(error)))
     if (now?.now !== 'stale' || now.held || !lens.added) continue
     Object.assign(rows[i] ?? {}, { cleaning: 'running' })
-    stale.push({ name: lens.name, scope: lens.added.scope })
+    // A battle's lens run under another name is cleaned under its own, once.
+    const name = lens.of ?? lens.name
+    const scope = lens.added.scope
+    if (!stale.some((one) => one.name === name && one.scope === scope))
+      stale.push({ name, scope })
   }
   await writeProgress('resolving', rows)
   for (const one of stale) console.log(`STALE ${JSON.stringify(one)}`)
@@ -471,6 +548,20 @@ async function modelOf(lens, built) {
   return { line, row }
 }
 
+/**
+ * A battle's lens run under another name than its own (`of`): its prompt
+ * says its findings' ids start with the name it runs as, since a lens's own
+ * prompt may name its own prefix, and two reviewers would add the same ids.
+ * @param {PlannedLens} lens
+ * @param {{ text: string, hash: string, record: LensRecord }} made
+ */
+function renamed(lens, made) {
+  if (!lens.of) return made
+  const text = `${made.text}\n## This review runs this lens as ${lens.name}\n\nIn this battle review the lens runs as \`${lens.name}\`, its LENS: number its findings \`${lens.name}-1\`, \`${lens.name}-2\`…, never \`${lens.of}-<n>\`, whatever the text above says, and pass \`--lens ${lens.name}\` to add.mjs.\n`
+  const hash = createHash('sha256').update(text).digest('hex')
+  return { text, hash, record: { ...made.record, hash } }
+}
+
 const where = {
   origin: originOf(plan.recipe),
   folder: folderOf(plan.recipe),
@@ -486,7 +577,7 @@ for (const [i, lens] of shown.entries()) {
   try {
     // An added lens's paths are the project's, never the recipe's folder.
     const made = await buildLens(lens, lens.added ? whereOf(review.project) : where)
-    const { text, hash, record } = made
+    const { text, hash, record } = renamed(lens, made)
     const { file } = await storeLens(text, hash)
     const model = await modelOf(lens, made)
     const before = previous?.get(lens.name)
@@ -495,6 +586,7 @@ for (const [i, lens] of shown.entries()) {
     Object.assign(row, {
       state: 'ready',
       source: record.source,
+      hash,
       change: before === undefined ? 'new' : before === hash ? 'unchanged' : 'updated',
       ...(record.version && { version: record.version }),
       ...model.row,
@@ -512,7 +604,10 @@ for (const [i, lens] of shown.entries()) {
               ),
             }),
     })
-    records.push(record)
+    records.push({
+      ...record,
+      ...(Number.isSafeInteger(lens.files) && { files: lens.files }),
+    })
     built.push({
       name: lens.name,
       prompt: file,
@@ -552,8 +647,19 @@ if (failed) {
     fix: failed.fix ?? RETRY,
   })
 }
+// Each lens that runs, and the group it runs for: the page splits the findings by it.
+const battle = plan.battle && {
+  ...plan.battle,
+  lenses: Object.fromEntries(
+    shown.flatMap((lens) =>
+      lens.side && built.some((one) => one.name === lens.name)
+        ? [[lens.name, lens.side]]
+        : [],
+    ),
+  ),
+}
 await store
-  .prepared(records, plan.group)
+  .prepared(records, plan.group, battle)
   .catch((error) =>
     error instanceof StoreRefusal ? refuse(error.message) : stepFailed(message(error)),
   )

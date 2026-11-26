@@ -189,6 +189,13 @@ export const postStart = (choices: StartChoices, build = false) =>
     body: JSON.stringify(choices),
   })
 
+/** A battle's pair split (Not the same), or paired again. */
+export const postSplit = (pair: [string, string], split: boolean) =>
+  request<{ splits: [string, string][] }>('/api/battle/split', {
+    method: 'POST',
+    body: JSON.stringify({ pair, split }),
+  })
+
 /** The review's controls: its agents, never its fixes, discussions or posts. */
 export const postPause = (now = false) =>
   request<unknown>('/api/review/pause', { method: 'POST', body: JSON.stringify({ now }) })

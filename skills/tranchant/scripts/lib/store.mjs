@@ -772,23 +772,25 @@ export function createStore(dir) {
 
     /**
      * The Lenses step built every lens: the review runs, `reviewing`, and
-     * records the lenses it runs, and the group they are, when one is.
-     * Refused unless it is `preparing`.
+     * records the lenses it runs, and the group they are, when one is, or
+     * the battle. Refused unless it is `preparing`.
      * @param {import('./format.mjs').LensRecord[]} lenses
      * @param {string} [group]
+     * @param {import('./format.mjs').BattleRecord} [battle]
      * @returns {Promise<void>}
      */
-    prepared(lenses, group) {
+    prepared(lenses, group, battle) {
       return withFileLock(reviewFile, async () => {
         const envelope = await readEnvelope()
         if (statusOf(envelope) !== 'preparing')
           throw new StoreRefusal(`the review is ${statusOf(envelope)}, not preparing`)
-        const { group: _was, ...rest } = envelope
+        const { group: _was, battle: _battle, ...rest } = envelope
         await writeChecked({
           ...rest,
           status: 'reviewing',
           lenses,
           ...(group && { group }),
+          ...(battle && { battle }),
         })
       })
     },
@@ -893,6 +895,8 @@ export function createStore(dir) {
             await rm(historyPath(dir, id), { force: true })
           }
           await rm(path.join(dir, 'discussions'), { recursive: true, force: true })
+          // A battle's pairs split name findings that are gone.
+          await rm(path.join(dir, 'battle.json'), { force: true })
           await writeDecisions({ ...decisions, findings: {} })
           const agents = path.join(dir, 'reviewers')
           for (const name of await readdir(agents).catch(() => []))
@@ -1320,6 +1324,44 @@ export function createStore(dir) {
         entry.reason = reason.trim().slice(0, MAX_TEXT)
         await finishRun(id, entry, run, 'failed', at)
         return entry
+      })
+    },
+
+    /**
+     * The claim's Bash call names its agent (`agent_id`): stamped on the run
+     * the claim opened, when it names none, so its figure finds it.
+     * @param {string} id
+     * @param {string} agent
+     * @returns {Promise<boolean>} Whether a run was stamped.
+     */
+    stamp(id, agent) {
+      return exclusive(async () => {
+        const decisions = await readDecisions()
+        const entry = decisions.findings[id]
+        const run = entry && currentRun(entry)
+        if (!run || run.agent) return false
+        run.agent = agent
+        await writeDecisions(decisions)
+        return true
+      })
+    },
+
+    /**
+     * What agent `agent` spent, on the last run it claimed, ended or not
+     * (done.mjs and ask.mjs end the run before the turn ends).
+     * @param {string} id
+     * @param {string} agent
+     * @param {import('./format.mjs').Usage} usage
+     * @returns {Promise<boolean>} Whether a run took it: none, it is unclaimed.
+     */
+    recordUsage(id, agent, usage) {
+      return exclusive(async () => {
+        const decisions = await readDecisions()
+        const run = decisions.findings[id]?.runs.findLast((one) => one.agent === agent)
+        if (!run) return false
+        run.usage = usage
+        await writeDecisions(decisions)
+        return true
       })
     },
 

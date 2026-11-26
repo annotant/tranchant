@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, type ReactNode, useState } from 'react'
 import { Diagram } from './Diagram'
 import { Discussion, type Taken } from './Discussion'
 import {
@@ -21,6 +21,7 @@ import {
   repliesOn,
   staleMrReason,
   type Review,
+  type ReviewUsage,
   STATE_DETAILS,
   stateClass,
   stateLabel,
@@ -39,6 +40,7 @@ import { FixChanges } from './FixChanges'
 import { Markdown } from './markdown'
 import { RunPanel } from './RunPanel'
 import { languageOfFile } from './syntax'
+import { findingCostOf } from './tokens'
 
 interface Props {
   review: Review
@@ -49,6 +51,8 @@ interface Props {
   discussion?: Thread | undefined
   /** No verifier confirmed it yet. */
   unverified?: boolean
+  /** What the review's agents spent: its Run section says the finding's part. */
+  usage?: ReviewUsage | undefined
   disabled: boolean
   /** Where issues go: undefined until known, `kind` null when nowhere. */
   tracker?: Tracker | undefined
@@ -57,6 +61,8 @@ interface Props {
   onStop: (id: string) => void
   /** Resolves to whether the server took the message; `change`: a change to the code it asks for. */
   onDiscuss: (id: string, text: string, change?: boolean) => Promise<boolean>
+  /** In a battle: whether the other group found it too, under its head. */
+  battleNote?: ReactNode
 }
 
 type Mode = 'idle' | 'editing' | 'dropping' | 'issuing'
@@ -252,12 +258,14 @@ export function FindingDetail({
   steps,
   discussion,
   unverified = false,
+  usage,
   disabled,
   tracker,
   onDecide,
   onAnswer,
   onStop,
   onDiscuss,
+  battleNote,
 }: Props) {
   const state = stateOf(
     { [finding.id]: record ?? { state: 'open', runs: [], events: [] } },
@@ -440,6 +448,7 @@ export function FindingDetail({
           </span>
         </div>
       </header>
+      {battleNote}
 
       <Excerpt
         excerpt={finding.excerpt}
@@ -884,7 +893,13 @@ export function FindingDetail({
         />
       )}
 
-      <RunPanel id={finding.id} record={record} steps={steps} disabled={disabled} />
+      <RunPanel
+        id={finding.id}
+        record={record}
+        steps={steps}
+        disabled={disabled}
+        cost={findingCostOf(usage, finding, record, discussion)}
+      />
     </article>
   )
 }

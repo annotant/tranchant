@@ -484,17 +484,39 @@ console.log(hashOf(${JSON.stringify(dir)}))`,
     'running',
   )
 
+  // Cleaned again for the review that waits on it: that review counts its tokens.
   const again = cleaningOf(
-    await clean(dir, ['--again', 'money-review', '--scope', 'local']),
+    await clean(dir, [
+      '--again',
+      'money-review',
+      '--scope',
+      'local',
+      '--review',
+      review.dir,
+    ]),
   )
   assert.equal(again.again, true)
+  assert.equal(
+    JSON.parse(await readFile(path.join(again.dir, 'cleaning.json'), 'utf8')).review,
+    path.resolve(review.dir),
+  )
   assert.equal(await readFile(again.rules, 'utf8'), '- Edited by me.')
   await agentWrites(again, 'Amounts are in cents; rounding half to even.\n', {
     rules: '- The agent would rewrite them.',
   })
+  // What its agent spent, kept beside the cleaning: an unsound figure would be left out.
+  const usage = {
+    models: [
+      { model: 'claude-opus-5-5', input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    ],
+  }
   assert.match(
-    (await clean(dir, ['--check', again.dir])).stdout,
+    (await clean(dir, ['--check', again.dir, '--usage', JSON.stringify(usage)])).stdout,
     /^CLEANED added local money-review$/m,
+  )
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(again.dir, 'cleaning.json'), 'utf8')).usage,
+    usage,
   )
   const now = JSON.parse(await readFile(path.join(lensFile, 'lens.json'), 'utf8'))
   assert.equal(now.rules, '- Edited by me.')
