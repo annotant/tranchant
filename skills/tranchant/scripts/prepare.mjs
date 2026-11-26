@@ -335,13 +335,15 @@ if (groups?.problem) {
   // Read as none: the review runs every lens that is on, said.
   console.error(`groups: ${oneLine(groups.problem)}`)
 }
+// Groups an older Tranchant kept, not moved in yet: said, as the page says them.
+for (const line of groups?.moving ?? []) console.error(`groups: ${oneLine(line)}`)
 const group = groupName
   ? groups?.groups.groups.find((one) => one.name === groupName)
   : undefined
 if (values.group !== undefined && !group) {
   const names = groups?.groups.groups.map((one) => one.name) ?? []
   refuse(
-    `no group ${values.group} in this project (Settings › Lenses › Groups): ${names.length ? names.join(', ') : 'none yet'}`,
+    `no group ${values.group} (Settings › Lenses › Groups): ${names.length ? names.join(', ') : 'none yet'}${groups?.moving?.length ? `; groups of an older Tranchant are not moved in: ${groups.moving.join('; ')}` : ''}`,
   )
 }
 // The flag, then the settings: a review waiting to start plans every lens the page can turn on.

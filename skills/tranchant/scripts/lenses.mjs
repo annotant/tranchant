@@ -334,7 +334,7 @@ async function replan() {
     const read = await readGroups(review.project)
     if (read.problem) return `group ${name}: ${read.problem}`
     group = read.groups.groups.find((one) => one.name === name)
-    if (!group) return `no group ${name} in this project any more`
+    if (!group) return `no group ${name} any more`
   }
   let planned
   try {
@@ -665,7 +665,7 @@ await store
   )
 // The group's review runs: the lenses removed from it it said are said.
 if (plan.group && plan.removed?.length)
-  await forgetRemoved(review.project, plan.group, plan.removed).catch((error) =>
+  await forgetRemoved(plan.group, plan.removed).catch((error) =>
     console.error(`group ${plan.group}: removed lenses kept: ${oneLine(message(error))}`),
   )
 await writeProgress(

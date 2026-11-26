@@ -23,8 +23,8 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { errorCode } from './errors.mjs'
 import { LENS_NAME, TOPICS } from './format.mjs'
-import { PLUGIN_ROOT, STATE_ROOT, hashOf } from './project.mjs'
-import { SETTINGS_DIR, expandHome } from './settings.mjs'
+import { PLUGIN_ROOT, STATE_ROOT } from './project.mjs'
+import { expandHome, projectSettingsDir } from './settings.mjs'
 
 const run = promisify(execFile)
 
@@ -209,7 +209,7 @@ async function lookAt(origin, file, max) {
 
 /** The local recipe's file, for the project at `root`: outside the repository, the user's alone. */
 const localRecipe = (/** @type {string} */ root) =>
-  path.join(SETTINGS_DIR, 'projects', hashOf(root), 'recipe.json')
+  path.join(projectSettingsDir(root), 'recipe.json')
 
 /**
  * The recipe in force for a review of `project` against `base`: `--recipe`,

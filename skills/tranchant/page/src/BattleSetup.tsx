@@ -24,7 +24,7 @@ const named = (one: GroupMember) =>
 const sameBattle = (x: BattlePick | undefined, y: BattlePick | undefined) =>
   !!x && !!y && x.a === y.a && x.b === y.b && !x.twice === !y.twice
 
-/** The battle a waiting review shows: the one picked, else the plan's, else the project's first two groups. */
+/** The battle a waiting review shows: the one picked, else the plan's, else the first two groups. */
 export function pickedBattle(
   step: Pick<LensesProgress, 'battle'>,
   choices: StartChoices,
@@ -68,8 +68,8 @@ export function BattleSetup({
   if (groups.problem)
     return (
       <p className="tr-notice" role="alert">
-        The project’s groups cannot be read: {groups.problem}. Fix them in Settings ›
-        Lenses › Groups.
+        The groups cannot be read: {groups.problem}. Fix them in Settings › Lenses ›
+        Groups.
       </p>
     )
   const target = (
@@ -85,7 +85,9 @@ export function BattleSetup({
       <div className="tr-lns-empty tr-grp-empty">
         <strong>A battle needs two groups of lenses.</strong>
         <span className="tr-muted">
-          This project has {list.length === 1 ? `one: ${list[0]?.name ?? ''}` : 'none'}.
+          {list.length === 1
+            ? `There is one: ${list[0]?.name ?? ''}.`
+            : 'There is none yet.'}
           Make them in Settings › Lenses › Groups: say A with the built-in reviewers, B
           with your team’s.
         </span>

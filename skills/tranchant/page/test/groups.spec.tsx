@@ -40,7 +40,7 @@ const LENSES: LensEntry[] = [
 ]
 
 const GROUPS: GroupsPayload = {
-  file: '/me/.config/tranchant/projects/3c1e/groups.json',
+  file: '/me/.config/tranchant/groups.json',
   default: 'backend',
   list: [
     {
@@ -219,6 +219,42 @@ test('a group edited is saved under its name; Duplicate starts B from A; Delete 
     expect(onLens).toHaveBeenCalledWith('group/remove', { name: 'frontend' }),
   )
   expect(await screen.findByText('Group frontend deleted: its lenses stay.')).toBeTruthy()
+})
+
+test("a group names its lenses not here; saved, it keeps another project's lens and recipe's, not a global one gone", async () => {
+  const groups: GroupsPayload = {
+    ...GROUPS,
+    list: [
+      {
+        name: 'shared',
+        lenses: [
+          { scope: 'recipe', name: 'bugs' },
+          { scope: 'local', name: 'cents' },
+          { scope: 'recipe', name: 'arch' },
+          { scope: 'global', name: 'gone' },
+        ],
+      },
+      { name: 'elsewhere', lenses: [{ scope: 'local', name: 'cents' }] },
+    ],
+  }
+  const { onLens } = renderLenses('group:shared', groups)
+  expect(screen.getByText(/3 not here: cents, arch, gone/)).toBeTruthy()
+  expect(screen.getByText(/none of its lenses is here/)).toBeTruthy()
+  const editor = within(screen.getByRole('region', { name: 'shared' }))
+  fireEvent.click(editor.getByRole('button', { name: 'Save the group' }))
+  await waitFor(() =>
+    expect(onLens).toHaveBeenCalledWith('group/save', {
+      name: 'shared',
+      group: {
+        name: 'shared',
+        lenses: [
+          { scope: 'recipe', name: 'bugs' },
+          { scope: 'local', name: 'cents' },
+          { scope: 'recipe', name: 'arch' },
+        ],
+      },
+    }),
+  )
 })
 
 test('no group yet: every review runs every lens that is on', () => {

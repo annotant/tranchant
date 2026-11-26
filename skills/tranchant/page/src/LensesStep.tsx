@@ -446,7 +446,7 @@ export function ReadyCenter({
   /** Review agents at a time, and their model: the settings'. */
   cap: number | undefined
   model: string | null | undefined
-  /** The project's groups: the Group select. */
+  /** The groups: the Group select. */
   groups?: GroupsPayload | undefined
   onChoices: (next: StartChoices) => void
   /**

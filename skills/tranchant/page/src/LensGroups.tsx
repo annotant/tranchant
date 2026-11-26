@@ -40,6 +40,19 @@ const chipOf = (one: GroupMember) =>
     ? one.name
     : `${one.name} · ${one.scope === 'local' ? 'project' : 'global'}`
 
+/**
+ * A draft's lenses as a group keeps them: this project's, and a project's
+ * or a recipe's lens not here, which another project may have, unless a lens
+ * of its name is checked; a global lens not here is gone everywhere.
+ */
+const keptOf = (members: readonly GroupMember[], known: (one: GroupMember) => boolean) =>
+  members.filter(
+    (one) =>
+      known(one) ||
+      (one.scope !== 'global' &&
+        !members.some((other) => other.name === one.name && known(other))),
+  )
+
 /** The lens of the same name as `lens`, another one, among `among`: one lens per name in a group. */
 const twinOf = (lens: LensEntry, among: readonly GroupMember[]) =>
   among.find((one) => one.name === lens.name && !isMember([lens], one))
@@ -62,7 +75,7 @@ interface Props {
 }
 
 /**
- * Settings › Lenses › Groups: the project's groups of lenses, each one
+ * Settings › Lenses › Groups: the groups of lenses, every project's, each one
  * review's lenses, their editor, and the default group.
  */
 export function GroupsTab({
@@ -115,8 +128,8 @@ export function GroupsTab({
         <p>
           A group is a set of lenses one review runs:{' '}
           <code>/tranchant review --group backend</code>, or the Group select before
-          Start. A lens can be in several groups. Groups stay on this machine, with this
-          project&rsquo;s lenses.
+          Start. A lens can be in several groups. Groups stay on this machine, and every
+          project offers them; the default group is this project&rsquo;s.
         </p>
         <button
           type="button"
@@ -133,6 +146,11 @@ export function GroupsTab({
           removed: {groups.problem}
         </p>
       )}
+      {groups.moving?.map((line) => (
+        <p key={line} className="tr-notice" role="alert">
+          Groups of an older Tranchant are not shown: {line}
+        </p>
+      ))}
       <div className="tr-field">
         <label className="tr-field-label" htmlFor="tr-grp-default">
           Default group
@@ -205,7 +223,15 @@ export function GroupsTab({
                   <span className="tr-lns-meta">
                     <span className="tr-lns-facts">
                       {plural(members.length - gone.length, 'lens', 'lenses')}
-                      {gone.length > 0 && ` · ${gone.length} gone`}
+                      {gone.length > 0 && (
+                        <span
+                          title={`Not among this project's lenses, so not run here: ${gone.map(chipOf).join(', ')}`}
+                        >
+                          {members.length === gone.length
+                            ? ' · none of its lenses is here'
+                            : ` · ${gone.length} not here: ${gone.map((one) => one.name).join(', ')}`}
+                        </span>
+                      )}
                     </span>
                     {existing && groups.default === group.name && (
                       <span className="tr-chip tr-chip--ready">default</span>
@@ -274,7 +300,7 @@ export function GroupsTab({
                           ...(existing && { name: group.name }),
                           group: {
                             name: draft.name.trim(),
-                            lenses: draft.members.filter((one) => known(one)),
+                            lenses: keptOf(draft.members, known),
                           },
                         },
                         close,
@@ -284,7 +310,7 @@ export function GroupsTab({
                     onDuplicate={() =>
                       open('new', {
                         name: `${group.name.slice(0, 35)}-copy`,
-                        members: draft.members.filter((one) => known(one)),
+                        members: keptOf(draft.members, known),
                       })
                     }
                     onRemove={() =>

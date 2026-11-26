@@ -2930,7 +2930,7 @@ test("/api/lens/folder browses a plugin's folder, its own files written plugin:n
   )
 })
 
-test("/api/lens/group/* makes, renames and deletes a project's groups; a lens renamed stays in them, removed leaves them; Start saves a group's switches in it", async (t) => {
+test("/api/lens/group/* makes, renames and deletes the groups; a lens renamed stays in them, a project's removed too; Start saves a group's switches in it", async (t) => {
   const config = await tempDir(t, 'tranchant-config-')
   const server = await startServer(t, {
     overrides: { status: 'preparing', verify: true },
@@ -2945,7 +2945,7 @@ test("/api/lens/group/* makes, renames and deletes a project's groups; a lens re
   const first = await json(await fetch(`${server.base}/api/settings`))
   assert.deepEqual(first.groups.list, [])
   assert.equal(first.groups.default, undefined)
-  assert.ok(first.groups.file.startsWith(path.join(config, 'tranchant', 'projects')))
+  assert.equal(first.groups.file, path.join(config, 'tranchant', 'groups.json'))
   // A lens of the project's, as Add a lens leaves it.
   const money = path.join(first.lensSet.dirs.local, 'money')
   await mkdir(money, { recursive: true })
@@ -2984,15 +2984,17 @@ test("/api/lens/group/* makes, renames and deletes a project's groups; a lens re
     }),
   )
   assert.equal(renamed.settings.groups.default, 'B')
-  // A lens renamed stays in its groups; removed, it leaves them, and says which.
+  // A project's lens renamed joins its groups beside its old name; removed, it stays: another project may have one of its name.
   await send('lens/save', { scope: 'local', name: 'money', lens: { name: 'cents' } })
   const after = await json(await fetch(`${server.base}/api/settings`))
-  assert.deepEqual(after.groups.list[0].lenses, [bugs, { scope: 'local', name: 'cents' }])
+  const cents = { scope: 'local', name: 'cents' }
+  const old = { scope: 'local', name: 'money' }
+  assert.deepEqual(after.groups.list[0].lenses, [bugs, old, cents])
   const removed = await json(await send('lens/remove', { scope: 'local', name: 'cents' }))
-  assert.deepEqual(removed.removedFrom, ['B'])
-  assert.deepEqual(removed.settings.groups.list[0].lenses, [bugs])
+  assert.deepEqual(removed.removedFrom, [])
+  assert.deepEqual(removed.settings.groups.list[0].lenses, [bugs, old, cents])
   const stored = JSON.parse(await readFile(after.groups.file, 'utf8'))
-  assert.deepEqual(stored.groups[0].removed, [{ scope: 'local', name: 'cents' }])
+  assert.equal(stored.groups[0].removed, undefined)
 
   // A review of B waiting to start: Start saves its switches in B, never in the settings.
   await writeFile(
@@ -3023,7 +3025,11 @@ test("/api/lens/group/* makes, renames and deletes a project's groups; a lens re
   })
   assert.equal(started.status, 200, await started.clone().text())
   const saved = await json(await fetch(`${server.base}/api/settings`))
-  assert.deepEqual(saved.groups.list[0].lenses, [{ scope: 'recipe', name: 'docs' }])
+  assert.deepEqual(saved.groups.list[0].lenses, [
+    old,
+    cents,
+    { scope: 'recipe', name: 'docs' },
+  ])
   assert.deepEqual(saved.settings, {})
   // Deleted, the default is every lens that is on again.
   const deleted = await json(await send('lens/group/remove', { name: 'B' }))

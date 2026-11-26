@@ -127,7 +127,7 @@ export interface LensGroup {
   lenses: GroupMember[]
 }
 
-/** The project's groups, as `GET /api/settings` answers them. */
+/** The groups, as `GET /api/settings` answers them for this review's project. */
 export interface GroupsPayload {
   file: string
   /** What a review runs with no --group; absent, every lens that is on. */
@@ -135,6 +135,8 @@ export interface GroupsPayload {
   list: LensGroup[]
   /** Why the groups file reads as none: nothing is written over it. */
   problem?: string
+  /** Why groups of a project folder, where an older Tranchant kept them, are not moved in yet. */
+  moving?: string[]
 }
 
 interface LensSet {

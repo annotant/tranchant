@@ -3,7 +3,7 @@
 // shared ones once; lenses.mjs plans the battle the page picks, and records
 // it in review.json; the review's battle.json keeps the pairs split.
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { after, test } from 'node:test'
@@ -19,7 +19,7 @@ after(() =>
     rm(stateDir, { recursive: true, force: true }),
   ]),
 )
-const { groupsFile } = await import('../skills/tranchant/scripts/lib/groups.mjs')
+const { GROUPS_FILE } = await import('../skills/tranchant/scripts/lib/groups.mjs')
 const { BattleRefusal, mergeBattle, parseBattle, readSplits, writeSplit } =
   await import('../skills/tranchant/scripts/lib/battle.mjs')
 const { identityOf, validateEnvelope } =
@@ -93,9 +93,9 @@ const member = (/** @type {string} */ name) => ({
   name,
 })
 
-/** Groups A (js, api), B (js, all) and C (css, which reads none of the change). @param {string} project */
-async function writeGroups(project) {
-  const file = groupsFile(await realpath(project))
+/** Groups A (js, api), B (js, all) and C (css, which reads none of the change): every project's. */
+async function writeGroups() {
+  const file = GROUPS_FILE
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(
     file,
@@ -213,7 +213,7 @@ test('--battle takes two different groups', () => {
 test('prepare.mjs --battle plans both groups, waiting for Start the battle', async (t) => {
   const dir = await repository(t)
   await recipe(t)
-  await writeGroups(dir)
+  await writeGroups()
   const battle = await prepare(dir, ['--battle', 'A,B'])
   assert.equal(battle.code, 0, battle.stdout + battle.stderr)
   assert.deepEqual(battle.plan.battle, { a: 'A', b: 'B' })
@@ -233,7 +233,7 @@ test('prepare.mjs --battle plans both groups, waiting for Start the battle', asy
   const refusals = [
     [['--battle', 'A,B', '--group', 'A'], /--battle alone/],
     [['--battle', 'A,A'], /two different groups/],
-    [['--battle', 'A,Z'], /no group Z in this project/],
+    [['--battle', 'A,Z'], /no group Z \(Settings/],
     [['--battle', 'A,C'], /no lens of group C applies/],
   ]
   for (const [args, words] of refusals) {
@@ -246,7 +246,7 @@ test('prepare.mjs --battle plans both groups, waiting for Start the battle', asy
 test('a waiting review plans the battle the page picks, records it, and runs its lenses', async (t) => {
   const dir = await repository(t)
   await recipe(t)
-  await writeGroups(dir)
+  await writeGroups()
   const waiting = await prepare(dir, ['--no-start'])
   assert.equal(waiting.code, 0, waiting.stdout + waiting.stderr)
   const opened = await run(process.execPath, [OPEN, String(waiting.inbox), '--verify'], {
@@ -396,7 +396,7 @@ test("review.json's battle is checked, and leaves the review's identity alone", 
 test('a battle that cannot be planned keeps the last plan, waiting, and says why', async (t) => {
   const dir = await repository(t)
   await recipe(t)
-  await writeGroups(dir)
+  await writeGroups()
   const waiting = await prepare(dir, ['--battle', 'A,B'])
   assert.equal(waiting.code, 0, waiting.stdout + waiting.stderr)
   const opened = await run(process.execPath, [OPEN, String(waiting.inbox), '--verify'], {
@@ -422,7 +422,7 @@ test('a battle that cannot be planned keeps the last plan, waiting, and says why
 test('a battle that runs its shared lenses twice records each, its prompt naming the ids it adds', async (t) => {
   const dir = await repository(t)
   await recipe(t)
-  await writeGroups(dir)
+  await writeGroups()
   const waiting = await prepare(dir, ['--battle', 'A,B'])
   const opened = await run(process.execPath, [OPEN, String(waiting.inbox), '--verify'], {
     env: env(),

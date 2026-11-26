@@ -128,7 +128,7 @@ export async function planBattle({ project, range, recipe, values, groups, battl
     const group = groups.find((one) => one.name === name)
     if (!group)
       throw new BattleRefusal(
-        `no group ${name} in this project (Settings › Lenses › Groups): ${groups.map((one) => one.name).join(', ') || 'none yet'}`,
+        `no group ${name} (Settings › Lenses › Groups): ${groups.map((one) => one.name).join(', ') || 'none yet'}`,
       )
     return group
   }
