@@ -193,9 +193,10 @@ run script.
 
 `/tranchant review` takes `--recipe <file>` to use your own lenses instead of
 the plugin's front-end ones ([what the review looks at](#what-the-review-looks-at)),
-`--group <name>` to run one of the project's groups of lenses (Settings ›
+`--group <name>` to run one of your groups of lenses (Settings ›
 Lenses › Groups: a backend set and a frontend one, or A and B to compare,
-each lens running whatever its switch), `--battle <A,B>` to run two groups
+each lens running whatever its switch; a group is the project's, or global
+and offered in every project), `--battle <A,B>` to run two groups
 on the same change at once and compare them ([a battle
 review](docs/review-file.md#a-battle-review)),
 and `--no-start` to build the lenses and wait: the page shows what will run, a

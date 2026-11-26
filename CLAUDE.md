@@ -55,7 +55,7 @@ pattern, read how annotant does it.
   recipe in force and builds its lenses from their sources;
   `lib/userlens.mjs` owns the lenses the user adds (global and local, in
   `~/.config/tranchant/`) and the set they make with the recipe's;
-  `lib/groups.mjs` the project's groups of lenses (`--group`),
+  `lib/groups.mjs` the groups of lenses, a project's and the global ones (`--group`),
   `lib/battle.mjs` a battle review of two of them (`--battle`) and its
   pairs split;
   `lib/cleaning.mjs` owns their cleanings, `lib/reviewers.mjs` the

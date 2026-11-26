@@ -94,6 +94,7 @@ import { LensRefusal, RecipeRefusal } from './lib/lens.mjs'
 import {
   GroupRefusal,
   forgetLens,
+  GROUPS_FILE,
   groupsFile,
   moveLens,
   readGroups,
@@ -455,8 +456,14 @@ async function settingsPayload() {
     groups: {
       file: groups.file,
       ...(groups.groups.default && { default: groups.groups.default }),
-      list: groups.groups.groups.map(({ name, lenses }) => ({ name, lenses })),
+      local: groups.local,
+      list: groups.groups.groups.map(({ name, scope, lenses }) => ({
+        name,
+        scope,
+        lenses,
+      })),
       ...(groups.problem && { problem: groups.problem }),
+      ...(groups.notes && { notes: groups.notes }),
     },
     ...(described.base.problem && { recipeProblem: described.base.problem }),
     ...(problem && { problem }),
@@ -2396,13 +2403,13 @@ async function lensesChanged() {
       }
     }
   }
-  const groups = groupsFile(lensRoot)
-  marks.push(
-    `${groups} ${await stat(groups).then(
-      (one) => `${one.size} ${one.mtimeMs}`,
-      () => '',
-    )}`,
-  )
+  for (const groups of [GROUPS_FILE, groupsFile(lensRoot)])
+    marks.push(
+      `${groups} ${await stat(groups).then(
+        (one) => `${one.size} ${one.mtimeMs}`,
+        () => '',
+      )}`,
+    )
   const now = marks.join('\n')
   if (now === lensesSeen) return
   lensesSeen = now

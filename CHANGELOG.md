@@ -7,6 +7,23 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Added
+
+- **Global groups of lenses.** A new group is made this project's or
+  global, once: a global group holds only global and built-in lenses, and
+  every project offers it. Settings › Lenses › Groups names a group's
+  lenses that are not here, and a global group keeps a built-in lens
+  another project's recipe has when it is saved.
+
+### Fixed
+
+- **Groups of lenses no longer disappear when the project is opened from
+  another path.** They were filed under the project's exact path, so
+  another worktree, a moved clone or a symlink showed none. A project's
+  groups, its default group, its local lenses and its local recipe now
+  follow the repository, not the path: every worktree shares them, and the
+  folder of the old path is taken over.
+
 ## 0.9.0 - 2026-11-25
 
 ### Added

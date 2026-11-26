@@ -39,7 +39,14 @@ any repository, in one of two scopes:
   `~/.config/…`): it runs on every project;
 - **local**: `$XDG_CONFIG_HOME/tranchant/projects/<project hash>/lenses/<name>/`,
   `<project hash>` the first 12 hex digits of the SHA-1 of the project's
-  root: this project only.
+  home: this project only. The home is the project's place in the main
+  worktree of its git repository (its real path; in its git folder for a
+  bare repository or a submodule), so every worktree of it and every path
+  to it (a symlink, another case) share its lenses; a folder that is not in
+  a git repository is its own home. The folder of the project's own path,
+  where Tranchant 0.9 and before kept them, is taken over: what the home's
+  folder lacks moves into it, a lens at a time; a lens of a name the home
+  has already stays where it was, said on the server's stderr.
 
 **Tranchant's configuration is never committed nor pushed.** Under a name,
 the first lens that is on runs: the project's, then a global one, then the
@@ -147,17 +154,20 @@ match. One lens per name in a group (a finding's id starts with its lens's
 name); outside groups, the project's lens still replaces the built-in one
 of its name. A run with `--recipe` runs that recipe whole, no group.
 
-The groups live with the project, outside any repository:
-`$XDG_CONFIG_HOME/tranchant/projects/<project hash>/groups.json` (else
-`~/.config/…`), beside its local lenses:
+A group is made **this project's** or **global**, once: it keeps where it
+was made. A project's group holds any of the project's lenses, and only
+that project offers it; it lies with the project's lenses, outside any
+repository, `$XDG_CONFIG_HOME/tranchant/projects/<project hash>/groups.json`
+(else `~/.config/…`), shared by every worktree of the project and every
+path to it (see the lenses' home above), with the project's default group:
 
 ```jsonc
 {
   "version": 1,
-  "default": "backend", // optional: what a review runs with no --group; absent, every lens that is on
+  "default": "backend", // optional: what a review runs with no --group, a group of the project or a global one; absent, every lens that is on
   "groups": [
     {
-      "name": "backend", // [\w-]{1,40}, unique: --group backend
+      "name": "backend", // [\w-]{1,40}, unique among the project's groups and the global ones: --group backend
       "lenses": [
         { "scope": "local", "name": "money" }, // local, global or recipe; one lens per name
         { "scope": "recipe", "name": "security" },
@@ -168,19 +178,43 @@ The groups live with the project, outside any repository:
 }
 ```
 
-A lens removed from Settings › Lenses leaves every group of the project,
-recorded in `removed`, which every review of the group says until one
-runs (saving the group forgets them: the person saw it as it is); renamed
-or moved to the other scope, it stays in them. A group naming a lens that is not among the lenses any more (a
-global lens removed from another project, a recipe changed) runs without
-it, and its review says so. Deleting a group never deletes its lenses; the
-default, when it was, is every lens that is on again. A groups file this
-Tranchant cannot read is never written over: a review with no `--group`
-then runs every lens that is on, said, and one with `--group` is refused.
+A global group holds only global and built-in lenses, never a project's,
+and every project offers it: `$XDG_CONFIG_HOME/tranchant/groups.json`, the
+same `groups` and no `default`. A project's group of a global group's name
+hides it in that project, said. The groups file of Tranchant 0.9 is the
+project's: its groups are the project's groups, and the folder of the
+project's own path, where they lay, is taken over as its lenses are; when
+the project's file is there already (another worktree's came first), its
+groups are merged in (a group of the same name and the same lenses is the
+same group; another takes the first free `-2`, `-3`… after its name), its
+default kept when the project has none, and it is renamed
+`groups.json.moved`. One that cannot be merged stays where it is, said.
+
+A lens removed from Settings › Lenses leaves the project's groups and, a
+global one, the global groups, recorded in `removed`, which every review
+of the group says until one runs (saving the group forgets them: the person
+saw it as it is); renamed or moved to the other scope, a lens stays in
+them, except a global lens moved into the project, which leaves the global
+groups, recorded. Another project's groups are not changed: a group naming
+a lens that is not among the project's lenses (a global lens removed from
+another project, another recipe's) runs without it, and its review says
+so; Settings › Lenses › Groups names those, and saving a global group keeps
+a built-in lens it names that is not here, another project's recipe may
+have it. A group none of whose lenses is here refuses its review, saying
+why. A lens of the project turned on in a review of a global group is not
+saved in it, said on its row; the other switches are. Deleting a group never deletes its lenses; the project's
+default, when it was, is every lens that is on again; renamed, it stays its
+default. Another project whose default was a global group deleted or
+renamed runs every lens that is on, said. A groups file this Tranchant
+cannot read is never written over, and reads as no group at all: a review
+with no `--group` then runs every lens that is on, said, and one with
+`--group` is refused.
 
 **Settings › Lenses** has two tabs, **Lenses** and **Groups**, each with its
-count. Groups lists each group, its lenses, its `--group` and **Edit**: a
-name, and its lenses checked in one list laid out like the Lenses tab, with
+count. Groups lists each group, where it lies, its lenses, its `--group`
+and **Edit**: for a new group, where it lies first (**This project** or
+**Global**: a global group's editor offers no lens of the project, and
+unchecks those checked, said), then a name, and its lenses checked in one list laid out like the Lenses tab, with
 a name filter, **Check the N shown**, a checkbox on each scope's heading
 (a lens whose name is checked already stays; else the first in precedence, this project, global, built-in, is checked; a note names those left
 unchecked), and the token warning past 12; **Save the group**,
@@ -245,7 +279,7 @@ Options meant for tests and development stay environment variables:
 
 | Route               | Does                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/settings` | `{ path, settings, values, defaults, locked, recipe, recipeFrom, lenses, lensSet, cleanings, groups, recipeProblem?, problem? }`: the file's path, the file as it stands (the keys set), the values in force (every key, `null` where nothing is chosen), the defaults, by key the environment variable that locks it, the recipe in force for the review's project (`recipe` its file, `BASE:<path>` for the project's; `recipeFrom` `local`, `project`, `settings` or `plugin`; `lenses` its lenses' names; `recipeProblem` when it cannot be read); `lensSet`, `{ dirs: { global, local }, lenses }`, every lens that could run on the project, the project's, the global ones and the recipe's, each `{ name, scope: "local" \| "global" \| "recipe", on, runs, replaces?, source, version?, origin?: "picked" \| "custom", sourceKind?: "agent" \| "skill" \| "command", paths, otherwise?, topics?, model?, detected?, frontmatter?, rules?, rulesEdited?, cleaned?, failedCleaning?, stale?: "stale" \| "failed", problem?, fix?, history? }` (`history`, its average a review over its last complete reviews of the project, `{ tokens, confirmed, runs }`: [a lens's average](review-file.md#waiting-to-start); `detected`, what Auto-detect finds in its source whatever its model, `{ file, why: "source" \| "none" \| "inherit" \| "foreign" \| "unreadable", model?, id?, asked?, problem? }` (`model`, `id` and `asked` with `source`, `asked` with `inherit` and `foreign`, `problem` with `unreadable`); `frontmatter`, its source's `name`, `tools` and `model`); `cleanings`, the lenses being cleaned or waiting to be added, each `{ id, createdAt, name, scope, again, source, version?, from?, reviewer?, state: "cleaning" \| "ready" \| "process" \| "failed", waiting?, reason?, process?, reviewers?, more?, report?, domain? }` (`waiting` while it waits for a free cleaning agent, `from` the glob or the process it was matched by, `reviewer` the one written inline in the source it is; `process`, a whole review process its agent found: `process` how it routes the review, `reviewers` those it starts, the ones offered first (12 at most, `more` past them), then those refused (12 at most), each `{ name, kind: "file", source, already? }`, `{ name, kind: "inline", label, already? }` (`label` its name as its agent wrote it; its instructions stay on the server) or `{ name, kind: "refused", file, reason }`; it is listed until each one offered is added, `picked` recording those that are); `groups`, the project's groups of lenses, `{ file, default?, list: [{ name, lenses: [{ scope, name }] }], problem? }` (`problem` when `groups.json` reads as none); and `problem` when the file reads as none, and why. |
+| `GET /api/settings` | `{ path, settings, values, defaults, locked, recipe, recipeFrom, lenses, lensSet, cleanings, groups, recipeProblem?, problem? }`: the file's path, the file as it stands (the keys set), the values in force (every key, `null` where nothing is chosen), the defaults, by key the environment variable that locks it, the recipe in force for the review's project (`recipe` its file, `BASE:<path>` for the project's; `recipeFrom` `local`, `project`, `settings` or `plugin`; `lenses` its lenses' names; `recipeProblem` when it cannot be read); `lensSet`, `{ dirs: { global, local }, lenses }`, every lens that could run on the project, the project's, the global ones and the recipe's, each `{ name, scope: "local" \| "global" \| "recipe", on, runs, replaces?, source, version?, origin?: "picked" \| "custom", sourceKind?: "agent" \| "skill" \| "command", paths, otherwise?, topics?, model?, detected?, frontmatter?, rules?, rulesEdited?, cleaned?, failedCleaning?, stale?: "stale" \| "failed", problem?, fix?, history? }` (`history`, its average a review over its last complete reviews of the project, `{ tokens, confirmed, runs }`: [a lens's average](review-file.md#waiting-to-start); `detected`, what Auto-detect finds in its source whatever its model, `{ file, why: "source" \| "none" \| "inherit" \| "foreign" \| "unreadable", model?, id?, asked?, problem? }` (`model`, `id` and `asked` with `source`, `asked` with `inherit` and `foreign`, `problem` with `unreadable`); `frontmatter`, its source's `name`, `tools` and `model`); `cleanings`, the lenses being cleaned or waiting to be added, each `{ id, createdAt, name, scope, again, source, version?, from?, reviewer?, state: "cleaning" \| "ready" \| "process" \| "failed", waiting?, reason?, process?, reviewers?, more?, report?, domain? }` (`waiting` while it waits for a free cleaning agent, `from` the glob or the process it was matched by, `reviewer` the one written inline in the source it is; `process`, a whole review process its agent found: `process` how it routes the review, `reviewers` those it starts, the ones offered first (12 at most, `more` past them), then those refused (12 at most), each `{ name, kind: "file", source, already? }`, `{ name, kind: "inline", label, already? }` (`label` its name as its agent wrote it; its instructions stay on the server) or `{ name, kind: "refused", file, reason }`; it is listed until each one offered is added, `picked` recording those that are); `groups`, the groups of lenses, `{ file, local, default?, list: [{ name, scope: "local" \| "global", lenses: [{ scope, name }] }], problem?, notes? }` (`file` the global groups' file, `local` the project's, the project's groups listed first; `problem` when a groups file reads as none; `notes`, a global group hidden by one of the project's, a default gone); and `problem` when the file reads as none, and why. |
 | `GET /api/lens/prompt?scope=&name=` | `{ prompt }`: the prompt a lens's reviewer reads, built as a review builds it (`scope` `recipe`, `global` or `local`). 404 for no such lens, 409 with the reason when it cannot be built. |
 | `GET /api/lens/matches?source=` | `{ matches, more?, folder? }`: the files a glob (`*`, `?`, within one folder: no `**`; a `[` is part of the path) matches from the project's root, `~/` or an absolute path, each `{ source, name, kind?, notReviewer?, already?, starts?, more? }`: a Markdown file or a skill's folder, the lens name from its file (a skill's from its folder), `agent`, `skill` or `command` from the folder right above it, why it reads as no reviewer (it starts other agents), and the lenses made from this same file, `[{ scope, name, adding? }]` (`adding` for a cleaning not added yet, a failed one left out). A command, or a file that starts agents it names, has `starts` (and `more`, those past 12): the reviewers it starts, as `GET /api/lens/inside` lists them but written as the glob is (from the project, `~/` or absolute), each with its `already`; it is never a lens itself. At most 40, `more` saying how many were left out. Matching nothing, `folder` `{ label, files, count, missing?, unreadable? }`: the folder it looked in and its names (`unreadable` the error code of one that is there but cannot be read). 409 for a glob refused (`**`, a plugin's name). |
 | `GET /api/lens/inside?source=` | `{ inside, name? }`: the reviewers inside a source typed in Add a lens (`plugin:name`, a plugin's command among them, or a path), read from its file with no agent. `null` for a single reviewer, or a source not found (the import says why), with `name`, the lens name it gets when none is given: a file's name without its extension (a skill's `SKILL.md`, its folder's), a `plugin:name`'s name without the plugin. Else `{ kind, label, starts, more? }`: `kind` `command`, `agent` or `skill`, from the folder the file lies in right above it (`commands/`, `agents/`; a skill's `SKILL.md`); `starts` the skills and agents it names that resolve, in the order it names them, each file once: beside it (its plugin's root, or the folder its `commands`, `agents` or `skills` folder lies in), the project's `.claude`, then the user's, by name (a name of one plain word only quoted, in backticks or as `/name`; never the name part of a `plugin:name`), and an installed plugin's turned on written `plugin:name` (not `tranchant:`). One that itself starts agents is left out. Each `{ source, name, kind, already? }`, 12 at most, `more` saying how many were left out. A file of the source's own name (a copy of it, `~/.claude/skills/<its name>`) is never among them. A command always has `inside`, `starts` empty when it names none that resolves (its agents written in it, or a plugin's not installed or turned off), with `name`, the lens name it gets: imported, its cleaning agent reads it and makes one lens of it, or lists the reviewers it starts. An agent or a skill has `inside` only when it starts other agents (its `tools` or `allowed-tools` give it `Task` or `Agent`, or it names `subagent_type`) and names one that resolves. A source whose `starts` is not empty is refused by the import, before any cleaning, with the reviewers to add instead. |
@@ -256,10 +290,10 @@ Options meant for tests and development stay environment variables:
 | `POST /api/lens/add` | `{ id, lens? }`: Add this lens, on a cleaning that is `ready`, with the user's changes (`name`, `scope`, `paths` or `otherwise`, `topics`, `model`, `rules`) checked as `lens.json` is, its `model` `auto` unless the changes name one (`null`, the reviewers'); answers `{ scope, name, settings }`. |
 | `POST /api/lens/discard` | `{ id }`: a cleaning's folder removed, unless its agent is still at work; one still waiting for an agent is removed, and none starts on it. |
 | `POST /api/lens/save` | `{ scope, name, lens }`: a change to an added lens, any of `on`, `name`, `scope` (its folder moves), `paths` or `otherwise`, `topics`, `model` and `rules` (`rulesEdited` set when they change); `null` unsets `model`, `null` or `[]` `topics`. A lens moved to global has its paths recorded absolute; renamed or moved, it stays in its groups. |
-| `POST /api/lens/remove` | `{ scope, name }`: an added lens's folder removed, and the lens out of every group of the project; answers `removedFrom`, the groups it left. |
-| `POST /api/lens/group/save` | `{ name?, group: { name, lenses: [{ scope, name }] } }`: a group made, or the group `name` changed (renamed, it stays the default when it was): a name free among the groups, one lens at least, one per name. |
-| `POST /api/lens/group/remove` | `{ name }`: a group deleted, never its lenses; the default, when it was, is every lens that is on again. |
-| `POST /api/lens/group/default` | `{ name }`: the group a review runs with no `--group`; `null`, every lens that is on. |
+| `POST /api/lens/remove` | `{ scope, name }`: an added lens's folder removed, and the lens out of the project's groups and, a global one, of the global groups; answers `removedFrom`, the groups it left. |
+| `POST /api/lens/group/save` | `{ name?, group: { name, scope?, lenses: [{ scope, name }] } }`: a group made, `scope` `local` (the project's) or `global`, or the group `name` changed, keeping its scope (renamed, it stays the project's default when it was): a name free among the project's groups and the global ones, one lens at least, one per name, none of the project's in a global group. |
+| `POST /api/lens/group/remove` | `{ name }`: a group deleted, never its lenses; the project's default, when it was, is every lens that is on again. |
+| `POST /api/lens/group/default` | `{ name }`: the group a review of this project runs with no `--group`; `null`, every lens that is on. |
 | `POST /api/lens/clean` | `{ scope, name }`: Clean it again now: a cleaning made, waiting for a free cleaning agent as Add a lens's, `CLEAN <id>` printed; the lens keeps its version until it ends. |
 | `PUT /api/settings` | The whole file, as `settings` comes back from the GET: `{ "theme": "dark", … }`, a `null` or an absent key unsetting it; `{}` resets everything. Writes run one after the other. Answers what the GET does, written; 400 `{ error }` with the key when refused; 409 when the file reads as none; 500 with the file's path when it cannot be written (rights, disk). Every page learns of it through the `settings` event of `/api/events`, as of a page of another server's write, or an editor's. |
 

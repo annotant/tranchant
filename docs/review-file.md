@@ -497,7 +497,7 @@ none named and left out.
 
 ## A battle review
 
-A battle runs two of the project's groups of lenses
+A battle runs two groups of lenses
 ([groups of lenses](settings.md#groups-of-lenses)) on the same change at
 the same time, then compares what each found. It is one review: one
 envelope, one queue (`maxReviewAgents` review agents at a time, taking

@@ -384,11 +384,14 @@ function readyWords(
   choices: StartChoices,
   changed: number,
   group: string | undefined,
+  shared: boolean,
 ) {
   const saved = choices.remember
     ? group
       ? on
-        ? `joins ${group} on Start`
+        ? shared && row.scope === 'local'
+          ? `not saved in ${group}: a global group holds no lens of this project`
+          : `joins ${group} on Start`
         : `removed from ${group} on Start`
       : 'saved on Start'
     : undefined
@@ -446,7 +449,7 @@ export function ReadyCenter({
   /** Review agents at a time, and their model: the settings'. */
   cap: number | undefined
   model: string | null | undefined
-  /** The project's groups: the Group select. */
+  /** The groups: the Group select. */
   groups?: GroupsPayload | undefined
   onChoices: (next: StartChoices) => void
   /**
@@ -462,6 +465,8 @@ export function ReadyCenter({
   const rows = step.lenses
   const changed = step.changed ?? 0
   const group = step.group
+  // A global group's switches saved leave out the lenses of this project.
+  const shared = groups?.list.find((one) => one.name === group)?.scope === 'global'
   // The group picked: its lenses are built before the rows follow it.
   const picked = choices.group !== undefined ? (choices.group ?? undefined) : group
   const pending = picked !== group
@@ -820,7 +825,7 @@ export function ReadyCenter({
               <span
                 className={`tr-lens-row-state${moved || row.cleaning ? ' tr-lens-row-state--updated' : ''}`}
               >
-                {readyWords(row, lit, moved, choices, changed, group)}
+                {readyWords(row, lit, moved, choices, changed, group, shared)}
               </span>
               {estimate?.recorded && (
                 <Cost row={row} lit={lit} cost={costs.get(row.name)} />

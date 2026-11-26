@@ -121,20 +121,29 @@ export interface GroupMember {
   name: string
 }
 
+/** Where a group lies: this project's, or global, which every project offers and holds no project's lens. */
+export type GroupScope = 'local' | 'global'
+
 /** A group of lenses: one review runs one (`--group <name>`). */
 export interface LensGroup {
   name: string
+  scope: GroupScope
   lenses: GroupMember[]
 }
 
-/** The project's groups, as `GET /api/settings` answers them. */
+/** The groups, as `GET /api/settings` answers them for this review's project: its own, then the global ones. */
 export interface GroupsPayload {
+  /** The global groups' file. */
   file: string
+  /** This project's groups file. */
+  local: string
   /** What a review runs with no --group; absent, every lens that is on. */
   default?: string
   list: LensGroup[]
-  /** Why the groups file reads as none: nothing is written over it. */
+  /** Why a groups file reads as none: nothing is written over it. */
   problem?: string
+  /** What the groups say: a global group hidden by one of this project's, a default gone. */
+  notes?: string[]
 }
 
 interface LensSet {

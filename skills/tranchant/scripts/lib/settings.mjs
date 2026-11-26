@@ -6,10 +6,12 @@
 // this file, then the default; the recipe has the local and the project's
 // between the flag and this file (lib/lens.mjs).
 import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
+import { hashOf, projectHome } from './project.mjs'
 
 /** The settings version this code reads and writes; any other is refused. */
 const SETTINGS_VERSION = 1
@@ -20,6 +22,85 @@ export const SETTINGS_DIR = path.join(
   'tranchant',
 )
 export const SETTINGS_FILE = path.join(SETTINGS_DIR, 'settings.json')
+
+/** The project folders' parent: one folder each, its lenses, its recipe and its groups. */
+export const PROJECTS_DIR = path.join(SETTINGS_DIR, 'projects')
+
+/** projectSettingsDir's answers, by root: the old folder is taken over once per process. */
+const projectDirs = new Map()
+
+/**
+ * The settings folder of the project at `root`, named after its home
+ * (lib/project.mjs): its worktrees and every path to it share it. The
+ * folder of `root`'s own path, where it lay before, is taken over: what the
+ * new folder lacks moves into it, a lens at a time.
+ * @param {string} root
+ * @returns {string}
+ */
+export function projectSettingsDir(root) {
+  const known = projectDirs.get(root)
+  if (known) return known
+  const dir = path.join(PROJECTS_DIR, hashOf(projectHome(root)))
+  const before = path.join(PROJECTS_DIR, hashOf(root))
+  if (before !== dir)
+    // Only stderr hears it: the old folder keeps what is left, nothing is lost.
+    for (const line of takeOver(before, dir)) console.error(`tranchant: ${line}`)
+  projectDirs.set(root, dir)
+  return dir
+}
+
+/**
+ * What `to` lacks of `from`, moved, `lenses` merged by lens; answers what
+ * stays in `from`, and why.
+ * @param {string} from
+ * @param {string} to
+ * @returns {string[]}
+ */
+function takeOver(from, to) {
+  /** @type {string[]} */
+  const left = []
+  const move = (/** @type {string} */ source, /** @type {string} */ target) => {
+    if (existsSync(target)) {
+      left.push(`${source} stays where it is: ${target} is there already`)
+      return
+    }
+    try {
+      renameSync(source, target)
+    } catch (error) {
+      left.push(
+        `${source} is not moved to ${target} (${String(errorCode(error) ?? error)})`,
+      )
+    }
+  }
+  let names
+  try {
+    names = readdirSync(from)
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return left
+    return [`${from} cannot be read (${String(errorCode(error) ?? error)})`]
+  }
+  try {
+    mkdirSync(to, { recursive: true })
+  } catch (error) {
+    return [`${to} cannot be made (${String(errorCode(error) ?? error)})`]
+  }
+  for (const name of names) {
+    const source = path.join(from, name)
+    const target = path.join(to, name)
+    if (name !== 'lenses' || !existsSync(target)) {
+      move(source, target)
+      continue
+    }
+    let lenses = []
+    try {
+      lenses = readdirSync(source)
+    } catch (error) {
+      left.push(`${source} cannot be read (${String(errorCode(error) ?? error)})`)
+    }
+    for (const lens of lenses) move(path.join(source, lens), path.join(target, lens))
+  }
+  return left
+}
 
 /** The most agents of a kind the hooks run at a time. */
 const MAX_AGENTS = 8
