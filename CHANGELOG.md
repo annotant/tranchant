@@ -7,6 +7,8 @@ released to the `stable` branch.
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-25
+
 ### Added
 
 - **Global groups of lenses.** A new group is made this project's or
