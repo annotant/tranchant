@@ -3424,12 +3424,12 @@ export const register: Register = (on) => {
           group: {
             type: 'string',
             description:
-              "With run: the project's group of lenses to run (Settings › Lenses › Groups), whatever their switches; absent, the project's default group. Not with recipe.",
+              "With run: the group of lenses to run (Settings › Lenses › Groups), whatever their switches; absent, the project's default group. Not with recipe.",
           },
           battle: {
             type: 'string',
             description:
-              "With run: a battle review, two of the project's groups of lenses as A,B on the same change at once, compared on the page; it waits for Start the battle unless start is true. Not with recipe or group.",
+              'With run: a battle review, two groups of lenses as A,B on the same change at once, compared on the page; it waits for Start the battle unless start is true. Not with recipe or group.',
           },
           start: {
             type: 'boolean',

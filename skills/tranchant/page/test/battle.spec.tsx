@@ -211,9 +211,11 @@ test('the scorecard counts each side, the shared lens for both, and marks the be
 
 const GROUPS: GroupsPayload = {
   file: '/x/groups.json',
+  local: '/x/projects/3c1e/groups.json',
   list: [
     {
       name: 'builtin',
+      scope: 'global',
       lenses: [
         { scope: 'recipe', name: 'bugs' },
         { scope: 'recipe', name: 'correctness' },
@@ -221,12 +223,13 @@ const GROUPS: GroupsPayload = {
     },
     {
       name: 'team',
+      scope: 'local',
       lenses: [
         { scope: 'recipe', name: 'bugs' },
         { scope: 'local', name: 'money' },
       ],
     },
-    { name: 'solo', lenses: [{ scope: 'recipe', name: 'tests' }] },
+    { name: 'solo', scope: 'local', lenses: [{ scope: 'recipe', name: 'tests' }] },
   ],
 }
 
@@ -339,7 +342,11 @@ test('a battle built shows its reviewers, and Start the battle sends it', async 
 })
 
 test('with fewer than two groups, the battle tab leads to Settings › Lenses › Groups', () => {
-  renderReady(waiting(), { file: '/x', list: [{ name: 'solo', lenses: [] }] })
+  renderReady(waiting(), {
+    file: '/x',
+    local: '/y',
+    list: [{ name: 'solo', scope: 'local', lenses: [] }],
+  })
   fireEvent.click(screen.getByRole('tab', { name: 'Battle review' }))
   expect(screen.getByText('A battle needs two groups of lenses.')).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Make the groups' }).getAttribute('href')).toBe(

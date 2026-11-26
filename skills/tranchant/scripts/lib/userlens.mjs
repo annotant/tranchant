@@ -12,7 +12,6 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path'
 import { errorCode } from './errors.mjs'
 import { LENS_NAME, TOPICS } from './format.mjs'
-import { hashOf } from './project.mjs'
 import {
   LensRefusal,
   RecipeRefusal,
@@ -26,7 +25,7 @@ import {
   readRecipe,
   resolveSource,
 } from './lens.mjs'
-import { SETTINGS_DIR, expandHome } from './settings.mjs'
+import { SETTINGS_DIR, expandHome, projectSettingsDir } from './settings.mjs'
 import { kindOfPath } from './inside.mjs'
 
 /** @typedef {import('./lens.mjs').LensSpec} LensSpec */
@@ -82,7 +81,7 @@ export const isScope = (value) => value === 'global' || value === 'local'
 export const scopeDir = (/** @type {Scope} */ scope, /** @type {string} */ project) =>
   scope === 'global'
     ? path.join(SETTINGS_DIR, 'lenses')
-    : path.join(SETTINGS_DIR, 'projects', hashOf(project), 'lenses')
+    : path.join(projectSettingsDir(project), 'lenses')
 
 /** A lens's folder, from its name: a name, never a path. */
 export function lensDir(

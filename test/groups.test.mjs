@@ -1,5 +1,6 @@
-// The groups of lenses of a project: lib/groups.mjs keeps them in the
-// project's settings folder; `/tranchant review --group <name>`
+// The groups of lenses: lib/groups.mjs keeps a project's in its settings
+// folder, with its default group, and the global ones in one file every
+// project offers; `/tranchant review --group <name>`
 // (prepare.mjs) runs a group's lenses whatever their switches, the default
 // group with no --group; lenses.mjs records the group and plans another one
 // the page picks.
@@ -21,8 +22,9 @@ after(() =>
   ]),
 )
 const {
-  forgetLens,
+  GROUPS_FILE,
   groupsFile,
+  forgetLens,
   moveLens,
   readGroups,
   removeGroup,
@@ -31,6 +33,9 @@ const {
   switchLenses,
   forgetRemoved,
 } = await import('../skills/tranchant/scripts/lib/groups.mjs')
+const { PROJECTS_DIR, projectSettingsDir } =
+  await import('../skills/tranchant/scripts/lib/settings.mjs')
+const { hashOf } = await import('../skills/tranchant/scripts/lib/project.mjs')
 
 const PREPARE = path.join(SCRIPTS, 'prepare.mjs')
 const OPEN = path.join(SCRIPTS, 'open.mjs')
@@ -94,13 +99,33 @@ async function recipe(t, /** @type {object} */ more = {}) {
   return file
 }
 
-/** The project's groups file, written whole. @param {string} project @param {object} groups */
-async function writeGroups(project, groups) {
-  // As git names the project: /var is /private/var on macOS.
-  const file = groupsFile(await realpath(project))
+/**
+ * The project's groups file and the global one, written whole: the global
+ * one with none unless `global` names some.
+ * @param {string} project
+ * @param {{ default?: string, groups: object[] }} groups
+ * @param {object[]} [global]
+ */
+async function writeGroups(project, groups, global = []) {
+  const file = groupsFile(project)
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, JSON.stringify({ version: 1, ...groups }))
+  await writeFile(GROUPS_FILE, JSON.stringify({ version: 1, groups: global }))
 }
+
+/** Both groups files removed: no group anywhere. @param {string} project */
+const noGroups = (project) =>
+  Promise.all([
+    rm(GROUPS_FILE, { force: true }),
+    rm(groupsFile(project), { force: true }),
+  ])
+
+/** Whether `file` reads: read, not checked, the file being written next. @param {string} file */
+const reads = (file) =>
+  readFile(file).then(
+    () => true,
+    () => false,
+  )
 
 const member = (/** @type {string} */ name) => ({
   scope: /** @type {const} */ ('recipe'),
@@ -128,30 +153,97 @@ const rows = (/** @type {any} */ progress) =>
 const names = (/** @type {any} */ plan) =>
   plan.lenses.map((/** @type {any} */ lens) => lens.name)
 
-test('a group is saved, renamed, made the default and deleted; its lenses one per name', async (t) => {
+const local = (/** @type {string} */ name) => ({
+  scope: /** @type {const} */ ('local'),
+  name,
+})
+const global = (/** @type {string} */ name) => ({
+  scope: /** @type {const} */ ('global'),
+  name,
+})
+
+test('a group is made where it is told, saved, renamed, made the default and deleted; its lenses one per name', async (t) => {
   const project = await realpath(await tempDir(t, 'tranchant-project-'))
+  await noGroups(project)
   assert.deepEqual((await readGroups(project)).groups, { groups: [] })
+  await assert.rejects(
+    saveGroup(project, undefined, { name: 'nowhere', lenses: [member('js')] }),
+    /scope: local/,
+  )
   await saveGroup(project, undefined, {
     name: 'backend',
-    lenses: [member('js'), { scope: 'local', name: 'money' }],
+    scope: 'local',
+    lenses: [member('js'), local('money')],
   })
   await assert.rejects(
-    saveGroup(project, undefined, { name: 'backend', lenses: [member('js')] }),
+    saveGroup(project, undefined, {
+      name: 'backend',
+      scope: 'local',
+      lenses: [member('js')],
+    }),
     /already named backend/,
+  )
+  // A global group: no lens of a project, and no name a group of this project has.
+  await assert.rejects(
+    saveGroup(project, undefined, {
+      name: 'shared',
+      scope: 'global',
+      lenses: [member('js'), local('money')],
+    }),
+    /global and built-in lenses only, not money/,
+  )
+  await assert.rejects(
+    saveGroup(project, undefined, {
+      name: 'backend',
+      scope: 'global',
+      lenses: [member('js')],
+    }),
+    /a this project's group is already named backend/,
+  )
+  await saveGroup(project, undefined, {
+    name: 'shared',
+    scope: 'global',
+    lenses: [member('js'), global('sql')],
+  })
+  await assert.rejects(
+    saveGroup(project, undefined, {
+      name: 'shared',
+      scope: 'local',
+      lenses: [member('js')],
+    }),
+    /a global group is already named shared/,
+  )
+  // A group keeps where it was made.
+  await assert.rejects(
+    saveGroup(project, 'shared', {
+      name: 'shared',
+      scope: 'local',
+      lenses: [member('js')],
+    }),
+    /keeps where it was made/,
+  )
+  await assert.rejects(
+    saveGroup(project, 'shared', { name: 'shared', lenses: [local('money')] }),
+    /global and built-in lenses only/,
   )
   await assert.rejects(
     saveGroup(project, undefined, {
       name: 'twice',
-      lenses: [member('js'), { scope: 'local', name: 'js' }],
+      scope: 'local',
+      lenses: [member('js'), local('js')],
     }),
     /one lens per name/,
   )
   await assert.rejects(
-    saveGroup(project, undefined, { name: 'empty', lenses: [] }),
+    saveGroup(project, undefined, { name: 'empty', scope: 'local', lenses: [] }),
     /at least one/,
   )
   await assert.rejects(
-    saveGroup(project, undefined, { name: '../x', lenses: [member('js')] }),
+    saveGroup(project, undefined, {
+      name: '../x',
+      scope: 'local',
+      lenses: [member('js')],
+    }),
     /letters, digits/,
   )
   await setDefaultGroup(project, 'backend')
@@ -161,84 +253,103 @@ test('a group is saved, renamed, made the default and deleted; its lenses one pe
   let { groups } = await readGroups(project)
   assert.deepEqual(groups, {
     default: 'api',
-    groups: [{ name: 'api', lenses: [member('api')] }],
+    groups: [
+      { name: 'api', scope: 'local', lenses: [member('api')] },
+      { name: 'shared', scope: 'global', lenses: [member('js'), global('sql')] },
+    ],
   })
   // Deleted, the default is every lens that is on again; its lenses stay where they are.
   await removeGroup(project, 'api')
   ;({ groups } = await readGroups(project))
-  assert.deepEqual(groups, { groups: [] })
+  assert.deepEqual(groups.default, undefined)
+  assert.deepEqual(
+    groups.groups.map((group) => group.name),
+    ['shared'],
+  )
   await assert.rejects(removeGroup(project, 'api'), /no group api/)
   // A file it cannot read is never written over.
   await writeFile(groupsFile(project), '{ not json')
   assert.match((await readGroups(project)).problem ?? '', /is not JSON/)
   await assert.rejects(
-    saveGroup(project, undefined, { name: 'a', lenses: [member('js')] }),
+    saveGroup(project, undefined, { name: 'a', scope: 'global', lenses: [member('js')] }),
     /the groups are not changed/,
   )
   assert.equal(await readFile(groupsFile(project), 'utf8'), '{ not json')
+  // A global file holding a project's lens is not one this Tranchant reads.
+  await writeGroups(project, { groups: [] }, [{ name: 'bad', lenses: [local('money')] }])
+  assert.match(
+    (await readGroups(project)).problem ?? '',
+    /global and built-in lenses only/,
+  )
 })
 
-test('a lens removed leaves every group, said until a review runs; renamed or moved, it stays in them', async (t) => {
+test('a global lens removed leaves every group here, said until a review runs; renamed or moved, it stays in them', async (t) => {
   const project = await realpath(await tempDir(t, 'tranchant-project-'))
-  const money = { scope: /** @type {const} */ ('local'), name: 'money' }
-  await writeGroups(project, {
-    groups: [
-      { name: 'A', lenses: [member('js'), money] },
-      { name: 'B', lenses: [money] },
-      { name: 'C', lenses: [member('api')] },
-    ],
-  })
-  // Moved to global and renamed: the same lens in A and B.
-  const cents = { scope: /** @type {const} */ ('global'), name: 'cents' }
-  const js = { scope: /** @type {const} */ ('global'), name: 'js' }
+  const money = global('money')
+  await writeGroups(
+    project,
+    {
+      groups: [
+        { name: 'A', lenses: [member('js'), money] },
+        { name: 'C', lenses: [member('api')] },
+      ],
+    },
+    [{ name: 'B', lenses: [money] }],
+  )
+  // Renamed: the same lens in A and B.
+  const cents = global('cents')
+  const js = global('js')
   assert.deepEqual(await moveLens(project, money, cents), ['A', 'B'])
   let { groups } = await readGroups(project)
-  assert.deepEqual(groups.groups[0]?.lenses, [
-    member('js'),
-    { scope: 'global', name: 'cents' },
-  ])
+  assert.deepEqual(groups.groups[0]?.lenses, [member('js'), cents])
   // Renamed to the name of another of the group's lenses: that one leaves it, recorded.
   await moveLens(project, cents, js)
   ;({ groups } = await readGroups(project))
-  assert.deepEqual(groups.groups[0]?.lenses, [{ scope: 'global', name: 'js' }])
+  assert.deepEqual(groups.groups[0]?.lenses, [js])
   assert.deepEqual(groups.groups[0]?.removed, [member('js')])
-  // Removed: out of every group it was in.
+  // Removed: out of every group it was in, the project's and the global ones.
   assert.deepEqual(await forgetLens(project, js), ['A', 'B'])
   ;({ groups } = await readGroups(project))
   assert.deepEqual(
     groups.groups.map((group) => [group.name, group.lenses.length]),
     [
       ['A', 0],
-      ['B', 0],
       ['C', 1],
+      ['B', 0],
     ],
   )
   assert.deepEqual(groups.groups[0]?.removed, [member('js'), js])
+  assert.deepEqual(groups.groups[2]?.removed, [js])
   // A review of A ran and said them: forgotten, those said only.
   await forgetRemoved(project, 'A', [member('js')])
   ;({ groups } = await readGroups(project))
   assert.deepEqual(groups.groups[0]?.removed, [js])
-  await forgetRemoved(project, 'A', [js])
+  await forgetRemoved(project, 'B', [js])
   ;({ groups } = await readGroups(project))
-  assert.equal(groups.groups[0]?.removed, undefined)
+  assert.equal(groups.groups[2]?.removed, undefined)
   assert.deepEqual(await forgetLens(project, member('nope')), [])
   // Saving the switches of a review: off leaves, on joins in place of its name's.
   await switchLenses(project, 'C', [
     { member: member('js'), on: true },
-    { member: { scope: /** @type {const} */ ('local'), name: 'api' }, on: true },
+    { member: local('api'), on: true },
   ])
   ;({ groups } = await readGroups(project))
-  assert.deepEqual(groups.groups[2]?.lenses, [
-    member('js'),
-    { scope: 'local', name: 'api' },
-  ])
+  assert.deepEqual(groups.groups[1]?.lenses, [member('js'), local('api')])
   await assert.rejects(
     switchLenses(project, 'C', [
       { member: member('js'), on: false },
-      { member: { scope: /** @type {const} */ ('local'), name: 'api' }, on: false },
+      { member: local('api'), on: false },
     ]),
     /no lens left/,
   )
+  // A lens of this project turned on does not join a global group; the others' switches are saved.
+  await switchLenses(project, 'B', [
+    { member: local('api'), on: true },
+    { member: member('all'), on: true },
+  ])
+  ;({ groups } = await readGroups(project))
+  assert.deepEqual(groups.groups[2]?.lenses, [member('all')])
+  await assert.rejects(switchLenses(project, 'gone', []), /no group gone any more/)
 })
 
 test('--group runs its lenses whatever their switches; two groups sharing a lens both run it', async (t) => {
@@ -276,15 +387,12 @@ test('--group runs its lenses whatever their switches; two groups sharing a lens
   // A group the project has not, or --group with --recipe: refused, saying why.
   const unknown = await prepare(dir, ['--group', 'nope'])
   assert.equal(unknown.code, 2)
-  assert.match(
-    unknown.stdout,
-    /^REVIEW_REFUSED no group nope in this project .*: backend$/m,
-  )
+  assert.match(unknown.stdout, /^REVIEW_REFUSED no group nope \(Settings.*: backend$/m)
   const both = await prepare(dir, ['--group', 'backend', '--recipe', 'x.json'])
   assert.equal(both.code, 2)
   assert.match(both.stdout, /REVIEW_REFUSED give --recipe or --group, not both/)
   // A groups file it cannot read: the default reads as none, said; --group is refused.
-  await writeFile(groupsFile(await realpath(dir)), '{ not json')
+  await writeFile(GROUPS_FILE, '{ not json')
   const unread = await prepare(dir)
   assert.equal(unread.code, 0, unread.stdout + unread.stderr)
   assert.match(unread.stderr, /^groups: .*is not JSON/m)
@@ -342,11 +450,11 @@ test('an emptied group refuses its review with why; a group runs the lens it nam
   await recipe(t)
   // A lens of the project named js, off, beside the recipe's js.
   const project = await realpath(dir)
-  const local = path.join(path.dirname(groupsFile(project)), 'lenses', 'js')
-  await mkdir(local, { recursive: true })
-  await writeFile(path.join(local, 'lens.md'), 'Project JS.\n')
+  const own = path.join(projectSettingsDir(project), 'lenses', 'js')
+  await mkdir(own, { recursive: true })
+  await writeFile(path.join(own, 'lens.md'), 'Project JS.\n')
   await writeFile(
-    path.join(local, 'lens.json'),
+    path.join(own, 'lens.json'),
     JSON.stringify({
       version: 1,
       name: 'js',
@@ -461,4 +569,191 @@ test('a waiting review of the default group starts on it when the page picked no
     envelope.lenses.map((/** @type {any} */ lens) => lens.name),
     ['api'],
   )
+})
+
+test('a global group is offered in every project, each keeping its own default; one of its name hides it', async (t) => {
+  const one = await realpath(await tempDir(t, 'tranchant-project-'))
+  const two = await realpath(await tempDir(t, 'tranchant-project-'))
+  await Promise.all([noGroups(one), noGroups(two)])
+  await saveGroup(one, undefined, {
+    name: 'shared',
+    scope: 'global',
+    lenses: [member('js')],
+  })
+  assert.deepEqual((await readGroups(two)).groups, {
+    groups: [{ name: 'shared', scope: 'global', lenses: [member('js')] }],
+  })
+  await setDefaultGroup(one, 'shared')
+  await setDefaultGroup(two, 'shared')
+  assert.equal((await readGroups(one)).groups.default, 'shared')
+  // Renamed in one, it stays its default; the other's names a group gone, said.
+  await saveGroup(one, 'shared', { name: 'both', lenses: [member('js')] })
+  assert.equal((await readGroups(one)).groups.default, 'both')
+  const other = await readGroups(two)
+  assert.equal(other.groups.default, undefined)
+  assert.deepEqual(other.notes, [
+    'the default group shared is gone: a review runs every lens that is on',
+  ])
+  await removeGroup(one, 'both')
+  assert.equal((await readGroups(one)).groups.default, undefined)
+  // A group of this project of a global group's name: the global one is hidden here only.
+  await saveGroup(one, undefined, {
+    name: 'web',
+    scope: 'global',
+    lenses: [member('js')],
+  })
+  await writeFile(
+    groupsFile(two),
+    JSON.stringify({ version: 1, groups: [{ name: 'web', lenses: [local('money')] }] }),
+  )
+  const hidden = await readGroups(two)
+  assert.deepEqual(
+    hidden.groups.groups.map((group) => [group.name, group.scope]),
+    [['web', 'local']],
+  )
+  assert.deepEqual(hidden.notes, [
+    "the global group web is hidden here by this project's group of its name: rename one",
+  ])
+  assert.deepEqual(
+    (await readGroups(one)).groups.groups.map((group) => [group.name, group.scope]),
+    [['web', 'global']],
+  )
+  // The project's group that hides it is saved still; made under that name, refused.
+  await saveGroup(two, 'web', { name: 'web', lenses: [member('js')] })
+  await assert.rejects(
+    saveGroup(one, undefined, { name: 'web', scope: 'local', lenses: [member('js')] }),
+    /a global group is already named web/,
+  )
+})
+
+test('a lens of this project: removed or renamed, its groups follow; a global one moved into it leaves the global groups', async (t) => {
+  const dir = await repository(t)
+  await recipe(t)
+  const money = local('money')
+  const sql = global('sql')
+  await writeGroups(
+    dir,
+    { groups: [{ name: 'A', lenses: [member('js'), money, sql] }] },
+    [{ name: 'G', lenses: [member('js'), sql] }],
+  )
+  const cents = local('cents')
+  assert.deepEqual(await moveLens(dir, money, cents), ['A'])
+  assert.deepEqual((await readGroups(dir)).groups.groups[0]?.lenses, [
+    member('js'),
+    cents,
+    sql,
+  ])
+  assert.deepEqual(await forgetLens(dir, cents), ['A'])
+  let { groups } = await readGroups(dir)
+  assert.deepEqual(groups.groups[0]?.lenses, [member('js'), sql])
+  assert.deepEqual(groups.groups[0]?.removed, [cents])
+  // Moved into the project: it follows in the project's groups, leaves the global ones.
+  assert.deepEqual(await moveLens(dir, sql, local('sql')), ['A', 'G'])
+  ;({ groups } = await readGroups(dir))
+  assert.deepEqual(groups.groups[0]?.lenses, [member('js'), local('sql')])
+  assert.deepEqual(groups.groups[1]?.lenses, [member('js')])
+  assert.deepEqual(groups.groups[1]?.removed, [sql])
+  const ran = await prepare(dir, ['--group', 'G'])
+  assert.equal(ran.code, 0, ran.stdout + ran.stderr)
+  assert.deepEqual(names(ran.plan), ['js'])
+  assert.deepEqual(ran.plan.notes, [
+    'lens sql (global) was removed: group G runs without it',
+  ])
+})
+
+test('another worktree of the repository has its groups, its default and its lenses, those of its own path moved in', async (t) => {
+  const dir = await repository(t)
+  await recipe(t)
+  const worktree = path.join(await tempDir(t, 'tranchant-worktree-'), 'other')
+  const added = await run('git', [
+    '-C',
+    dir,
+    'worktree',
+    'add',
+    '-q',
+    worktree,
+    '-b',
+    'other',
+  ])
+  assert.equal(added.code, 0, added.stderr)
+  // A lens and the groups the worktree's own path kept, before.
+  const folder = path.join(PROJECTS_DIR, hashOf(await realpath(worktree)))
+  const before = path.join(folder, 'lenses', 'js')
+  await mkdir(before, { recursive: true })
+  await writeFile(path.join(before, 'lens.md'), 'Project JS.\n')
+  await writeFile(
+    path.join(before, 'lens.json'),
+    JSON.stringify({
+      version: 1,
+      name: 'js',
+      source: 'js.md',
+      on: true,
+      paths: ['src/**'],
+      rules: '',
+      cleaned: { at: '2026-11-18T09:12:00Z', sourceHash: 'x', removed: [], added: [] },
+    }),
+  )
+  await writeFile(
+    path.join(folder, 'groups.json'),
+    JSON.stringify({
+      version: 1,
+      default: 'mine',
+      groups: [{ name: 'mine', lenses: [local('js')] }],
+    }),
+  )
+  // A lens of a name both folders have stays where it is: the home's runs.
+  const twin = path.join(path.dirname(before), 'api')
+  const home = path.join(projectSettingsDir(dir), 'lenses', 'api')
+  for (const one of [twin, home]) {
+    await mkdir(one, { recursive: true })
+    await writeFile(path.join(one, 'lens.md'), `${one}\n`)
+  }
+  await noGroups(dir)
+  const there = await prepare(worktree)
+  assert.equal(there.code, 0, there.stdout + there.stderr)
+  assert.equal(there.plan.group, 'mine')
+  assert.equal(there.plan.lenses[0].added?.scope, 'local')
+  assert.equal(projectSettingsDir(await realpath(worktree)), projectSettingsDir(dir))
+  assert.ok(await reads(path.join(projectSettingsDir(dir), 'lenses', 'js', 'lens.json')))
+  assert.equal(await reads(path.join(before, 'lens.json')), false)
+  // The main worktree reads them too: one folder for the repository.
+  assert.equal((await readGroups(dir)).groups.default, 'mine')
+  assert.equal(await reads(path.join(folder, 'groups.json')), false)
+  assert.equal(await readFile(path.join(twin, 'lens.md'), 'utf8'), `${twin}\n`)
+  assert.equal(await readFile(path.join(home, 'lens.md'), 'utf8'), `${home}\n`)
+  // A second worktree's own groups, the project's file there already: merged in, a name taken getting -2.
+  const third = path.join(await tempDir(t, 'tranchant-worktree-'), 'third')
+  const made = await run('git', [
+    '-C',
+    dir,
+    'worktree',
+    'add',
+    '-q',
+    third,
+    '-b',
+    'third',
+  ])
+  assert.equal(made.code, 0, made.stderr)
+  const real = await realpath(third)
+  const oldFile = path.join(PROJECTS_DIR, hashOf(real), 'groups.json')
+  await mkdir(path.dirname(oldFile), { recursive: true })
+  await writeFile(
+    oldFile,
+    JSON.stringify({
+      version: 1,
+      default: 'web',
+      groups: [
+        { name: 'mine', lenses: [member('api')] },
+        { name: 'web', lenses: [member('all')] },
+      ],
+    }),
+  )
+  const merged = await readGroups(real)
+  assert.deepEqual(
+    merged.groups.groups.map((group) => group.name),
+    ['mine', 'mine-2', 'web'],
+  )
+  assert.equal(merged.groups.default, 'mine')
+  assert.equal(await reads(oldFile), false)
+  assert.ok(await reads(`${oldFile}.moved`))
 })

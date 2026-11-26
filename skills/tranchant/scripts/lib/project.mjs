@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -75,6 +75,52 @@ export function lockRoot(root) {
   } catch {
     return root
   }
+}
+
+/** `one`'s real path, its case as the disk has it; resolved only when it is not there. @param {string} one */
+function real(one) {
+  try {
+    return realpathSync.native(one)
+  } catch {
+    return path.resolve(one)
+  }
+}
+
+/** projectHome's answers, by root: git runs once per root and process. */
+const homes = new Map()
+
+/**
+ * The folder that stands for the project at `root` whatever path it is
+ * opened from: its place in the main worktree of its git repository (else
+ * in the repository's git folder, when it is bare or a submodule's), the
+ * same for every worktree, a symlink or another case of the path; else
+ * `root`'s real path.
+ * @param {string} root
+ * @returns {string}
+ */
+export function projectHome(root) {
+  const known = homes.get(root)
+  if (known) return known
+  let home
+  try {
+    const env = { ...process.env }
+    // Unset: they point git at another repository than root's.
+    for (const name of ['GIT_DIR', 'GIT_COMMON_DIR', 'GIT_WORK_TREE']) delete env[name]
+    // One line each: the common dir, relative to `-C root` without --path-format (git 2.31), then root's place in its worktree.
+    const [common = '', prefix = ''] = execFileSync(
+      'git',
+      ['-C', root, 'rev-parse', '--git-common-dir', '--show-prefix'],
+      { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).split('\n')
+    const dir = common ? real(path.resolve(root, common)) : undefined
+    const top = dir && (path.basename(dir) === '.git' ? path.dirname(dir) : dir)
+    home = top && path.resolve(top, prefix || '.')
+  } catch {
+    home = undefined
+  }
+  home ??= real(root)
+  homes.set(root, home)
+  return home
 }
 
 /** Removes `--review <dir>` so the remaining arguments are positional. */

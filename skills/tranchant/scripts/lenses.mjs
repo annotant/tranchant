@@ -334,7 +334,7 @@ async function replan() {
     const read = await readGroups(review.project)
     if (read.problem) return `group ${name}: ${read.problem}`
     group = read.groups.groups.find((one) => one.name === name)
-    if (!group) return `no group ${name} in this project any more`
+    if (!group) return `no group ${name} any more`
   }
   let planned
   try {

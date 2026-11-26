@@ -40,18 +40,20 @@ const LENSES: LensEntry[] = [
 ]
 
 const GROUPS: GroupsPayload = {
-  file: '/me/.config/tranchant/projects/3c1e/groups.json',
+  file: '/me/.config/tranchant/groups.json',
+  local: '/me/.config/tranchant/projects/3c1e/groups.json',
   default: 'backend',
   list: [
     {
       name: 'backend',
+      scope: 'local',
       lenses: [
         { scope: 'local', name: 'money' },
         { scope: 'global', name: 'sql' },
         { scope: 'recipe', name: 'bugs' },
       ],
     },
-    { name: 'frontend', lenses: [{ scope: 'recipe', name: 'tests' }] },
+    { name: 'frontend', scope: 'global', lenses: [{ scope: 'recipe', name: 'tests' }] },
   ],
 }
 
@@ -123,11 +125,14 @@ test('the Lenses tab names the groups of each lens, filters on one, and a chip o
   expect(screen.getByRole('region', { name: 'frontend' })).toBeTruthy()
 })
 
-test('the Groups tab lists each group with its lenses, its --group and the default; the default select saves', async () => {
+test('the Groups tab lists each group with its lenses, where it lies, its --group and the default; the default select saves', async () => {
   const { onLens } = renderLenses('groups')
   const list = within(screen.getByRole('list', { name: 'Groups' }))
   const backend = itemOf(list.getByText('backend'))
   expect(within(backend).getByText('3 lenses')).toBeTruthy()
+  expect(within(backend).getByText('this project')).toBeTruthy()
+  expect(within(itemOf(list.getByText('frontend'))).getByText('global')).toBeTruthy()
+  expect(screen.getByRole('option', { name: 'frontend · global · 1' })).toBeTruthy()
   expect(within(backend).getByText('default')).toBeTruthy()
   expect(within(backend).getByText('--group backend')).toBeTruthy()
   expect(within(backend).getByText('money · project')).toBeTruthy()
@@ -145,6 +150,10 @@ test('a new group: one lens per name, the N shown checked at once, a scope by it
   const editor = within(screen.getByRole('region', { name: 'New group' }))
   const create = editor.getByRole('button', { name: 'Create the group' })
   expect(create).toHaveProperty('disabled', true)
+  // Where it lies comes first: nothing else until it is chosen.
+  expect(editor.getByText('Choose where the group lies.')).toBeTruthy()
+  expect(editor.queryByLabelText('Name')).toBeNull()
+  fireEvent.click(editor.getByRole('radio', { name: /^This project/ }))
   fireEvent.change(editor.getByLabelText('Name'), { target: { value: 'A' } })
   // The project's conventions, then the built-in one: it takes its place.
   const box = (scope: string, name: string) => {
@@ -185,6 +194,7 @@ test('a new group: one lens per name, the N shown checked at once, a scope by it
     expect(onLens).toHaveBeenCalledWith('group/save', {
       group: {
         name: 'A',
+        scope: 'local',
         lenses: [
           { scope: 'recipe', name: 'conventions' },
           { scope: 'recipe', name: 'tests' },
@@ -205,13 +215,18 @@ test('a group edited is saved under its name; Duplicate starts B from A; Delete 
   await waitFor(() =>
     expect(onLens).toHaveBeenCalledWith('group/save', {
       name: 'frontend',
-      group: { name: 'web', lenses: [{ scope: 'recipe', name: 'tests' }] },
+      group: {
+        name: 'web',
+        scope: 'global',
+        lenses: [{ scope: 'recipe', name: 'tests' }],
+      },
     }),
   )
   fireEvent.click(nth(screen.getAllByRole('button', { name: 'Edit' }), 1))
   fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }))
   const copy = within(screen.getByRole('region', { name: 'frontend-copy' }))
   expect(copy.getByLabelText('Name')).toHaveProperty('value', 'frontend-copy')
+  expect(copy.getByRole('radio', { name: /^Global/ })).toHaveProperty('checked', true)
   fireEvent.click(copy.getByRole('button', { name: 'Cancel' }))
   fireEvent.click(nth(screen.getAllByRole('button', { name: 'Edit' }), 1))
   fireEvent.click(screen.getByRole('button', { name: 'Delete the group' }))
@@ -221,8 +236,85 @@ test('a group edited is saved under its name; Duplicate starts B from A; Delete 
   expect(await screen.findByText('Group frontend deleted: its lenses stay.')).toBeTruthy()
 })
 
+test('a new global group offers no lens of this project, and unchecks those checked before', async () => {
+  const { onLens } = renderLenses('groups')
+  fireEvent.click(nth(screen.getAllByRole('button', { name: 'New group' }), 0))
+  const editor = within(screen.getByRole('region', { name: 'New group' }))
+  fireEvent.click(editor.getByRole('radio', { name: /^This project/ }))
+  fireEvent.change(editor.getByLabelText('Name'), { target: { value: 'shared' } })
+  const money = within(editor.getByRole('group', { name: 'This project' }))
+    .getByText('money')
+    .closest('label')
+    ?.querySelector('input')
+  if (!money) throw new Error('no checkbox for money')
+  fireEvent.click(money)
+  fireEvent.click(editor.getByRole('radio', { name: /^Global/ }))
+  expect(
+    editor.getByText('Unchecked, a global group holds no lens of this project: money.'),
+  ).toBeTruthy()
+  expect(editor.queryByRole('group', { name: 'This project' })).toBeNull()
+  fireEvent.click(editor.getByRole('checkbox', { name: 'Check every lens of Global' }))
+  fireEvent.click(editor.getByRole('button', { name: 'Create the group' }))
+  await waitFor(() =>
+    expect(onLens).toHaveBeenCalledWith('group/save', {
+      group: {
+        name: 'shared',
+        scope: 'global',
+        lenses: [{ scope: 'global', name: 'sql' }],
+      },
+    }),
+  )
+})
+
+test("a group names its lenses not here; saved, a global one keeps another recipe's lens, not a lens gone", async () => {
+  const groups: GroupsPayload = {
+    ...GROUPS,
+    list: [
+      {
+        name: 'shared',
+        scope: 'global',
+        lenses: [
+          { scope: 'recipe', name: 'bugs' },
+          { scope: 'recipe', name: 'arch' },
+          { scope: 'global', name: 'gone' },
+        ],
+      },
+      { name: 'old', scope: 'local', lenses: [{ scope: 'local', name: 'cents' }] },
+    ],
+  }
+  const { onLens } = renderLenses('group:shared', groups)
+  expect(screen.getByText(/2 not here: arch, gone/)).toBeTruthy()
+  expect(screen.getByText(/none of its lenses is here/)).toBeTruthy()
+  const editor = within(screen.getByRole('region', { name: 'shared' }))
+  expect(editor.queryByRole('radio')).toBeNull()
+  fireEvent.click(editor.getByRole('button', { name: 'Save the group' }))
+  await waitFor(() =>
+    expect(onLens).toHaveBeenCalledWith('group/save', {
+      name: 'shared',
+      group: {
+        name: 'shared',
+        scope: 'global',
+        lenses: [
+          { scope: 'recipe', name: 'bugs' },
+          { scope: 'recipe', name: 'arch' },
+        ],
+      },
+    }),
+  )
+})
+
+test("the groups' notes show: a global group hidden by one of this project's", () => {
+  renderLenses('groups', {
+    ...GROUPS,
+    notes: [
+      "the global group backend is hidden here by this project's group of its name: rename one",
+    ],
+  })
+  expect(screen.getByText(/the global group backend is hidden here/)).toBeTruthy()
+})
+
 test('no group yet: every review runs every lens that is on', () => {
-  renderLenses('groups', { file: '/g.json', list: [] })
+  renderLenses('groups', { file: '/g.json', local: '/l.json', list: [] })
   expect(screen.getByText('No group yet.')).toBeTruthy()
   expect(screen.getByLabelText('Default group')).toHaveProperty('value', '')
   expect(screen.getByRole('option', { name: 'Every lens that is on · 4' })).toBeTruthy()
@@ -295,6 +387,42 @@ test('the ready screen names the group, its lenses off in the settings, and a gr
     true,
   )
   expect(screen.getByText('Building the lenses of this group…')).toBeTruthy()
+})
+
+test('a review of a global group says a lens of this project turned on is not saved in it', () => {
+  const step: LensesProgress = {
+    ...WAITING,
+    group: 'frontend',
+    notes: [],
+    lenses: [
+      { name: 'tests', source: 'tranchant:tests', state: 'ready', files: 2 },
+      {
+        name: 'money',
+        source: 'money.md',
+        state: 'ready',
+        files: 1,
+        scope: 'local',
+        off: true,
+      },
+    ],
+  }
+  render(
+    <ReadyCenter
+      step={step}
+      review={{ branch: 'feature/x', base: 'origin/main', ownership: 'ours' }}
+      choices={{ lenses: { money: true }, remember: true }}
+      cap={3}
+      model={null}
+      groups={GROUPS}
+      onChoices={() => undefined}
+      onStart={() => Promise.resolve()}
+    />,
+  )
+  expect(
+    screen.getByText(
+      /not saved in frontend: a global group holds no lens of this project/,
+    ),
+  ).toBeTruthy()
 })
 
 /** The lenses with a history: money and bugs; the others none. */
@@ -374,7 +502,11 @@ test("a group's line follows its draft while edited, and reads each member's own
     list: [
       ...GROUPS.list,
       // The built-in conventions: the project's has the history, not this one.
-      { name: 'style', lenses: [{ scope: 'recipe', name: 'conventions' }] },
+      {
+        name: 'style',
+        scope: 'local',
+        lenses: [{ scope: 'recipe', name: 'conventions' }],
+      },
     ],
   }
   renderLenses('group:backend', groups, lenses)

@@ -644,7 +644,7 @@ function LensFilter({
   filter: Filter
   shown: number
   total: number
-  /** The project's groups, by name: a select when there are some. */
+  /** The groups, by name: a select when there are some. */
   groups: string[]
   onChange: (filter: Filter) => void
 }) {
