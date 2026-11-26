@@ -5,7 +5,6 @@
 // group with no --group; lenses.mjs records the group and plans another one
 // the page picks.
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -118,6 +117,13 @@ async function writeGroups(project, { default: own, ...groups }) {
     }),
   )
 }
+
+/** Whether `file` reads: read, not checked, the file being written next. @param {string} file */
+const reads = (file) =>
+  readFile(file).then(
+    () => true,
+    () => false,
+  )
 
 const member = (/** @type {string} */ name) => ({
   scope: /** @type {const} */ ('recipe'),
@@ -575,8 +581,8 @@ test('another worktree of the repository has its groups, its default and its len
   assert.equal(there.plan.group, 'mine')
   assert.equal(there.plan.lenses[0].added?.scope, 'local')
   assert.equal(projectSettingsDir(await realpath(worktree)), projectSettingsDir(dir))
-  assert.ok(existsSync(path.join(projectSettingsDir(dir), 'lenses', 'js', 'lens.json')))
-  assert.equal(existsSync(before), false)
+  assert.ok(await reads(path.join(projectSettingsDir(dir), 'lenses', 'js', 'lens.json')))
+  assert.equal(await reads(path.join(before, 'lens.json')), false)
   assert.equal(await readFile(path.join(twin, 'lens.md'), 'utf8'), `${twin}\n`)
   assert.equal(await readFile(path.join(home, 'lens.md'), 'utf8'), `${home}\n`)
 })
@@ -622,8 +628,8 @@ test('the groups of each project folder move into the groups file, merged by nam
   assert.deepEqual(read.moving, [`${broken} is not moved into ${GROUPS_FILE}: not JSON`])
   const stored = JSON.parse(await readFile(GROUPS_FILE, 'utf8'))
   assert.deepEqual(stored.defaults, { aaaaaaaaaaaa: 'A', bbbbbbbbbbbb: 'A-2' })
-  assert.equal(existsSync(first), false)
-  assert.ok(existsSync(`${second}.moved`))
+  assert.equal(await reads(first), false)
+  assert.ok(await reads(`${second}.moved`))
   // Moved again, as after a crash before the rename: nothing added twice.
   await writeFile(first, await readFile(`${first}.moved`, 'utf8'))
   assert.equal((await readGroups(project)).groups.groups.length, 3)
@@ -634,7 +640,7 @@ test('the groups of each project folder move into the groups file, merged by nam
   assert.match(unread.problem ?? '', /is not JSON/)
   assert.match(unread.moving?.[0] ?? '', /once it is mended or removed/)
   assert.equal(await readFile(GROUPS_FILE, 'utf8'), '{ not json')
-  assert.ok(existsSync(first))
+  assert.ok(await reads(first))
   // Merged past the most groups a file holds: refused whole, the folders' files left.
   const many = Array.from({ length: 101 }, (_, i) => ({
     name: `g${i}`,
@@ -649,6 +655,6 @@ test('the groups of each project folder move into the groups file, merged by nam
     full.moving?.[0] ?? '',
     /stay where they are, merged they are refused: groups: a list of 100/,
   )
-  assert.ok(existsSync(first) && existsSync(second))
-  assert.equal(existsSync(GROUPS_FILE), false)
+  assert.ok((await reads(first)) && (await reads(second)))
+  assert.equal(await reads(GROUPS_FILE), false)
 })
