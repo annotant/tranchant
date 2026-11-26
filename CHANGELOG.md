@@ -7,6 +7,19 @@ released to the `stable` branch.
 
 ## Unreleased
 
+### Fixed
+
+- **Groups of lenses no longer disappear when the project is opened from
+  another path.** They were filed under the project's exact path, so
+  another worktree, a moved clone or a symlink showed none. Groups are now
+  yours, not a project's: one `groups.json` of the settings folder, offered
+  in every project, each project keeping its own default group; the
+  groups of each project folder are moved into it (merged by name, `-2` on
+  a clash). Local lenses and the local recipe follow the repository, not
+  the path: every worktree shares them. Settings › Lenses › Groups names a
+  group's lenses that are not in this project and keeps them when the
+  group is saved, and says when older groups could not be moved in.
+
 ## 0.9.0 - 2026-11-25
 
 ### Added
